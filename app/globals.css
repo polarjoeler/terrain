@@ -1,26 +1,50 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@theme {
+  /* Palette: cream editorial + deep teal + signal orange,
+     pastel accents for dashboard panels. */
+  --color-cream: #faf6ec;
+  --color-cream-soft: #f3eddd;
+  --color-ink: #0f2b2a;
+  --color-ink-deep: #0a1f1e;
+  --color-orange: #e8622c;
+  --color-orange-soft: #f4a261;
+  --color-mint: #cdeaa9;
+  --color-lilac: #cabdf5;
+  --color-paper: #fffdf6;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-instrument-serif), Georgia, serif;
+  --font-body: var(--font-inter), system-ui, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Dark canvas throughout, matching the dashboard. */
+  background: var(--color-ink-deep);
+  color: var(--color-cream);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-orange);
+  color: var(--color-cream);
+}
+
+/* Scrolling ticker ribbons (hero) */
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.ticker-track {
+  display: inline-block;
+  white-space: nowrap;
+  animation: marquee 45s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none;
+  }
 }
