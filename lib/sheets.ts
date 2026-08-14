@@ -174,3 +174,48 @@ export function summarise(leads: Lead[]) {
     withPayments: leads.filter((l) => (l.payments?.length ?? 0) > 0).length,
   };
 }
+
+/* ------------------------------------------------------- market insights --- */
+
+export type Share = { label: string; pct: number };
+export type InsightSnapshot = {
+  date: string;
+  stores_total: number;
+  new_this_week: number;
+  plus_total: number;
+  plus_new_this_week: number;
+  payments_verified_stores: number;
+  payments_by_provider: Share[];
+  payments_by_type: Record<string, number>;
+  first_at_checkout: Share[];
+  themes: Share[];
+  apps: Share[];
+};
+
+/** Latest insights snapshot + full history, from the InsightsLog tab.
+ *  `insights_snapshot.py` appends one JSON row per run. */
+export async function fetchInsights(): Promise<{
+  latest: InsightSnapshot | null;
+  history: InsightSnapshot[];
+}> {
+  const hasCreds =
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!SHEET_ID || !hasCreds) return { latest: null, history: [] };
+  try {
+    const rows = await readRange("InsightsLog!A2:B");
+    const history: InsightSnapshot[] = [];
+    for (const r of rows) {
+      if (r[1]) {
+        try {
+          history.push(JSON.parse(r[1]) as InsightSnapshot);
+        } catch {
+          /* skip malformed row */
+        }
+      }
+    }
+    return { latest: history[history.length - 1] ?? null, history };
+  } catch (err) {
+    console.error("[terrain] insights read failed:", err);
+    return { latest: null, history: [] };
+  }
+}
