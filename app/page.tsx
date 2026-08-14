@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { TerrainMark, Wordmark } from "@/app/components/logo";
+import { CountrySelector } from "@/app/components/country-selector";
 import { feedStats } from "@/lib/leads";
 
 function Nav() {
@@ -80,6 +81,7 @@ function Hero() {
       <p className="mt-5 text-xs text-cream/40">
         1-week free trial · Credit card required · Cancel anytime
       </p>
+      <CountrySelector />
     </header>
   );
 }
@@ -247,6 +249,7 @@ type MockLead = {
   products: number;
   price: string;
   payments: string[];
+  revenue: string;
   email: string;
   seen: string;
   plus?: boolean;
@@ -259,6 +262,7 @@ const mockLeads: MockLead[] = [
     products: 142,
     price: "R199–R2,450",
     payments: ["PayFast", "Yoco", "Shop Pay"],
+    revenue: "$18k–$32k/mo",
     email: "hello@savannathreads.co.za",
     seen: "2h ago",
   },
@@ -268,6 +272,7 @@ const mockLeads: MockLead[] = [
     products: 88,
     price: "₦8,500–₦95,000",
     payments: ["Paystack", "Flutterwave"],
+    revenue: "$40k–$75k/mo",
     email: "team@lagosactive.ng",
     seen: "3h ago",
     plus: true,
@@ -278,6 +283,7 @@ const mockLeads: MockLead[] = [
     products: 210,
     price: "KSh1,200–KSh38,000",
     payments: ["M-Pesa", "Flutterwave"],
+    revenue: "$25k–$50k/mo",
     email: "sales@nairobihome.co.ke",
     seen: "4h ago",
   },
@@ -287,6 +293,7 @@ const mockLeads: MockLead[] = [
     products: 36,
     price: "R85–R690",
     payments: ["PayFast", "Ozow", "Shop Pay"],
+    revenue: "$6k–$12k/mo",
     email: "orders@caperoast.co.za",
     seen: "6h ago",
   },
@@ -296,6 +303,7 @@ const mockLeads: MockLead[] = [
     products: 54,
     price: "₵45–₵520",
     payments: ["Paystack", "Hubtel"],
+    revenue: "$9k–$20k/mo",
     email: "hello@accraskincare.gh",
     seen: "7h ago",
   },
@@ -322,6 +330,7 @@ function DashboardPreview() {
                   <th className="pb-3 pr-4">Products</th>
                   <th className="pb-3 pr-4">Price range</th>
                   <th className="pb-3 pr-4">Payments</th>
+                  <th className="pb-3 pr-4">Est. revenue</th>
                   <th className="pb-3 pr-4">Contact</th>
                   <th className="pb-3">Found</th>
                 </tr>
@@ -353,6 +362,9 @@ function DashboardPreview() {
                           </span>
                         ))}
                       </div>
+                    </td>
+                    <td className="py-3.5 pr-4 whitespace-nowrap font-medium">
+                      {l.revenue}
                     </td>
                     <td className="py-3.5 pr-4 text-orange">{l.email}</td>
                     <td className="py-3.5 text-ink/55 whitespace-nowrap">{l.seen}</td>
