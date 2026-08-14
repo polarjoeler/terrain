@@ -74,7 +74,7 @@ export default function Billing() {
         {error && <p className="mt-5 text-center text-sm text-orange">{error}</p>}
 
         <p className="mt-8 text-center text-xs text-cream/40">
-          Secure payment via Paystack · Cancel anytime · Billed in ZAR
+          Secure payment via Stripe · 1-week free trial · Cancel anytime
         </p>
       </div>
     </main>

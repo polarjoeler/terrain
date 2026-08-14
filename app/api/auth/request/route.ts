@@ -1,9 +1,9 @@
-/** Email a magic sign-in link. Starts a trial for first-time addresses. */
+/** Email a magic sign-in link. Access itself comes from a Stripe subscription
+ *  (the dashboard sends users without one to /billing to start their trial). */
 
 import { NextResponse } from "next/server";
 import { createMagicToken } from "@/lib/auth";
 import { sendMagicLink } from "@/lib/email";
-import { getSubscriber, startTrial } from "@/lib/subscriptions";
 
 export const runtime = "nodejs";
 
@@ -21,10 +21,6 @@ export async function POST(req: Request) {
   if (!EMAIL_RE.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address" }, { status: 400 });
   }
-
-  // New address? Give them a trial so the link lands somewhere useful.
-  const existing = await getSubscriber(email);
-  if (!existing) await startTrial(email);
 
   const origin = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
   const url = `${origin}/api/auth/verify?token=${encodeURIComponent(createMagicToken(email))}`;

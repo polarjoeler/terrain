@@ -1,20 +1,14 @@
-/** Convert a trial (or sign up directly) into a paid Paystack subscription.
- *  Returns the hosted Paystack checkout URL for the client to redirect to. */
+/** Start a Stripe subscription checkout (7-day trial, card required).
+ *  Returns the hosted Stripe Checkout URL for the client to redirect to. */
 
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
-import { initializeSubscription } from "@/lib/paystack";
-import { upsertSubscriber, type PlanKey } from "@/lib/subscriptions";
+import { createCheckoutSession } from "@/lib/stripe";
+import { type PlanKey } from "@/lib/subscriptions";
 
 export const runtime = "nodejs";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-
-function planCode(plan: PlanKey): string | undefined {
-  return plan === "pro"
-    ? process.env.PAYSTACK_PLAN_PRO
-    : process.env.PAYSTACK_PLAN_STARTER;
-}
 
 export async function POST(req: Request) {
   let body: { email?: string; plan?: string };
@@ -24,8 +18,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad json" }, { status: 400 });
   }
 
-  // Signed-in users are billed against their session; the body email is only a
-  // fallback for signing up straight from the pricing page.
+  // Prefer the signed-in user; fall back to a supplied email for signup-from-pricing.
   const email = ((await currentUser()) ?? body.email ?? "").trim().toLowerCase();
   if (!EMAIL_RE.test(email)) {
     return NextResponse.json(
@@ -35,29 +28,14 @@ export async function POST(req: Request) {
   }
 
   const plan: PlanKey = body.plan === "pro" ? "pro" : "starter";
-  const code = planCode(plan);
-  if (!code) {
-    return NextResponse.json(
-      { error: `No Paystack plan configured for '${plan}'. Run scripts/setup-plans.mjs.` },
-      { status: 500 },
-    );
-  }
-
-  const origin =
-    process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
+  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
 
   try {
-    const init = await initializeSubscription({
-      email,
-      planCode: code,
-      callbackUrl: `${origin}/welcome`,
-      metadata: { plan, product: "terrain" },
-    });
-    // Record intent; the webhook flips status to active once payment lands.
-    await upsertSubscriber(email, { plan });
-    return NextResponse.json({ url: init.authorization_url, reference: init.reference });
+    const url = await createCheckoutSession({ email, plan, origin });
+    return NextResponse.json({ url });
   } catch (err) {
-    console.error("[terrain] checkout failed:", err);
-    return NextResponse.json({ error: "Could not start checkout" }, { status: 502 });
+    console.error("[terrain] stripe checkout failed:", err);
+    const msg = err instanceof Error ? err.message : "Could not start checkout";
+    return NextResponse.json({ error: msg }, { status: 502 });
   }
 }

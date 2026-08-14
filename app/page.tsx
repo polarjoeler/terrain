@@ -484,20 +484,17 @@ function Footer() {
     <footer className="overflow-hidden px-6 pb-8 pt-10">
       <div className="mx-auto max-w-6xl">
         <div className="flex flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
+          <Link href="/" className="text-cream/80">
+            <Wordmark size="text-base" />
+          </Link>
           <span>
-            Terrain is part of the{" "}
-            <span className="text-cream/70">Tembo Commerce</span> family
+            Part of the{" "}
+            <span className="text-cream/70">Tembo Commerce</span> family · Built
+            in Cape Town 🧡
           </span>
-          <span>Built in Cape Town 🧡</span>
           <a href="mailto:hello@tembocommerce.com" className="underline">
             hello@tembocommerce.com
           </a>
-        </div>
-        <div className="mt-12 flex items-center justify-center gap-6 text-cream">
-          <TerrainMark className="h-[7vw] w-auto" />
-          <span className="font-display text-[15vw] leading-[0.75] tracking-tight">
-            Terrain
-          </span>
         </div>
       </div>
     </footer>

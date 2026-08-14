@@ -1,12 +1,13 @@
-/** Subscriber state: trials, plans, and Paystack linkage.
+/** Subscriber state, driven by Stripe.
  *
  * Persistence lives in lib/store.ts — Postgres when DATABASE_URL is set, a JSON
- * file otherwise. Nothing here knows or cares which.
+ * file otherwise. Nothing here knows or cares which. Access follows the Stripe
+ * subscription status, updated by the Stripe webhook.
  */
 
 import { getStore } from "./store";
 
-export const TRIAL_DAYS = 14;
+export const TRIAL_DAYS = 7;
 
 export type PlanKey = "starter" | "pro";
 export type Status = "trialing" | "active" | "past_due" | "cancelled" | "expired";
@@ -16,7 +17,7 @@ export type Subscriber = {
   plan: PlanKey;
   status: Status;
   trialEndsAt: string | null;
-  /** Paystack identifiers, present once they've converted. */
+  /** Stripe identifiers (customerCode = customer id, subscriptionCode = sub id). */
   customerCode?: string;
   subscriptionCode?: string;
   emailToken?: string;
@@ -55,23 +56,6 @@ export async function upsertSubscriber(
 
   await store.upsert(next);
   return next;
-}
-
-/** Start a no-card trial. Idempotent: an existing subscriber is returned as-is. */
-export async function startTrial(
-  email: string,
-  plan: PlanKey = "starter",
-): Promise<{ subscriber: Subscriber; created: boolean }> {
-  const existing = await getSubscriber(email);
-  if (existing) return { subscriber: existing, created: false };
-
-  const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
-  const subscriber = await upsertSubscriber(email, {
-    plan,
-    status: "trialing",
-    trialEndsAt,
-  });
-  return { subscriber, created: true };
 }
 
 /* ------------------------------------------- single-use magic-link tokens --- */

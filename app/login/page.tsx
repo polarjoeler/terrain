@@ -69,7 +69,7 @@ export default function Login() {
             <h1 className="font-display text-3xl">Sign in to Terrain</h1>
             <p className="mt-3 text-sm text-ink/60">
               We&apos;ll email you a link — no password needed. New here? You&apos;ll
-              start a 14-day free trial automatically.
+              start your 1-week free trial after a quick card check.
             </p>
             <form onSubmit={submit} className="mt-7">
               <input
