@@ -24,7 +24,6 @@ const markets: { key: Market | "all"; label: string }[] = [
   { key: "all", label: "All markets" },
   { key: "South Africa", label: "South Africa" },
   { key: "Africa", label: "Africa" },
-  { key: "Japan", label: "Japan" },
 ];
 
 const sorts: { key: SortKey; label: string }[] = [

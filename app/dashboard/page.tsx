@@ -4,6 +4,7 @@ import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
 import { sampleLeads } from "@/lib/leads";
 import { fetchLeads, summarise } from "@/lib/sheets";
+import { marketOf } from "@/lib/prioritize";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { LeadsTable } from "./leads-table";
 
@@ -20,7 +21,9 @@ export default async function Dashboard() {
   const daysLeft = trialDaysLeft(subscriber);
 
   const { leads, live } = await fetchLeads();
-  const data = live && leads.length ? leads : sampleLeads;
+  // Japan will get its own dedicated site — exclude it here.
+  const source = live && leads.length ? leads : sampleLeads;
+  const data = source.filter((l) => marketOf(l) !== "Japan");
   const s = summarise(data);
 
   return (

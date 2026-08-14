@@ -44,3 +44,4 @@ next-env.d.ts
 .env.local
 google-service-account.json
 .data/
+vercel-env.txt

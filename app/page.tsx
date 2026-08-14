@@ -479,6 +479,44 @@ function Pricing() {
   );
 }
 
+const integrations = [
+  { name: "Apollo", desc: "Push new stores straight into your Apollo sequences." },
+  { name: "HubSpot", desc: "Create contacts and deals from fresh leads automatically." },
+  { name: "Salesforce", desc: "Sync qualified stores into your pipeline in real time." },
+];
+
+function ComingSoon() {
+  return (
+    <section className="px-6 pb-24">
+      <div className="mx-auto max-w-6xl rounded-[3rem] border border-cream/10 bg-cream/[0.04] px-6 py-16 md:px-14">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="font-display text-4xl tracking-tight md:text-5xl">
+            Sync to your sales stack.
+          </h2>
+          <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
+            Coming soon
+          </span>
+        </div>
+        <p className="mt-3 max-w-xl text-cream/55">
+          One-click integrations to send new leads into the tools your team
+          already lives in.
+        </p>
+        <div className="mt-10 grid gap-4 md:grid-cols-3">
+          {integrations.map((i) => (
+            <div
+              key={i.name}
+              className="rounded-[1.75rem] border border-cream/12 p-7 text-cream"
+            >
+              <div className="text-lg font-semibold">{i.name}</div>
+              <p className="mt-2 text-sm text-cream/55">{i.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Footer() {
   return (
     <footer className="overflow-hidden px-6 pb-8 pt-10">
@@ -513,6 +551,7 @@ export default function Home() {
       <Comparison />
       <Bento />
       <DashboardPreview />
+      <ComingSoon />
       <Pricing />
       <Footer />
     </main>
