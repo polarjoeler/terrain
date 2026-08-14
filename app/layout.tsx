@@ -15,9 +15,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Terrain — Every new Shopify store in South Africa, found first",
+  title: "Terrain — Every new Shopify store in Africa, found first",
   description:
-    "Terrain maps new South African Shopify stores the day they launch — enriched with contact emails, product counts and pricing — delivered weekly. Part of the Tembo Commerce family.",
+    "Terrain maps new African Shopify stores the day they launch — enriched with contact details, pricing, payment stacks and more — delivered weekly. Part of the Tembo Commerce family.",
 };
 
 export default function RootLayout({

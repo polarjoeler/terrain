@@ -1,13 +1,12 @@
 import Link from "next/link";
 import { TerrainMark, Wordmark } from "@/app/components/logo";
-import { sampleLeads, feedStats } from "@/lib/leads";
-import { checkoutUrl, pricing } from "@/lib/payments";
+import { feedStats } from "@/lib/leads";
 
 function Nav() {
   return (
     <nav className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 rounded-full border border-cream/12 bg-cream/[0.06] py-2 pl-4 pr-2 backdrop-blur sm:pl-5">
       <Link href="/" className="min-w-0 shrink text-cream">
-        <Wordmark tone="cream" />
+        <Wordmark />
       </Link>
       <div className="hidden gap-7 text-sm text-cream/60 md:flex">
         <a href="#how" className="hover:text-cream">How it works</a>
@@ -19,33 +18,28 @@ function Nav() {
         href="#pricing"
         className="shrink-0 whitespace-nowrap rounded-full bg-cream px-4 py-2.5 text-sm font-medium text-ink transition hover:bg-paper sm:px-5"
       >
-        Get the feed
+        Start free trial
       </a>
     </nav>
   );
 }
 
-function Ticker({ angle, reverse = false }: { angle: number; reverse?: boolean }) {
+/** Single full-width horizontal ticker of freshly discovered stores. */
+function Ticker() {
   const items = [
-    "pawcarnival.co.za — found 07:14",
-    "metaldeco.co.za — found 11:38",
-    "bagworldza.co.za — found 09:51",
-    "factory72.co.za — found 16:02",
-    "lightswitches.co.za — found 13:27 · PLUS",
-    "ariellesaphire.co.za — found 10:45",
-    "avorix.co.za — found 18:19",
-    "cheegourmet.co.za — found 08:33",
+    "savannathreads.co.za — found 2h ago",
+    "lagosactive.ng — found 3h ago",
+    "nairobihome.co.ke — found 4h ago · PLUS",
+    "caperoast.co.za — found 6h ago",
+    "accraskincare.gh — found 7h ago",
+    "kampalakraft.ug — found 9h ago",
+    "dakaratelier.sn — found 11h ago",
+    "casablancahome.ma — found 13h ago",
   ];
-  const line = items.join("   ✦   ") + "   ✦   ";
+  const line = items.join(" ✦ ") + " ✦ ";
   return (
-    <div
-      className="pointer-events-none absolute left-[-10%] right-[-10%] overflow-hidden rounded-full border border-cream/12 bg-cream/[0.05] py-2.5 text-xs font-medium tracking-wide text-cream/70"
-      style={{ transform: `rotate(${angle}deg)` }}
-    >
-      <div
-        className="ticker-track"
-        style={reverse ? { animationDirection: "reverse" } : undefined}
-      >
+    <div className="pointer-events-none w-full overflow-hidden border-y border-cream/10 bg-cream/[0.04] py-3 text-sm font-medium tracking-wide text-cream/55">
+      <div className="ticker-track">
         <span>{line}</span>
         <span>{line}</span>
       </div>
@@ -55,9 +49,9 @@ function Ticker({ angle, reverse = false }: { angle: number; reverse?: boolean }
 
 function Hero() {
   return (
-    <header className="relative mx-auto flex max-w-4xl flex-col items-center px-6 pb-44 pt-16 text-center">
+    <header className="mx-auto flex max-w-4xl flex-col items-center px-6 pb-16 pt-16 text-center">
       <span className="mb-8 rounded-full border border-mint/25 bg-mint/10 px-4 py-1.5 text-xs font-medium text-mint">
-        ✦ Contact emails included
+        ✦ Contact details included
       </span>
       <h1 className="font-display text-6xl leading-[1.0] tracking-tight md:text-8xl">
         Every new store.
@@ -65,34 +59,27 @@ function Hero() {
         <em className="text-orange">Found first.</em>
       </h1>
       <p className="mt-8 max-w-xl text-lg text-cream/60">
-        Terrain maps new South African Shopify stores the day they go live —
-        enriched with contact emails, product counts and pricing — delivered to
+        Terrain maps new African Shopify stores the day they go live — enriched
+        with contact details, pricing, payment stacks and more — delivered to
         your inbox every week.
       </p>
       <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-        <a
-          href="#pricing"
+        <Link
+          href="/login"
           className="rounded-full bg-orange px-7 py-3.5 font-medium text-cream transition hover:brightness-95"
         >
-          Start your feed — R{pricing.starter.zar}/mo
-        </a>
-        <Link
-          href="/dashboard"
+          Start your free trial
+        </Link>
+        <a
+          href="#data"
           className="rounded-full border border-cream/25 px-7 py-3.5 font-medium text-cream transition hover:border-cream/60"
         >
-          See sample data
-        </Link>
+          See the data
+        </a>
       </div>
       <p className="mt-5 text-xs text-cream/40">
-        Billed in ZAR via Paystack · Cancel anytime
+        1-week free trial · Credit card required · Cancel anytime
       </p>
-
-      <div className="absolute inset-x-0 bottom-12 h-24">
-        <Ticker angle={-2.5} />
-        <div className="mt-9">
-          <Ticker angle={1.8} reverse />
-        </div>
-      </div>
     </header>
   );
 }
@@ -105,12 +92,12 @@ function Stats() {
     { n: `${feedStats.plusFlagged}`, label: "Shopify Plus flagged", tone: "lilac" },
   ];
   return (
-    <section className="px-6 pb-24">
+    <section className="px-6 py-24">
       <div className="mx-auto grid max-w-5xl grid-cols-2 gap-3 md:grid-cols-4">
         {cards.map((c) => (
           <div
             key={c.label}
-            className={`rounded-3xl px-5 py-6 ${
+            className={`rounded-3xl px-5 py-8 ${
               c.tone === "mint"
                 ? "bg-mint text-ink"
                 : c.tone === "lilac"
@@ -118,9 +105,11 @@ function Stats() {
                   : "border border-cream/12 text-cream"
             }`}
           >
-            <div className="font-display text-5xl">{c.n}</div>
+            <div className="font-display text-6xl leading-none tracking-tight md:text-8xl">
+              {c.n}
+            </div>
             <div
-              className={`mt-1 text-xs font-medium uppercase tracking-wide ${
+              className={`mt-3 text-xs font-medium uppercase tracking-wide ${
                 c.tone === "outline" ? "text-cream/45" : "opacity-70"
               }`}
             >
@@ -196,32 +185,45 @@ const bentoCards = [
     body: "An email digest every Monday, plus CSV download and a live dashboard. API access on Enterprise.",
     tone: "light" as const,
   },
+  {
+    n: "05",
+    title: "Market-share intelligence",
+    body: "See which payment providers, shipping apps and themes are winning across Africa — plus the agencies and service providers building the most new stores.",
+    tone: "mint" as const,
+  },
+  {
+    n: "06",
+    title: "Brand & fraud monitoring",
+    body: "We flag clone and fraudulent stores impersonating your brand, so you can protect your customers and your reputation before it costs you.",
+    tone: "lilac" as const,
+  },
 ];
 
 function Bento() {
+  const cls = (tone: string) =>
+    tone === "light"
+      ? "bg-cream text-ink"
+      : tone === "mint"
+        ? "bg-mint text-ink"
+        : tone === "lilac"
+          ? "bg-lilac text-ink"
+          : "border border-cream/12 text-cream";
   return (
     <section id="how" className="px-4 pb-24">
       <div className="mx-auto max-w-6xl rounded-[3rem] border border-cream/10 bg-cream/[0.04] px-6 py-20 md:px-14">
         <p className="mb-10 text-xs font-semibold uppercase tracking-[0.2em] text-orange">
-          How it works
+          What you get
         </p>
         <div className="grid gap-5 md:grid-cols-2">
           {bentoCards.map((c) => (
-            <div
-              key={c.n}
-              className={`rounded-[2rem] p-8 md:p-10 ${
-                c.tone === "light"
-                  ? "bg-cream text-ink"
-                  : "border border-cream/12 text-cream"
-              }`}
-            >
+            <div key={c.n} className={`rounded-[2rem] p-8 md:p-10 ${cls(c.tone)}`}>
               <div className="text-sm font-semibold opacity-50">{c.n}</div>
               <h3 className="mt-14 max-w-md text-xl font-bold uppercase leading-snug tracking-tight">
                 {c.title}
               </h3>
               <p
                 className={`mt-4 max-w-md text-sm leading-relaxed ${
-                  c.tone === "light" ? "text-ink/65" : "text-cream/55"
+                  c.tone === "dark" ? "text-cream/55" : "text-ink/65"
                 }`}
               >
                 {c.body}
@@ -231,13 +233,73 @@ function Bento() {
         </div>
         <div className="mt-5 rounded-[2rem] bg-orange px-8 py-12 text-center">
           <p className="font-display text-3xl text-ink-deep md:text-4xl">
-            Be first to reach every new store in South Africa.
+            Be the first to reach every store in Africa.
           </p>
         </div>
       </div>
     </section>
   );
 }
+
+type MockLead = {
+  name: string;
+  domain: string;
+  products: number;
+  price: string;
+  payments: string[];
+  email: string;
+  seen: string;
+  plus?: boolean;
+};
+
+const mockLeads: MockLead[] = [
+  {
+    name: "Savanna Threads",
+    domain: "savannathreads.co.za",
+    products: 142,
+    price: "R199–R2,450",
+    payments: ["PayFast", "Yoco", "Shop Pay"],
+    email: "hello@savannathreads.co.za",
+    seen: "2h ago",
+  },
+  {
+    name: "Lagos Active",
+    domain: "lagosactive.ng",
+    products: 88,
+    price: "₦8,500–₦95,000",
+    payments: ["Paystack", "Flutterwave"],
+    email: "team@lagosactive.ng",
+    seen: "3h ago",
+    plus: true,
+  },
+  {
+    name: "Nairobi Home Co.",
+    domain: "nairobihome.co.ke",
+    products: 210,
+    price: "KSh1,200–KSh38,000",
+    payments: ["M-Pesa", "Flutterwave"],
+    email: "sales@nairobihome.co.ke",
+    seen: "4h ago",
+  },
+  {
+    name: "Cape Roast",
+    domain: "caperoast.co.za",
+    products: 36,
+    price: "R85–R690",
+    payments: ["PayFast", "Ozow", "Shop Pay"],
+    email: "orders@caperoast.co.za",
+    seen: "6h ago",
+  },
+  {
+    name: "Accra Skincare",
+    domain: "accraskincare.gh",
+    products: 54,
+    price: "₵45–₵520",
+    payments: ["Paystack", "Hubtel"],
+    email: "hello@accraskincare.gh",
+    seen: "7h ago",
+  },
+];
 
 function DashboardPreview() {
   return (
@@ -247,25 +309,26 @@ function DashboardPreview() {
           The data, <em className="text-orange">live.</em>
         </h2>
         <p className="mt-4 max-w-xl text-cream/60">
-          A sample from this week&apos;s feed — real stores, discovered within
-          hours of launch.
+          A sample of what lands in your feed — every store enriched with
+          contacts, pricing and its live payment stack, ready to act on.
         </p>
 
         <div className="mt-10 overflow-hidden rounded-[2.5rem] bg-paper p-6 text-ink md:p-8">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
+            <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="text-xs uppercase tracking-wide text-ink/40">
                 <tr>
                   <th className="pb-3 pr-4">Store</th>
                   <th className="pb-3 pr-4">Products</th>
                   <th className="pb-3 pr-4">Price range</th>
+                  <th className="pb-3 pr-4">Payments</th>
                   <th className="pb-3 pr-4">Contact</th>
-                  <th className="pb-3">First seen</th>
+                  <th className="pb-3">Found</th>
                 </tr>
               </thead>
               <tbody>
-                {sampleLeads.slice(0, 5).map((l) => (
-                  <tr key={l.domain} className="border-t border-ink/10">
+                {mockLeads.map((l) => (
+                  <tr key={l.domain} className="border-t border-ink/10 align-top">
                     <td className="py-3.5 pr-4">
                       <div className="font-semibold">
                         {l.name}
@@ -277,20 +340,22 @@ function DashboardPreview() {
                       </div>
                       <div className="text-xs text-ink/45">{l.domain}</div>
                     </td>
-                    <td className="py-3.5 pr-4">{l.productCount ?? "—"}</td>
+                    <td className="py-3.5 pr-4">{l.products}</td>
+                    <td className="py-3.5 pr-4 whitespace-nowrap">{l.price}</td>
                     <td className="py-3.5 pr-4">
-                      {l.priceMin != null
-                        ? `R${l.priceMin}–R${l.priceMax}`
-                        : "—"}
+                      <div className="flex flex-wrap gap-1">
+                        {l.payments.map((p) => (
+                          <span
+                            key={p}
+                            className="rounded-full bg-mint/50 px-2 py-0.5 text-[10px] font-medium"
+                          >
+                            {p}
+                          </span>
+                        ))}
+                      </div>
                     </td>
-                    <td className="py-3.5 pr-4">
-                      {l.email ? (
-                        <span className="text-orange">{l.email}</span>
-                      ) : (
-                        <span className="text-ink/30">—</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 text-ink/55">{l.firstSeen}</td>
+                    <td className="py-3.5 pr-4 text-orange">{l.email}</td>
+                    <td className="py-3.5 text-ink/55 whitespace-nowrap">{l.seen}</td>
                   </tr>
                 ))}
               </tbody>
@@ -304,9 +369,9 @@ function DashboardPreview() {
 
 const plans = [
   {
-    key: "starter" as const,
     name: "Starter",
-    price: `R${pricing.starter.zar}`,
+    price: "$30",
+    soon: "$50",
     blurb: "For freelancers and small agencies.",
     features: [
       "Weekly email digest",
@@ -316,34 +381,37 @@ const plans = [
     ],
     featured: false,
     cta: "Start with Starter",
+    href: "/login",
   },
   {
-    key: "pro" as const,
     name: "Pro",
-    price: `R${pricing.pro.zar}`,
+    price: "$79",
+    soon: "$100",
     blurb: "For teams that live on new leads.",
     features: [
       "Everything in Starter",
       "Live dashboard with filters",
-      "Shopify Plus flags",
-      "Same-day discovery alerts",
+      "Market-share intelligence",
+      "Brand & fraud monitoring",
     ],
     featured: true,
     cta: "Go Pro",
+    href: "/login",
   },
   {
-    key: null,
     name: "Enterprise",
     price: "Let's talk",
+    soon: null,
     blurb: "For platforms and data teams.",
     features: [
       "API access",
-      "Custom markets (Japan next)",
+      "Custom markets",
       "Slack delivery",
       "Historical archive",
     ],
     featured: false,
     cta: "Contact us",
+    href: "mailto:hello@tembocommerce.com",
   },
 ];
 
@@ -352,20 +420,17 @@ function Pricing() {
     <section id="pricing" className="px-4 pb-24">
       <div className="mx-auto max-w-6xl">
         <h2 className="text-center font-display text-5xl tracking-tight md:text-6xl">
-          Simple <em className="text-orange">ZAR</em> pricing.
+          Simple <em className="text-orange">introductory</em> pricing.
         </h2>
         <p className="mt-4 text-center text-cream/55">
-          South African billing via Paystack. International markets via Stripe —
-          coming soon.
+          Lock in the launch price before it goes up. Billed in USD via Stripe.
         </p>
         <div className="mt-14 grid gap-5 md:grid-cols-3">
           {plans.map((p) => (
             <div
               key={p.name}
               className={`flex flex-col rounded-[2rem] p-8 ${
-                p.featured
-                  ? "bg-cream text-ink"
-                  : "border border-cream/12 text-cream"
+                p.featured ? "bg-cream text-ink" : "border border-cream/12 text-cream"
               }`}
             >
               <div className="text-sm font-semibold uppercase tracking-wide opacity-55">
@@ -373,8 +438,13 @@ function Pricing() {
               </div>
               <div className="mt-3 font-display text-5xl">
                 {p.price}
-                {p.key && <span className="text-lg opacity-50"> /month</span>}
+                {p.soon && <span className="text-lg opacity-50"> /month</span>}
               </div>
+              {p.soon && (
+                <div className="mt-1.5 text-sm font-medium text-orange">
+                  Introductory — {p.soon}/mo soon
+                </div>
+              )}
               <p
                 className={`mt-2 text-sm ${p.featured ? "text-ink/60" : "text-cream/55"}`}
               >
@@ -388,9 +458,7 @@ function Pricing() {
                 ))}
               </ul>
               <a
-                href={
-                  p.key ? checkoutUrl(p.key, "ZA") : "mailto:hello@tembocommerce.com"
-                }
+                href={p.href}
                 className={`mt-8 rounded-full px-6 py-3 text-center text-sm font-medium transition ${
                   p.featured
                     ? "bg-orange text-cream hover:brightness-95"
@@ -402,6 +470,10 @@ function Pricing() {
             </div>
           ))}
         </div>
+        <p className="mt-8 text-center text-sm text-cream/45">
+          Every plan starts with a <span className="text-cream/70">1-week free
+          trial</span> — credit card required, cancel anytime.
+        </p>
       </div>
     </section>
   );
@@ -416,7 +488,7 @@ function Footer() {
             Terrain is part of the{" "}
             <span className="text-cream/70">Tembo Commerce</span> family
           </span>
-          <span>Built in South Africa · POPIA-aware data practices</span>
+          <span>Built in Cape Town 🧡</span>
           <a href="mailto:hello@tembocommerce.com" className="underline">
             hello@tembocommerce.com
           </a>
@@ -439,6 +511,7 @@ export default function Home() {
         <Nav />
       </div>
       <Hero />
+      <Ticker />
       <Stats />
       <Comparison />
       <Bento />
