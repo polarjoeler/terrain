@@ -81,7 +81,7 @@ export default async function RadarDashboard() {
   const brands = new Set(audits.map((a) => a.brandDomain)).size;
 
   return (
-    <div className="min-h-screen px-4 py-6 md:px-8">
+    <div className="min-h-screen bg-[#0b0e10] px-4 py-6 md:px-8">
       <div className="mx-auto max-w-5xl">
         <nav className="flex items-center justify-between">
           <Link href="/radar" className="flex items-center gap-2 text-cream">

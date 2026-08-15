@@ -16,10 +16,11 @@ function RadarMark({ className = "h-5" }: { className?: string }) {
   );
 }
 
-/* Animated monitoring scope: rotating sweep + pulsing detection blips. */
+/* Animated monitoring scope: rotating sweep + pulsing detection blips.
+ * Domains are illustrative / fictional — never real brands. */
 const blips = [
-  { top: "30%", left: "63%", label: "burntstudiospro.co.za", hot: true },
-  { top: "60%", left: "36%", label: "n1ke-outlet.shop", hot: true },
+  { top: "30%", left: "63%", label: "activeform-outlet.co.za", hot: true },
+  { top: "60%", left: "36%", label: "coastwear-sale.co.za", hot: true },
   { top: "44%", left: "72%", label: null, hot: false },
   { top: "70%", left: "58%", label: null, hot: false },
   { top: "35%", left: "42%", label: null, hot: false },
@@ -41,7 +42,7 @@ function RadarScope() {
         className="radar-sweep absolute inset-0 rounded-full"
         style={{
           background:
-            "conic-gradient(from 0deg, transparent 300deg, rgba(76,201,212,0.18) 350deg, rgba(76,201,212,0.55) 360deg)",
+            "conic-gradient(from 0deg, transparent 310deg, rgba(76,201,212,0.08) 352deg, rgba(76,201,212,0.28) 360deg)",
         }}
       />
       <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan" />
@@ -68,17 +69,18 @@ function RadarScope() {
 }
 
 function DetectionTicker() {
+  // Illustrative / fictional domains — never real brands.
   const items = [
-    "burntstudiospro.co.za — clone detected · HIGH",
-    "n1ke-outlet.shop — impersonation · HIGH",
-    "adidas-sale-za.com — flagged for review",
-    "woolworths-clearance.shop — clone detected",
-    "superbalist-outlet.co.za — impersonation",
-    "takealot-deals.store — flagged for review",
+    "activeform-outlet.co.za — clone detected · HIGH",
+    "coastwear-sale.co.za — impersonation · HIGH",
+    "urbanpeak-clearance.shop — flagged for review",
+    "lunahome-clearance.shop — clone detected",
+    "driftwear-outlet.co.za — impersonation",
+    "vellagio-deals.store — flagged for review",
   ];
-  const line = items.join("  ◎  ") + "  ◎  ";
+  const line = items.join("   ·   ") + "   ·   ";
   return (
-    <div className="pointer-events-none w-full overflow-hidden border-y border-cyan/10 bg-cyan/[0.04] py-3 text-sm font-medium tracking-wide text-cyan/70">
+    <div className="pointer-events-none w-full overflow-hidden border-y border-cream/8 py-3 text-sm tracking-wide text-cream/35">
       <div className="ticker-track">
         <span>{line}</span>
         <span>{line}</span>
@@ -178,13 +180,13 @@ export default function Radar() {
       {/* triad */}
       <section id="how" className="px-4 py-24">
         <div className="mx-auto max-w-6xl">
-          <p className="mb-10 text-center text-xs font-semibold uppercase tracking-[0.2em] text-cyan">
+          <p className="mb-10 text-center text-xs font-semibold uppercase tracking-[0.2em] text-cream/40">
             Detect → Defund → Take down
           </p>
           <div className="grid gap-5 md:grid-cols-3">
             {triad.map((t, i) => (
               <div key={t.step} className="rounded-[2rem] border border-cream/12 p-8 text-cream">
-                <div className="font-display text-5xl text-cyan">0{i + 1}</div>
+                <div className="font-display text-5xl text-cream/20">0{i + 1}</div>
                 <div className="mt-6 text-xs font-bold uppercase tracking-wide text-cream/50">
                   {t.step}
                 </div>
@@ -256,17 +258,17 @@ export default function Radar() {
 
       {/* CTA */}
       <section id="access" className="px-4 pb-24">
-        <div className="mx-auto max-w-4xl rounded-[3rem] bg-cyan p-10 text-center text-cyan-deep md:p-16">
-          <h2 className="font-display text-4xl tracking-tight md:text-5xl">
+        <div className="mx-auto max-w-4xl rounded-[3rem] border border-cream/12 bg-cream/[0.03] p-10 text-center md:p-16">
+          <h2 className="font-display text-4xl tracking-tight text-cream md:text-5xl">
             For brand, legal &amp; trust teams.
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-cyan-deep/80">
+          <p className="mx-auto mt-4 max-w-xl text-cream/55">
             Every day a counterfeit store is live is measurable revenue and
             trademark damage. Radar turns detection into resolution.
           </p>
           <Link
             href="/radar/scan"
-            className="mt-8 inline-block rounded-full bg-ink-deep px-7 py-3.5 font-medium text-cream transition hover:brightness-110"
+            className="mt-8 inline-block rounded-full bg-cyan px-7 py-3.5 font-medium text-cyan-deep transition hover:brightness-110"
           >
             Scan my brand — free
           </Link>

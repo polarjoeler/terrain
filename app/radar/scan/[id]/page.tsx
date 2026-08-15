@@ -48,26 +48,26 @@ function MonitoringCTA({ brand, id }: { brand: string; id: string }) {
     `I'd like to turn on real-time monitoring for ${brand}.\nAudit: ${id}`,
   );
   return (
-    <div className="rounded-[2rem] bg-cyan p-8 text-center text-cyan-deep md:p-12">
-      <h2 className="font-display text-3xl tracking-tight md:text-4xl">
+    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-8 text-center md:p-12">
+      <h2 className="font-display text-3xl tracking-tight text-cream md:text-4xl">
         Catch the next one the day it launches.
       </h2>
-      <p className="mx-auto mt-3 max-w-md text-cyan-deep/80">
+      <p className="mx-auto mt-3 max-w-md text-cream/55">
         This audit is a snapshot of today. Monitoring watches for new clones
         24/7, preserves the evidence automatically, and alerts you the moment
         one appears.
       </p>
-      <div className="mt-6 inline-flex items-baseline gap-2">
-        <span className="font-display text-4xl">{PROMO.monthly}</span>
-        <span className="text-cyan-deep/70">/mo</span>
-        <span className="ml-2 rounded-full bg-cyan-deep/15 px-2 py-0.5 text-xs font-semibold">
+      <div className="mt-6 inline-flex items-baseline gap-2 text-cream">
+        <span className="font-display text-4xl text-cyan">{PROMO.monthly}</span>
+        <span className="text-cream/50">/mo</span>
+        <span className="ml-2 rounded-full border border-cream/15 px-2 py-0.5 text-xs font-semibold text-cream/60">
           launch promo · then {PROMO.regular}
         </span>
       </div>
       <div className="mt-6">
         <a
           href={`mailto:hello@tembocommerce.com?subject=${subject}&body=${body}`}
-          className="inline-block rounded-full bg-ink-deep px-7 py-3.5 font-medium text-cream transition hover:brightness-110"
+          className="inline-block rounded-full bg-cyan px-7 py-3.5 font-medium text-cyan-deep transition hover:brightness-110"
         >
           Start monitoring {brand} →
         </a>
