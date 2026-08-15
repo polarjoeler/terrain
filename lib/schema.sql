@@ -68,6 +68,11 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS employee_count INTEGER;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS store_created TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS status TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS raw JSONB;
+-- Our own verified liveness (separate from the source's `status` snapshot).
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_status TEXT;      -- active | migrated | dead
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_platform TEXT;    -- detected platform when migrated
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_checked_at TIMESTAMPTZ;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL DEFAULT 0;
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
 
