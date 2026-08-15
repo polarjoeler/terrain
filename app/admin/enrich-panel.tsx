@@ -28,6 +28,16 @@ export function EnrichPanel() {
     load();
   }, [load]);
 
+  // Auto-run when a CSV publish signals new stores need fingerprinting.
+  useEffect(() => {
+    const handler = () => {
+      if (!running) run();
+    };
+    window.addEventListener("radar:enrich", handler);
+    return () => window.removeEventListener("radar:enrich", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
   async function run() {
     setRunning(true);
     setErr(null);

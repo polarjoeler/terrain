@@ -22,9 +22,14 @@ export default async function Admin() {
       <div className="mx-auto max-w-4xl">
         <nav className="flex items-center justify-between">
           <Link href="/"><Wordmark size="text-xl" /></Link>
-          <span className="rounded-full border border-orange/30 bg-orange/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-orange">
-            Admin
-          </span>
+          <div className="flex items-center gap-3 text-sm">
+            <Link href="/admin/radar" className="text-cyan hover:underline">
+              Radar detections →
+            </Link>
+            <span className="rounded-full border border-orange/30 bg-orange/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-orange">
+              Admin
+            </span>
+          </div>
         </nav>
 
         <header className="mt-10">

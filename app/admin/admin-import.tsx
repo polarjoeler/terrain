@@ -54,7 +54,11 @@ export function AdminImport({
       if (!res.ok) { setMsg(j.error ?? "Failed"); return; }
       if (action === "publish") {
         setPublished((p) => p + (j.published ?? 0));
-        setMsg(`Published ${j.published} stores into the live feed.`);
+        setMsg(
+          `Published ${j.published} stores into the live feed. Fingerprinting them for Radar…`,
+        );
+        // Kick off Radar enrichment so the new stores are audit-ready.
+        if (j.published) window.dispatchEvent(new Event("radar:enrich"));
       } else {
         setMsg(`Discarded ${j.discarded} pending stores.`);
       }

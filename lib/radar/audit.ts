@@ -195,3 +195,92 @@ export async function getAudit(id: string): Promise<AuditResult | null> {
   if (!rows.length) return null;
   return JSON.parse(rows[0].results_json) as AuditResult;
 }
+
+export type AuditRow = {
+  id: string;
+  brandDomain: string;
+  brandName: string | null;
+  market: string;
+  copies: number;
+  candidates: number;
+  status: string;
+  createdAt: string;
+};
+
+export async function listAudits(limit = 100): Promise<AuditRow[]> {
+  await ensureSchema();
+  const rows = await db()<
+    {
+      id: string;
+      brand_domain: string;
+      brand_name: string | null;
+      market: string;
+      copies: number;
+      candidates: number;
+      status: string;
+      created_at: Date;
+    }[]
+  >`
+    SELECT id, brand_domain, brand_name, market, copies, candidates, status, created_at
+    FROM radar_audits ORDER BY created_at DESC LIMIT ${limit}
+  `;
+  return rows.map((r) => ({
+    id: r.id,
+    brandDomain: r.brand_domain,
+    brandName: r.brand_name,
+    market: r.market,
+    copies: r.copies,
+    candidates: r.candidates,
+    status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+  }));
+}
+
+export type Detection = {
+  brandDomain: string;
+  brandName: string | null;
+  suspect: string;
+  suspectName?: string;
+  verdict: MatchReport["verdict"];
+  score: number;
+  reasons: string[];
+  auditId: string;
+  at: string;
+};
+
+/** Flatten every COPY/LIKELY/PARTIAL match across recent audits into a deduped
+ *  detections list — the newest, highest-scoring hit per (brand, suspect). */
+export async function listDetections(minScore = 25): Promise<Detection[]> {
+  await ensureSchema();
+  const rows = await db()<
+    { id: string; results_json: string; created_at: Date }[]
+  >`SELECT id, results_json, created_at FROM radar_audits ORDER BY created_at DESC LIMIT 300`;
+
+  const byPair = new Map<string, Detection>();
+  for (const row of rows) {
+    let result: AuditResult;
+    try {
+      result = JSON.parse(row.results_json) as AuditResult;
+    } catch {
+      continue;
+    }
+    for (const m of result.matches || []) {
+      if (m.score < minScore) continue;
+      const key = `${result.brandDomain}→${m.suspect}`;
+      const existing = byPair.get(key);
+      if (existing && existing.score >= m.score) continue;
+      byPair.set(key, {
+        brandDomain: result.brandDomain,
+        brandName: result.brandName,
+        suspect: m.suspect,
+        suspectName: m.suspectName,
+        verdict: m.verdict,
+        score: m.score,
+        reasons: m.reasons,
+        auditId: row.id,
+        at: new Date(row.created_at).toISOString(),
+      });
+    }
+  }
+  return [...byPair.values()].sort((a, b) => b.score - a.score);
+}
