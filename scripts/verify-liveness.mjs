@@ -127,11 +127,9 @@ async function main() {
     const tally = { active: 0, migrated: 0, dead: 0 };
     let done = 0, i = 0;
 
-    async function worker() {
-      while (i < rows.length) {
-        const { domain, live_miss } = rows[i++];
-        const res = await classify(domain).catch(() => ({ reachable: false, shopify: false, platform: null }));
-        const { status, miss } = nextStatus(null, live_miss || 0, res);
+    let skipped = 0;
+    async function persist(domain, status, res, miss, attempt = 0) {
+      try {
         await sql`
           UPDATE imported_stores SET
             live_status = ${status},
@@ -139,9 +137,28 @@ async function main() {
             live_miss = ${miss},
             live_checked_at = now()
           WHERE domain = ${domain}`;
-        tally[status] = (tally[status] || 0) + 1;
+        return true;
+      } catch (e) {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          return persist(domain, status, res, miss, attempt + 1);
+        }
+        return false; // leave unchecked — a later run retries it
+      }
+    }
+
+    async function worker() {
+      while (i < rows.length) {
+        const { domain, live_miss } = rows[i++];
+        const res = await classify(domain).catch(() => ({ reachable: false, shopify: false, platform: null }));
+        const { status, miss } = nextStatus(null, live_miss || 0, res);
+        if (await persist(domain, status, res, miss)) {
+          tally[status] = (tally[status] || 0) + 1;
+        } else {
+          skipped++;
+        }
         if (++done % 100 === 0)
-          process.stdout.write(`\r  ${done.toLocaleString()} / ${rows.length.toLocaleString()}  (active ${tally.active}, migrated ${tally.migrated}, dead ${tally.dead})`);
+          process.stdout.write(`\r  ${done.toLocaleString()} / ${rows.length.toLocaleString()}  (active ${tally.active}, migrated ${tally.migrated}, dead ${tally.dead}${skipped ? `, skipped ${skipped}` : ""})`);
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
