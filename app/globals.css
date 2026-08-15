@@ -12,6 +12,9 @@
   --color-mint: #cdeaa9;
   --color-lilac: #cabdf5;
   --color-paper: #fffdf6;
+  /* Radar (brand-protection product) — calm, professional monitoring cyan. */
+  --color-cyan: #4cc9d4;
+  --color-cyan-deep: #0c2b30;
 
   --font-display: var(--font-instrument-serif), Georgia, serif;
   --font-body: var(--font-inter), system-ui, sans-serif;
@@ -45,6 +48,44 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .ticker-track {
+    animation: none;
+  }
+}
+
+/* Radar scope: rotating sweep + blip pulse */
+@keyframes radar-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+  transform-origin: center;
+}
+@keyframes blip-pulse {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.blip-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--color-cyan);
+  animation: blip-pulse 2.4s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep,
+  .blip-pulse::after {
     animation: none;
   }
 }
