@@ -143,6 +143,38 @@ export async function clearPending(): Promise<number> {
 }
 
 /** Published imported stores as Lead[], to merge into the dashboard feed. */
+export type Liveness = {
+  total: number;
+  checked: number;
+  active: number;
+  migrated: number;
+  dead: number;
+  survival: number | null; // % of checked stores still live
+};
+
+/** Verified-liveness / churn summary of the imported SA store base. */
+export async function importedLiveness(): Promise<Liveness> {
+  await ensure();
+  const [r] = await db()`
+    SELECT
+      COUNT(*)::int total,
+      COUNT(*) FILTER (WHERE live_checked_at IS NOT NULL)::int checked,
+      COUNT(*) FILTER (WHERE live_status = 'active')::int active,
+      COUNT(*) FILTER (WHERE live_status = 'migrated')::int migrated,
+      COUNT(*) FILTER (WHERE live_status = 'dead')::int dead
+    FROM imported_stores WHERE published`;
+  const checked = Number(r?.checked ?? 0);
+  const active = Number(r?.active ?? 0);
+  return {
+    total: Number(r?.total ?? 0),
+    checked,
+    active,
+    migrated: Number(r?.migrated ?? 0),
+    dead: Number(r?.dead ?? 0),
+    survival: checked ? Math.round((100 * active) / checked) : null,
+  };
+}
+
 export async function publishedLeads(): Promise<Lead[]> {
   await ensure();
   // Explicit columns only — never SELECT * here: the `raw` jsonb is large and
