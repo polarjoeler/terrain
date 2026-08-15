@@ -22,9 +22,52 @@ export type Subscriber = {
   subscriptionCode?: string;
   emailToken?: string;
   nextPaymentDate?: string | null;
+  /** Monthly CSV-export quota (Pro). */
+  exportMonth?: string | null; // 'YYYY-MM'
+  exportUsed?: number;
   createdAt: string;
   updatedAt: string;
 };
+
+export const EXPORT_LIMIT_PRO = 200;
+
+function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7); // YYYY-MM
+}
+
+/** Remaining export allowance this month (0 for non-Pro). */
+export function exportQuota(s: Subscriber | null): {
+  used: number;
+  limit: number;
+  remaining: number;
+} {
+  const limit = s && s.plan === "pro" ? EXPORT_LIMIT_PRO : 0;
+  const used = s && s.exportMonth === currentMonth() ? s.exportUsed ?? 0 : 0;
+  return { used, limit, remaining: Math.max(0, limit - used) };
+}
+
+/** Try to consume `n` export rows. Server-enforced; resets on month rollover. */
+export async function consumeExportQuota(
+  email: string,
+  n: number,
+): Promise<{ ok: boolean; remaining: number; limit: number; reason?: string }> {
+  const s = await getSubscriber(email);
+  if (!s || s.plan !== "pro" || !hasAccess(s)) {
+    return { ok: false, remaining: 0, limit: 0, reason: "Export is a Pro feature." };
+  }
+  const month = currentMonth();
+  const used = s.exportMonth === month ? s.exportUsed ?? 0 : 0;
+  if (used + n > EXPORT_LIMIT_PRO) {
+    return {
+      ok: false,
+      remaining: EXPORT_LIMIT_PRO - used,
+      limit: EXPORT_LIMIT_PRO,
+      reason: `Monthly export limit reached (${EXPORT_LIMIT_PRO}/mo).`,
+    };
+  }
+  await upsertSubscriber(email, { exportMonth: month, exportUsed: used + n });
+  return { ok: true, remaining: EXPORT_LIMIT_PRO - used - n, limit: EXPORT_LIMIT_PRO };
+}
 
 const key = (email: string) => email.trim().toLowerCase();
 
@@ -50,6 +93,8 @@ export async function upsertSubscriber(
     subscriptionCode: patch.subscriptionCode ?? existing?.subscriptionCode,
     emailToken: patch.emailToken ?? existing?.emailToken,
     nextPaymentDate: patch.nextPaymentDate ?? existing?.nextPaymentDate ?? null,
+    exportMonth: patch.exportMonth ?? existing?.exportMonth ?? null,
+    exportUsed: patch.exportUsed ?? existing?.exportUsed ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };

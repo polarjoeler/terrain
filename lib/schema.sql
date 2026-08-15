@@ -21,3 +21,7 @@ CREATE TABLE IF NOT EXISTS used_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_used_tokens_expiry ON used_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
+
+-- Monthly CSV-export quota (Pro). export_month is 'YYYY-MM'; resets when it rolls.
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_month TEXT;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_used INTEGER NOT NULL DEFAULT 0;

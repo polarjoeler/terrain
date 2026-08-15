@@ -52,6 +52,8 @@ function makePostgresStore(url: string): Store {
     nextPaymentDate: r.next_payment_date
       ? new Date(r.next_payment_date as string).toISOString()
       : null,
+    exportMonth: (r.export_month as string) ?? null,
+    exportUsed: (r.export_used as number) ?? 0,
     createdAt: new Date(r.created_at as string).toISOString(),
     updatedAt: new Date(r.updated_at as string).toISOString(),
   });
@@ -70,10 +72,12 @@ function makePostgresStore(url: string): Store {
       await sql`
         INSERT INTO subscribers (
           email, plan, status, trial_ends_at, customer_code,
-          subscription_code, email_token, next_payment_date, created_at, updated_at
+          subscription_code, email_token, next_payment_date,
+          export_month, export_used, created_at, updated_at
         ) VALUES (
           ${s.email}, ${s.plan}, ${s.status}, ${s.trialEndsAt}, ${s.customerCode ?? null},
           ${s.subscriptionCode ?? null}, ${s.emailToken ?? null}, ${s.nextPaymentDate ?? null},
+          ${s.exportMonth ?? null}, ${s.exportUsed ?? 0},
           ${s.createdAt}, ${s.updatedAt}
         )
         ON CONFLICT (email) DO UPDATE SET
@@ -84,6 +88,8 @@ function makePostgresStore(url: string): Store {
           subscription_code = COALESCE(EXCLUDED.subscription_code, subscribers.subscription_code),
           email_token       = COALESCE(EXCLUDED.email_token, subscribers.email_token),
           next_payment_date = EXCLUDED.next_payment_date,
+          export_month      = EXCLUDED.export_month,
+          export_used       = EXCLUDED.export_used,
           updated_at        = EXCLUDED.updated_at
       `;
     },

@@ -34,12 +34,24 @@ const sorts: { key: SortKey; label: string }[] = [
 
 const PAGE = 25;
 
-export function LeadsTable({ leads }: { leads: Lead[] }) {
+export function LeadsTable({
+  leads,
+  canExport = false,
+  exportRemaining = 0,
+}: {
+  leads: Lead[];
+  canExport?: boolean;
+  exportRemaining?: number;
+}) {
   const [quality, setQuality] = useState<Quality>("all");
   const [market, setMarket] = useState<Market | "all">("all");
   const [sort, setSort] = useState<SortKey>("priority");
   const [q, setQ] = useState("");
   const [shown, setShown] = useState(PAGE);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [remaining, setRemaining] = useState(exportRemaining);
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState("");
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -64,6 +76,58 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
       : "—";
 
   const reset = () => setShown(PAGE);
+
+  const pageRows = rows.slice(0, shown);
+  const allPageSelected =
+    pageRows.length > 0 && pageRows.every((l) => selected.has(l.domain));
+
+  const toggle = (domain: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(domain) ? next.delete(domain) : next.add(domain);
+      return next;
+    });
+  };
+  const toggleAllOnPage = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageRows.forEach((l) => next.delete(l.domain));
+      else pageRows.forEach((l) => next.add(l.domain));
+      return next;
+    });
+  };
+
+  async function runExport() {
+    setExporting(true);
+    setExportMsg("");
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domains: [...selected] }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setExportMsg(j.error ?? "Export failed");
+        if (typeof j.remaining === "number") setRemaining(j.remaining);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `terrain-leads-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      const left = Number(res.headers.get("X-Export-Remaining"));
+      if (!Number.isNaN(left)) setRemaining(left);
+      setSelected(new Set());
+    } catch {
+      setExportMsg("Network error — try again");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="mt-8 rounded-[2rem] bg-paper p-6 text-ink md:p-8">
@@ -147,10 +211,46 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
         ))}
       </div>
 
-      <div className="mt-6 overflow-x-auto">
-        <table className="w-full min-w-[920px] text-left text-sm">
+      {/* export bar */}
+      {canExport ? (
+        <div className="mt-5 flex flex-wrap items-center gap-3 rounded-2xl bg-ink/[0.04] px-4 py-3">
+          <span className="text-sm font-medium">
+            {selected.size} selected
+          </span>
+          <button
+            onClick={runExport}
+            disabled={selected.size === 0 || exporting || selected.size > remaining}
+            className="rounded-full bg-ink px-4 py-1.5 text-sm font-medium text-cream transition hover:bg-ink-deep disabled:opacity-40"
+          >
+            {exporting ? "Exporting…" : `Export selected (${selected.size})`}
+          </button>
+          <span className="text-xs text-ink/50">
+            {remaining} of 200 exports left this month
+          </span>
+          {exportMsg && <span className="text-xs text-orange">{exportMsg}</span>}
+        </div>
+      ) : (
+        <div className="mt-5 rounded-2xl border border-ink/10 px-4 py-3 text-sm text-ink/55">
+          CSV export of selected stores is a{" "}
+          <a href="/billing" className="font-semibold text-orange">Pro</a> feature
+          — 200 stores/month.
+        </div>
+      )}
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[960px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-ink/40">
             <tr>
+              {canExport && (
+                <th className="pb-3 pr-3">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={toggleAllOnPage}
+                    aria-label="Select all on page"
+                  />
+                </th>
+              )}
               <th className="pb-3 pr-4">Store</th>
               <th className="pb-3 pr-4">Market</th>
               <th className="pb-3 pr-4">Products</th>
@@ -162,8 +262,18 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, shown).map((l) => (
+            {pageRows.map((l) => (
               <tr key={l.domain} className="border-t border-ink/10 align-top">
+                {canExport && (
+                  <td className="py-4 pr-3">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(l.domain)}
+                      onChange={() => toggle(l.domain)}
+                      aria-label={`Select ${l.name}`}
+                    />
+                  </td>
+                )}
                 <td className="py-4 pr-4">
                   <div className="flex flex-wrap items-center gap-1.5 font-semibold">
                     {l.name}

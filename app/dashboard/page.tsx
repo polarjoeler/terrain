@@ -5,7 +5,12 @@ import { currentUser } from "@/lib/auth";
 import { sampleLeads } from "@/lib/leads";
 import { fetchLeads, summarise } from "@/lib/sheets";
 import { marketOf } from "@/lib/prioritize";
-import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
+import {
+  exportQuota,
+  getSubscriber,
+  hasAccess,
+  trialDaysLeft,
+} from "@/lib/subscriptions";
 import { LeadsTable } from "./leads-table";
 
 // Per-user paywall — never cache this page across requests.
@@ -109,7 +114,11 @@ export default async function Dashboard() {
           </div>
         </div>
 
-        <LeadsTable leads={data} />
+        <LeadsTable
+          leads={data}
+          canExport={subscriber?.plan === "pro" && hasAccess(subscriber)}
+          exportRemaining={exportQuota(subscriber).remaining}
+        />
 
         <p className="mt-6 text-center text-xs text-cream/40">
           {live

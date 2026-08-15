@@ -2,8 +2,8 @@ import { fetchInsights } from "@/lib/sheets";
 import { InsightsView } from "./insights-view";
 
 export const metadata = { title: "Terrain — Market Insights" };
-// Refresh at most every 30 minutes.
-export const revalidate = 1800;
+// Reads the latest snapshot per request (the Sheet fetch is uncached).
+export const dynamic = "force-dynamic";
 
 export default async function Insights() {
   const { latest, history } = await fetchInsights();
