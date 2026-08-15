@@ -97,3 +97,12 @@ export async function currentUser(): Promise<string | null> {
   const payload = unsign(jar.get(SESSION_COOKIE)?.value);
   return payload && payload.kind === "session" ? payload.email : null;
 }
+
+/** Owner/admin check — ADMIN_EMAILS is a comma-separated allowlist. */
+export function isAdmin(email: string | null): boolean {
+  if (!email) return false;
+  const admins = (process.env.ADMIN_EMAILS ?? "joelbronkowski@gmail.com")
+    .split(",")
+    .map((s) => s.trim().toLowerCase());
+  return admins.includes(email.toLowerCase());
+}

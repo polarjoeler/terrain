@@ -157,6 +157,17 @@ export async function fetchLeads(): Promise<{ leads: Lead[]; live: boolean }> {
       // newest discoveries first
       .sort((a, b) => (b.firstSeen ?? "").localeCompare(a.firstSeen ?? ""));
 
+    // Merge in any admin-published "base" stores (Sheet wins on domain clash).
+    try {
+      const { publishedLeads } = await import("./imported");
+      const seen = new Set(leads.map((l) => l.domain));
+      for (const l of await publishedLeads()) {
+        if (!seen.has(l.domain)) leads.push(l);
+      }
+    } catch (err) {
+      console.error("[terrain] imported-leads merge skipped:", err);
+    }
+
     return { leads, live: true };
   } catch (err) {
     console.error("[terrain] sheet read failed:", err);

@@ -25,3 +25,25 @@ CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
 -- Monthly CSV-export quota (Pro). export_month is 'YYYY-MM'; resets when it rolls.
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_month TEXT;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_used INTEGER NOT NULL DEFAULT 0;
+
+-- Admin-imported "base" stores. Held in a separate pool until published, so a
+-- messy import can't pollute the live feed.
+CREATE TABLE IF NOT EXISTS imported_stores (
+  domain           TEXT PRIMARY KEY,
+  name             TEXT,
+  country          TEXT,
+  product_count    INTEGER,
+  price_min        NUMERIC,
+  price_max        NUMERIC,
+  currency         TEXT,
+  email            TEXT,
+  theme            TEXT,
+  plus             BOOLEAN DEFAULT false,
+  payments         TEXT,
+  first_product_at TEXT,
+  first_seen       TEXT,
+  published        BOOLEAN NOT NULL DEFAULT false,
+  source           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_imported_published ON imported_stores(published);
