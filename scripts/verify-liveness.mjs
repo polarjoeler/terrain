@@ -92,7 +92,18 @@ function detectPlatform(html, headerBlob) {
   return best; // may be null (custom / parked)
 }
 
-/** Returns { reachable, shopify, platform }. */
+import { resolve4 } from "node:dns/promises";
+
+async function dnsResolves(domain) {
+  try {
+    const ips = await resolve4(domain);
+    return ips.length ? ips : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Returns { reachable, shopify, platform, dnsDead }. */
 async function classify(domain) {
   // Cheapest signal first: does it serve a Shopify catalogue?
   const pj = await get(`https://${domain}/products.json?limit=1`);
@@ -105,7 +116,14 @@ async function classify(domain) {
   }
   // Otherwise decide via the homepage.
   const home = await get(`https://${domain}`);
-  if (!home) return { reachable: false, shopify: false, platform: null };
+  if (!home) {
+    // HTTP failed — DNS tells dead (domain gone) from throttled (still resolves).
+    const ips = await dnsResolves(domain);
+    if (!ips) return { reachable: false, shopify: false, platform: null, dnsDead: true };
+    if (ips.some((ip) => ip.startsWith("23.227.38."))) // Shopify's range
+      return { reachable: true, shopify: true, platform: "Shopify" };
+    return { reachable: false, shopify: false, platform: null }; // resolves but HTTP-throttled
+  }
   let html = "";
   try { html = await home.text(); } catch { html = ""; }
   const headerBlob = [...home.headers.entries()].map(([k, v]) => `${k}:${v}`).join(" ");
@@ -114,7 +132,8 @@ async function classify(domain) {
   return { reachable: true, shopify: false, platform };
 }
 
-function nextStatus(old, miss, { reachable, shopify }) {
+function nextStatus(old, miss, { reachable, shopify, dnsDead }) {
+  if (dnsDead) return { status: "dead", miss: miss + 1 }; // no DNS = definitively gone
   if (!reachable) return { status: miss + 1 >= DEAD_AFTER ? "dead" : (old || "active"), miss: miss + 1 };
   if (shopify) return { status: "active", miss: 0 };
   return { status: "migrated", miss: 0 };

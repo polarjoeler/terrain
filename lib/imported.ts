@@ -182,7 +182,10 @@ export async function publishedLeads(): Promise<Lead[]> {
   const rows = await db()`
     SELECT domain, name, product_count, price_min, price_max, email,
            first_product_at, plus, first_seen, country, currency, payments, theme
-    FROM imported_stores WHERE published
+    FROM imported_stores
+    WHERE published
+      -- Exclude verified-dead / migrated-off-Shopify stores: they aren't leads.
+      AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
   return rows.map((r) => ({
     domain: r.domain as string,
