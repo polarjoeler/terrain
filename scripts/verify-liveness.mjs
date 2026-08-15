@@ -22,7 +22,7 @@ const opt = (k, d) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : d;
 };
 const LIMIT = parseInt(opt("--limit", "0"), 10);          // 0 = all due
-const CONCURRENCY = parseInt(opt("--concurrency", "12"), 10);
+const CONCURRENCY = parseInt(opt("--concurrency", "8"), 10);
 const MIN_AGE_DAYS = parseInt(opt("--min-age-days", "14"), 10);
 
 if (!process.env.DATABASE_URL) {
@@ -34,21 +34,32 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-async function get(url, timeoutMs = 8000) {
+async function getOnce(url, timeoutMs) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    return await fetch(url, {
       signal: ctrl.signal,
       redirect: "follow",
       headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" },
     });
-    return res;
   } catch {
     return null;
   } finally {
     clearTimeout(t);
   }
+}
+
+// Retry transient failures (timeout/refused) — a single blip shouldn't read as
+// "unreachable". Note: from a datacenter IP, Shopify's edge rate-limits hard, so
+// for a trustworthy liveness read run this from a residential IP + low concurrency.
+async function get(url, timeoutMs = 9000, attempts = 3) {
+  for (let a = 0; a < attempts; a++) {
+    const res = await getOnce(url, timeoutMs);
+    if (res) return res;
+    if (a < attempts - 1) await new Promise((r) => setTimeout(r, 500 * (a + 1)));
+  }
+  return null;
 }
 
 // HTML + response-header signals. The header ones catch headless / bot-walled
