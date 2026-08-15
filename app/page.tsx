@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { TerrainMark, Wordmark } from "@/app/components/logo";
 import { CountrySelector } from "@/app/components/country-selector";
-import { feedStats } from "@/lib/leads";
+import { getFeedStats, type FeedStats } from "@/lib/sheets";
+import { FreshnessStamp } from "@/app/components/freshness";
 
 function Nav() {
   return (
@@ -86,12 +87,12 @@ function Hero() {
   );
 }
 
-function Stats() {
+function Stats({ stats }: { stats: FeedStats }) {
   const cards = [
-    { n: `${feedStats.storesTracked}`, label: "stores tracked", tone: "outline" },
-    { n: `+${feedStats.newThisWeek}`, label: "new this week", tone: "mint" },
-    { n: "46%", label: "with direct emails", tone: "outline" },
-    { n: `${feedStats.plusFlagged}`, label: "Shopify Plus flagged", tone: "lilac" },
+    { n: `${stats.storesTracked.toLocaleString()}`, label: "stores tracked", tone: "outline" },
+    { n: `+${stats.newThisWeek}`, label: "new this week", tone: "mint" },
+    { n: `${stats.withEmailPct}%`, label: "with direct emails", tone: "outline" },
+    { n: `${stats.plusFlagged}`, label: "Shopify Plus flagged", tone: "lilac" },
   ];
   return (
     <section className="px-6 py-24">
@@ -119,6 +120,9 @@ function Stats() {
             </div>
           </div>
         ))}
+      </div>
+      <div className="mx-auto mt-6 flex max-w-5xl justify-center">
+        <FreshnessStamp updatedAt={stats.updatedAt} live={stats.live} />
       </div>
     </section>
   );
@@ -551,7 +555,12 @@ function Footer() {
   );
 }
 
-export default function Home() {
+// ISR: regenerate the homepage (and its live stats) at most every 15 minutes,
+// so the numbers track the growing feed without a Sheets hit per visitor.
+export const revalidate = 900;
+
+export default async function Home() {
+  const stats = await getFeedStats();
   return (
     <main className="pt-4">
       <div className="px-4">
@@ -559,7 +568,7 @@ export default function Home() {
       </div>
       <Hero />
       <Ticker />
-      <Stats />
+      <Stats stats={stats} />
       <Comparison />
       <Bento />
       <DashboardPreview />

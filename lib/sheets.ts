@@ -113,28 +113,30 @@ async function accessToken(): Promise<string> {
   return json.access_token;
 }
 
-async function readRange(range: string): Promise<string[][]> {
+async function readRange(range: string, revalidate?: number): Promise<string[][]> {
   const token = await accessToken();
   const url =
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/` +
     encodeURIComponent(range);
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
+    // Live per-request by default; pass `revalidate` to cache (ISR) for
+    // public, high-traffic reads like the homepage stats.
+    ...(revalidate != null ? { next: { revalidate } } : { cache: "no-store" }),
   });
   if (!res.ok) throw new Error(`sheets ${res.status}: ${await res.text()}`);
   const json = (await res.json()) as { values?: string[][] };
   return json.values ?? [];
 }
 
-export async function fetchLeads(): Promise<{ leads: Lead[]; live: boolean }> {
+export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; live: boolean }> {
   const hasCreds =
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (!SHEET_ID || !hasCreds) {
     return { leads: [], live: false };
   }
   try {
-    const rows = await readRange(`${ENRICHED_TAB}!A2:S`);
+    const rows = await readRange(`${ENRICHED_TAB}!A2:S`, revalidate);
 
     const leads: Lead[] = rows
       .filter((r) => r[COL.domain])
@@ -183,6 +185,56 @@ export function summarise(leads: Lead[]) {
     withEmail: leads.filter((l) => l.email).length,
     plusFlagged: leads.filter((l) => l.plus).length,
     withPayments: leads.filter((l) => (l.payments?.length ?? 0) > 0).length,
+  };
+}
+
+/** The most recent discovery date across the feed — our freshness signal.
+ *  If the pipeline stalls, this stops advancing and the "updated X ago" stamp
+ *  ages, making staleness visible instead of silent. */
+export function dataUpdatedAt(leads: Lead[]): string | null {
+  let max = "";
+  for (const l of leads) if (l.firstSeen > max) max = l.firstSeen;
+  return max || null;
+}
+
+export type FeedStats = {
+  storesTracked: number;
+  newThisWeek: number;
+  withEmailPct: number;
+  plusFlagged: number;
+  updatedAt: string | null;
+  live: boolean;
+};
+
+/** Homepage headline numbers, computed from the live feed (African markets),
+ *  ISR-cached by default so visitors don't each hit the Sheets API. Falls back
+ *  to the last-known baseline if the feed is unreachable, so the marketing page
+ *  never shows zeros. */
+export async function getFeedStats(revalidate = 900): Promise<FeedStats> {
+  const { marketOf } = await import("./prioritize");
+  const { feedStats } = await import("./leads");
+  const { leads, live } = await fetchLeads(revalidate);
+  const africa = leads.filter((l) => marketOf(l) !== "Japan");
+
+  if (!live || africa.length === 0) {
+    return {
+      storesTracked: feedStats.storesTracked,
+      newThisWeek: feedStats.newThisWeek,
+      withEmailPct: Math.round((100 * feedStats.withEmail) / feedStats.storesTracked),
+      plusFlagged: feedStats.plusFlagged,
+      updatedAt: null,
+      live: false,
+    };
+  }
+
+  const s = summarise(africa);
+  return {
+    storesTracked: s.storesTracked,
+    newThisWeek: s.newThisWeek,
+    withEmailPct: Math.round((100 * s.withEmail) / Math.max(s.storesTracked, 1)),
+    plusFlagged: s.plusFlagged,
+    updatedAt: dataUpdatedAt(africa),
+    live: true,
   };
 }
 

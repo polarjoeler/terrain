@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
 import { sampleLeads } from "@/lib/leads";
-import { fetchLeads, summarise } from "@/lib/sheets";
+import { fetchLeads, summarise, dataUpdatedAt } from "@/lib/sheets";
+import { FreshnessStamp } from "@/app/components/freshness";
 import { marketOf } from "@/lib/prioritize";
 import {
   exportQuota,
@@ -85,6 +86,9 @@ export default async function Dashboard() {
             Signed in as {email} · fresh South African and Japanese Shopify
             stores, discovered as they launch.
           </p>
+          <div className="mt-3">
+            <FreshnessStamp updatedAt={dataUpdatedAt(data)} live={live && leads.length > 0} />
+          </div>
         </header>
 
         <div className="mt-8 grid gap-4 md:grid-cols-4">
