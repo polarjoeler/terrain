@@ -145,8 +145,13 @@ export async function clearPending(): Promise<number> {
 /** Published imported stores as Lead[], to merge into the dashboard feed. */
 export async function publishedLeads(): Promise<Lead[]> {
   await ensure();
+  // Explicit columns only — never SELECT * here: the `raw` jsonb is large and
+  // this runs on every dashboard/homepage load.
   const rows = await db()`
-    SELECT * FROM imported_stores WHERE published ORDER BY created_at DESC`;
+    SELECT domain, name, product_count, price_min, price_max, email,
+           first_product_at, plus, first_seen, country, currency, payments, theme
+    FROM imported_stores WHERE published
+    ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
   return rows.map((r) => ({
     domain: r.domain as string,
     name: (r.name as string) ?? (r.domain as string),

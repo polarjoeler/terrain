@@ -48,6 +48,29 @@ CREATE TABLE IF NOT EXISTS imported_stores (
 );
 CREATE INDEX IF NOT EXISTS idx_imported_published ON imported_stores(published);
 
+-- Rich fields from premium data exports (StoreLeads-style). Typed columns for
+-- the high-value signals we rank/display on; `raw` keeps the full source row so
+-- nothing is lost even though our own scraping is limited today.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS merchant_name TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS estimated_monthly_sales NUMERIC;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS products_sold INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS avg_product_price NUMERIC;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS rank INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plan TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS apps TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS instagram_followers INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS facebook_followers INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS employee_count INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS store_created TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS status TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS raw JSONB;
+-- Rank stores by value for prioritised payment scanning / enrichment.
+CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
+
 -- Radar Brand Audits — the on-demand initial scan of a brand against our known
 -- store universe. One row per scan; results_json holds the full report so the
 -- shareable /radar/scan/<id> page is a pure read.
