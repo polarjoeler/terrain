@@ -197,31 +197,59 @@ export default function Radar() {
 
       {/* proof */}
       <section id="proof" className="px-4 pb-24">
-        <div className="mx-auto max-w-4xl rounded-[3rem] border border-cream/10 bg-cream/[0.04] px-6 py-16 text-center md:px-14">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cream/40">
-            Real detection
-          </p>
-          <h2 className="mt-4 font-display text-4xl tracking-tight md:text-5xl">
-            We caught a live clone of a real SA brand —{" "}
-            <em className="text-cyan">days after it launched.</em>
-          </h2>
-          <div className="mt-8 grid gap-4 text-left sm:grid-cols-3">
-            {[
-              ["Duplicated theme", "“Copy of” the brand's storefront"],
-              ["250 products", "bulk-imported in 4 days via API"],
-              ["Zero marketing stack", "no real business behind it"],
-            ].map(([h, s]) => (
-              <div key={h} className="rounded-2xl border border-cream/12 p-5">
-                <div className="font-semibold text-cream">{h}</div>
-                <div className="mt-1 text-sm text-cream/50">{s}</div>
+        <div className="mx-auto max-w-5xl">
+          <div className="grid items-center gap-10 md:grid-cols-[1.1fr_1fr]">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cream/40">
+                Real detection · anonymised
+              </p>
+              <h2 className="mt-4 font-display text-4xl leading-tight tracking-tight md:text-5xl">
+                A live store had copied a South African brand&apos;s{" "}
+                <em className="text-cyan">entire catalogue.</em>
+              </h2>
+              <p className="mt-5 text-cream/60">
+                Two <span className="text-cream/90">separate Shopify accounts</span>.
+                One had reproduced the other&apos;s products wholesale — every image
+                re-uploaded to its own CDN, SKUs and prices carried over verbatim.
+                Radar found it by fingerprinting both catalogues in seconds.
+              </p>
+              <p className="mt-5 text-sm text-cream/45">
+                Independent stores share none of this. A legitimate store scores
+                zero — this one scored the maximum.
+              </p>
+            </div>
+
+            {/* scan readout */}
+            <div className="rounded-3xl border border-cyan/20 bg-cyan/[0.05] p-6 font-mono text-sm">
+              <div className="flex items-center justify-between border-b border-cyan/15 pb-4">
+                <span className="flex items-center gap-2 text-cream/70">
+                  <span className="h-2 w-2 rounded-full bg-cyan blip-pulse" />
+                  catalogue scan
+                </span>
+                <span className="rounded-full bg-cyan px-3 py-1 text-xs font-bold text-cyan-deep">
+                  COPY · 100
+                </span>
               </div>
-            ))}
+              <ul className="mt-4 space-y-3">
+                {[
+                  ["5,947", "identical product images", "96% of the smaller catalogue"],
+                  ["7,066", "identical SKUs", "copied wholesale"],
+                  ["95%", "price mirroring", "across shared products"],
+                  ["100%", "pixel-confirmed", "on audited images"],
+                ].map(([n, label, sub]) => (
+                  <li key={label} className="flex items-baseline gap-3">
+                    <span className="w-16 shrink-0 text-right text-lg font-bold text-cyan">
+                      {n}
+                    </span>
+                    <span className="text-cream/85">
+                      {label}
+                      <span className="block text-xs text-cream/40">{sub}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-          <p className="mt-8 text-sm text-cream/50">
-            Radar scored it{" "}
-            <span className="font-semibold text-cyan">HIGH risk</span> automatically,
-            with six pieces of evidence — while legitimate stores scored zero.
-          </p>
         </div>
       </section>
 
