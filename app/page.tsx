@@ -49,7 +49,7 @@ function Ticker() {
   );
 }
 
-function Hero() {
+function Hero({ stats }: { stats: FeedStats }) {
   return (
     <header className="mx-auto flex max-w-4xl flex-col items-center px-6 pb-16 pt-16 text-center">
       <span className="mb-8 rounded-full border border-mint/25 bg-mint/10 px-4 py-1.5 text-xs font-medium text-mint">
@@ -82,7 +82,7 @@ function Hero() {
       <p className="mt-5 text-xs text-cream/40">
         1-week free trial · Credit card required · Cancel anytime
       </p>
-      <CountrySelector />
+      <CountrySelector zaCount={stats.southAfrica} />
     </header>
   );
 }
@@ -566,7 +566,7 @@ export default async function Home() {
       <div className="px-4">
         <Nav />
       </div>
-      <Hero />
+      <Hero stats={stats} />
       <Ticker />
       <Stats stats={stats} />
       <Comparison />

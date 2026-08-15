@@ -199,6 +199,7 @@ export function dataUpdatedAt(leads: Lead[]): string | null {
 
 export type FeedStats = {
   storesTracked: number;
+  southAfrica: number;
   newThisWeek: number;
   withEmailPct: number;
   plusFlagged: number;
@@ -219,6 +220,7 @@ export async function getFeedStats(revalidate = 900): Promise<FeedStats> {
   if (!live || africa.length === 0) {
     return {
       storesTracked: feedStats.storesTracked,
+      southAfrica: feedStats.storesTracked,
       newThisWeek: feedStats.newThisWeek,
       withEmailPct: Math.round((100 * feedStats.withEmail) / feedStats.storesTracked),
       plusFlagged: feedStats.plusFlagged,
@@ -230,6 +232,7 @@ export async function getFeedStats(revalidate = 900): Promise<FeedStats> {
   const s = summarise(africa);
   return {
     storesTracked: s.storesTracked,
+    southAfrica: leads.filter((l) => marketOf(l) === "South Africa").length,
     newThisWeek: s.newThisWeek,
     withEmailPct: Math.round((100 * s.withEmail) / Math.max(s.storesTracked, 1)),
     plusFlagged: s.plusFlagged,

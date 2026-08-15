@@ -19,9 +19,10 @@ const COUNTRIES: Country[] = [
   { code: "MA", name: "Morocco", flag: "🇲🇦", live: false },
 ];
 
-export function CountrySelector() {
+export function CountrySelector({ zaCount }: { zaCount?: number }) {
   const [code, setCode] = useState("ZA");
   const c = COUNTRIES.find((x) => x.code === code)!;
+  const count = c.code === "ZA" && zaCount ? zaCount : c.count;
 
   return (
     <div className="mx-auto mt-4 w-full max-w-md rounded-[2rem] border border-cream/12 bg-cream/[0.04] p-6 text-center">
@@ -46,7 +47,7 @@ export function CountrySelector() {
         {c.live ? (
           <>
             <div className="font-display text-6xl leading-none tracking-tight">
-              {c.count?.toLocaleString()}
+              {count?.toLocaleString()}
             </div>
             <div className="mt-2 text-sm text-cream/60">
               {c.flag} stores tracked in {c.name} · growing daily
