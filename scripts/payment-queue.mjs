@@ -18,8 +18,9 @@ import postgres from "postgres";
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
-const LIMIT = parseInt(opt("--limit", "500"), 10);
-const OUT = opt("--out", "feed/payment-queue.txt");
+const PLUS = args.includes("--plus"); // enrich ALL Shopify Plus stores (highest value)
+const LIMIT = parseInt(opt("--limit", PLUS ? "0" : "500"), 10); // 0 = no cap
+const OUT = opt("--out", PLUS ? "feed/payment-queue-plus.txt" : "feed/payment-queue.txt");
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL not set (run with --env-file=.env.local)");
@@ -63,15 +64,17 @@ async function main() {
     }
     console.log(`Free parse: tagged ${guessed.toLocaleString()} stores with a payment guess.`);
 
-    // 2. The value-ranked queue: live stores still missing a provider.
+    // 2. The value-ranked queue. --plus = every live Shopify Plus store (probe
+    //    all of them, since Plus are the highest-value merchants); otherwise the
+    //    highest-value live stores that still lack a provider.
     const queue = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
-        AND (payments IS NULL OR payments = '')
+        ${PLUS ? sql`AND plus = true` : sql`AND (payments IS NULL OR payments = '')`}
       ORDER BY estimated_monthly_sales DESC NULLS LAST
-      LIMIT ${LIMIT}`;
+      ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");

@@ -83,8 +83,8 @@ export default async function Dashboard() {
             Welcome back
           </h1>
           <p className="mt-2 text-cream/60">
-            Signed in as {email} · fresh South African and Japanese Shopify
-            stores, discovered as they launch.
+            Signed in as {email} · fresh South African Shopify stores,
+            discovered as they launch.
           </p>
           <div className="mt-3">
             <FreshnessStamp updatedAt={dataUpdatedAt(data)} live={live && leads.length > 0} />
