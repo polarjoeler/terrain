@@ -76,6 +76,27 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL 
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
 
+-- Manual lead corrections. Applied LAST by fetchLeads (after Sheet + imported),
+-- so a fix always wins regardless of source and survives re-enrichment. Any
+-- NULL column means "no override for this field". `hidden` removes a bad lead.
+CREATE TABLE IF NOT EXISTS lead_overrides (
+  domain        TEXT PRIMARY KEY,
+  name          TEXT,
+  email         TEXT,
+  country       TEXT,
+  currency      TEXT,
+  plus          BOOLEAN,
+  theme         TEXT,
+  product_count INTEGER,
+  price_min     NUMERIC,
+  price_max     NUMERIC,
+  payments      TEXT,
+  hidden        BOOLEAN NOT NULL DEFAULT false,
+  note          TEXT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by    TEXT
+);
+
 -- Radar Brand Audits — the on-demand initial scan of a brand against our known
 -- store universe. One row per scan; results_json holds the full report so the
 -- shareable /radar/scan/<id> page is a pure read.

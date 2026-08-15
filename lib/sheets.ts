@@ -170,6 +170,14 @@ export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; 
       console.error("[terrain] imported-leads merge skipped:", err);
     }
 
+    // Manual corrections win over every source and survive re-enrichment.
+    try {
+      const { applyOverrides } = await import("./overrides");
+      return { leads: await applyOverrides(leads), live: true };
+    } catch (err) {
+      console.error("[terrain] lead overrides skipped:", err);
+    }
+
     return { leads, live: true };
   } catch (err) {
     console.error("[terrain] sheet read failed:", err);

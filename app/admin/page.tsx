@@ -23,6 +23,9 @@ export default async function Admin() {
         <nav className="flex items-center justify-between">
           <Link href="/"><Wordmark size="text-xl" /></Link>
           <div className="flex items-center gap-3 text-sm">
+            <Link href="/admin/leads" className="text-cream/60 hover:text-cream">
+              Edit leads →
+            </Link>
             <Link href="/admin/radar" className="text-cyan hover:underline">
               Radar detections →
             </Link>
