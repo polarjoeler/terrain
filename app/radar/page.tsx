@@ -98,12 +98,12 @@ function Nav() {
         <a href="#how" className="hover:text-cream">How it works</a>
         <a href="#proof" className="hover:text-cream">Proof</a>
       </div>
-      <a
-        href="#access"
+      <Link
+        href="/radar/scan"
         className="shrink-0 whitespace-nowrap rounded-full bg-cyan px-5 py-2.5 text-sm font-medium text-cyan-deep"
       >
-        Request access
-      </a>
+        Free brand audit
+      </Link>
     </nav>
   );
 }
@@ -159,13 +159,14 @@ export default function Radar() {
                 being copied.
               </span>
             </div>
-            <div className="mt-8">
-              <a
-                href="#access"
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link
+                href="/radar/scan"
                 className="rounded-full bg-cyan px-7 py-3.5 font-medium text-cyan-deep transition hover:brightness-110"
               >
-                Request access for your brand
-              </a>
+                Scan my brand — free
+              </Link>
+              <span className="text-sm text-cream/40">Results in ~1 minute</span>
             </div>
           </div>
           <RadarScope />
@@ -263,12 +264,12 @@ export default function Radar() {
             Every day a counterfeit store is live is measurable revenue and
             trademark damage. Radar turns detection into resolution.
           </p>
-          <a
-            href="mailto:hello@tembocommerce.com?subject=Radar%20access"
+          <Link
+            href="/radar/scan"
             className="mt-8 inline-block rounded-full bg-ink-deep px-7 py-3.5 font-medium text-cream transition hover:brightness-110"
           >
-            Request access
-          </a>
+            Scan my brand — free
+          </Link>
         </div>
       </section>
 

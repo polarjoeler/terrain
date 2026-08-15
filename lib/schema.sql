@@ -47,3 +47,21 @@ CREATE TABLE IF NOT EXISTS imported_stores (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_imported_published ON imported_stores(published);
+
+-- Radar Brand Audits — the on-demand initial scan of a brand against our known
+-- store universe. One row per scan; results_json holds the full report so the
+-- shareable /radar/scan/<id> page is a pure read.
+CREATE TABLE IF NOT EXISTS radar_audits (
+  id            TEXT PRIMARY KEY,
+  brand_domain  TEXT NOT NULL,
+  brand_name    TEXT,
+  market        TEXT,
+  email         TEXT,
+  inputs_json   TEXT NOT NULL DEFAULT '{}',
+  results_json  TEXT NOT NULL DEFAULT '{}',
+  copies        INTEGER NOT NULL DEFAULT 0,
+  candidates    INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'done',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_radar_audits_created ON radar_audits(created_at);
