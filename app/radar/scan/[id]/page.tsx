@@ -134,8 +134,8 @@ export default async function AuditResultPage({
             </h1>
             <p className="mt-4 text-cream/60">
               We scanned your {audit.brandProducts.toLocaleString()}-product catalogue
-              against {audit.candidates} look-alike {audit.market} store
-              {audit.candidates === 1 ? "" : "s"} and found reproduced catalogues.
+              against {audit.candidates.toLocaleString()} {audit.market} store
+              {audit.candidates === 1 ? "" : "s"} we track and found reproduced catalogues.
             </p>
           </>
         ) : (
@@ -145,8 +145,8 @@ export default async function AuditResultPage({
             </h1>
             <p className="mt-4 text-cream/60">
               We compared your {audit.brandProducts.toLocaleString()}-product catalogue
-              against {audit.candidates} look-alike {audit.market} store
-              {audit.candidates === 1 ? "" : "s"} and found no reproduced catalogues.
+              against {audit.candidates.toLocaleString()} {audit.market} store
+              {audit.candidates === 1 ? "" : "s"} we track and found no reproduced catalogues.
               {partials.length > 0 &&
                 ` We did flag ${partials.length} partial match${partials.length === 1 ? "" : "es"} worth a look.`}
             </p>

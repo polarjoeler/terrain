@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { counts, listPending } from "@/lib/imported";
+import { EnrichPanel } from "./enrich-panel";
 
 export const metadata = { title: "Terrain — Admin" };
 export const dynamic = "force-dynamic";
@@ -39,6 +40,8 @@ export default async function Admin() {
           initialPublished={c.published}
           sample={pending}
         />
+
+        <EnrichPanel />
       </div>
     </div>
   );

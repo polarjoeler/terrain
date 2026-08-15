@@ -11,10 +11,9 @@
  *  is the monitoring subscription's job (the CT-log firehose), not the audit.
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import postgres from "postgres";
+import { db, ensureSchema } from "./db";
+import { loadFingerprints } from "./fingerprints";
 import { fetchLeads } from "../sheets";
 import { marketOf, type Market } from "../prioritize";
 import {
@@ -25,7 +24,7 @@ import {
   type MatchReport,
 } from "./catalog";
 
-const MAX_CANDIDATES = 24; // keep the deep pass inside the serverless budget
+const MAX_LIVE = 24; // uncached stores we'll live-fetch as a fallback
 const FETCH_CONCURRENCY = 6;
 
 /* ---- brand-name matching (mirrors brandwatch.py's canon/homoglyph folding) -- */
@@ -118,16 +117,27 @@ export async function runAudit(input: AuditInput): Promise<AuditResult> {
     return base;
   }
 
-  // 2. Build the candidate list: user-supplied suspects + name/domain matches
-  //    from the market universe. Never include the brand's own domains.
   const own = new Set(
     [brandDomain, ...(input.officialDomains ?? [])].map(cleanDomain),
   );
-  const brandCanon = canon(input.brandName || registrableLabel(brandDomain));
 
+  // 2. Compare against the cached fingerprint universe — instant, and covers
+  //    the WHOLE market (so a clone on an unrelated domain is caught too).
+  const cached = await loadFingerprints(market);
+  const cachedDomains = new Set(cached.map((c) => c.domain));
+  const cachedReports = cached
+    .filter((c) => !own.has(c.domain))
+    .map((c) => {
+      const rep = compare(brandFp, c.fp);
+      rep.suspectName = c.name ?? undefined;
+      return rep;
+    });
+
+  // 3. Live fallback: user-supplied suspects + name/domain look-alikes not yet
+  //    cached (so audits work while enrichment is still ramping up).
+  const brandCanon = canon(input.brandName || registrableLabel(brandDomain));
   const { leads } = await fetchLeads();
   const universe = leads.filter((l) => marketOf(l) === market);
-
   const named =
     brandCanon.length >= 4
       ? universe
@@ -138,23 +148,21 @@ export async function runAudit(input: AuditInput): Promise<AuditResult> {
           })
           .map((l) => ({ domain: cleanDomain(l.domain), name: l.name }))
       : [];
-
   const nameByDomain = new Map(named.map((n) => [n.domain, n.name]));
   const suspects = (input.suspects ?? []).map(cleanDomain);
-  const candidateDomains = [...new Set([...suspects, ...named.map((n) => n.domain)])]
-    .filter((d) => d && !own.has(d))
-    .slice(0, MAX_CANDIDATES);
-  base.candidates = candidateDomains.length;
+  const liveTargets = [...new Set([...suspects, ...named.map((n) => n.domain)])]
+    .filter((d) => d && !own.has(d) && !cachedDomains.has(d))
+    .slice(0, MAX_LIVE);
 
-  // 3. Deep catalogue comparison on candidates only.
-  const reports = await mapWithConcurrency(candidateDomains, FETCH_CONCURRENCY, async (d) => {
+  const liveReports = await mapWithConcurrency(liveTargets, FETCH_CONCURRENCY, async (d) => {
     const fp = buildFingerprint(d, await fetchCatalog(d, 4));
     const rep = compare(brandFp, fp);
     rep.suspectName = nameByDomain.get(d);
     return rep;
   });
 
-  const matches = reports
+  base.candidates = cachedReports.length + liveReports.length;
+  const matches = [...cachedReports, ...liveReports]
     .filter((r) => r.score >= 25)
     .sort((a, b) => b.score - a.score);
   base.matches = matches;
@@ -165,27 +173,8 @@ export async function runAudit(input: AuditInput): Promise<AuditResult> {
 
 /* ---- persistence ---------------------------------------------------------- */
 
-let _sql: ReturnType<typeof postgres> | null = null;
-let _ready: Promise<void> | null = null;
-
-function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
-}
-function ensure() {
-  if (!_ready) {
-    const ddl = readFileSync(join(process.cwd(), "lib", "schema.sql"), "utf8");
-    _ready = db().unsafe(ddl).then(() => undefined);
-  }
-  return _ready;
-}
-
 export async function saveAudit(input: AuditInput, result: AuditResult): Promise<void> {
-  await ensure();
+  await ensureSchema();
   await db()`
     INSERT INTO radar_audits (
       id, brand_domain, brand_name, market, email,
@@ -201,7 +190,7 @@ export async function saveAudit(input: AuditInput, result: AuditResult): Promise
 }
 
 export async function getAudit(id: string): Promise<AuditResult | null> {
-  await ensure();
+  await ensureSchema();
   const rows = await db()`SELECT results_json FROM radar_audits WHERE id = ${id} LIMIT 1`;
   if (!rows.length) return null;
   return JSON.parse(rows[0].results_json) as AuditResult;

@@ -65,3 +65,22 @@ CREATE TABLE IF NOT EXISTS radar_audits (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_radar_audits_created ON radar_audits(created_at);
+
+-- Cached catalogue fingerprints for the store universe. Computed at import /
+-- enrichment time so a Brand Audit compares against them instantly — and can
+-- scan the WHOLE universe (catching random-domain clones), not just name matches.
+CREATE TABLE IF NOT EXISTS store_fingerprints (
+  domain          TEXT PRIMARY KEY,
+  name            TEXT,
+  market          TEXT,
+  n_products      INTEGER NOT NULL DEFAULT 0,
+  image_stems     JSONB NOT NULL DEFAULT '[]',
+  skus            JSONB NOT NULL DEFAULT '[]',
+  handles         JSONB NOT NULL DEFAULT '[]',
+  titles          JSONB NOT NULL DEFAULT '[]',
+  price_by_handle JSONB NOT NULL DEFAULT '{}',
+  status          TEXT NOT NULL DEFAULT 'ok',   -- ok | empty | error
+  enriched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_store_fp_market ON store_fingerprints(market);
+CREATE INDEX IF NOT EXISTS idx_store_fp_enriched ON store_fingerprints(enriched_at);
