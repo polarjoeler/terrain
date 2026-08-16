@@ -36,30 +36,73 @@ async function get(url, ms = 8000) {
   } catch { return null; }
 }
 
-/** Gather the raw signals the model will reason over. */
+// Social profile patterns (handle captured), with junk-path filtering.
+const SOCIALS = {
+  instagram: /(?:instagram\.com)\/([A-Za-z0-9_.]+)/i,
+  facebook: /(?:facebook\.com)\/([A-Za-z0-9_.\-]+)/i,
+  tiktok: /tiktok\.com\/@([A-Za-z0-9_.]+)/i,
+  twitter: /(?:twitter|x)\.com\/([A-Za-z0-9_]+)/i,
+  youtube: /youtube\.com\/(@?[A-Za-z0-9_\-]+)/i,
+  pinterest: /pinterest\.[a-z.]+\/([A-Za-z0-9_\-\/]+)/i,
+  linkedin: /linkedin\.com\/(company\/[A-Za-z0-9_\-]+)/i,
+};
+const JUNK = new Set(["sharer", "share", "intent", "tr", "plugins", "channel", "watch",
+  "embed", "user", "c", "results", "hashtag", "p", "pin", "policy", "help"]);
+
+function extractSocials(html) {
+  const out = {};
+  for (const [net, re] of Object.entries(SOCIALS)) {
+    const m = html.match(re);
+    if (m && m[1] && !JUNK.has(m[1].toLowerCase().split("/")[0])) out[net] = m[1];
+  }
+  return out;
+}
+
+function extractContacts(html) {
+  const emails = new Set();
+  for (const m of html.matchAll(/mailto:([^"'?]+)/gi)) emails.add(m[1].trim().toLowerCase());
+  for (const m of html.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)) {
+    const e = m[0].toLowerCase();
+    if (!/\.(png|jpg|jpeg|gif|svg|webp)$/.test(e) && !/(sentry|wixpress|example|godaddy|shopify\.com)/.test(e)) emails.add(e);
+  }
+  const phones = new Set();
+  for (const m of html.matchAll(/tel:([+0-9()\s\-]{7,})/gi)) phones.add(m[1].replace(/\s+/g, "").trim());
+  return { emails: [...emails].slice(0, 3), phones: [...phones].slice(0, 2) };
+}
+
+/** Gather the website-derived signals: catalogue, socials, contacts, copy. */
 async function gather(domain) {
   const d = clean(domain);
-  const pj = await get(`https://${d}/products.json?limit=15`);
-  let types = new Set(), titles = [];
+  const pj = await get(`https://${d}/products.json?limit=250`);
+  let types = new Set(), titles = [], nProducts = 0, nVariants = 0, nImages = 0;
   if (pj) {
     try {
       const items = (await pj.json()).products || [];
+      nProducts = items.length;
       for (const p of items) {
+        nVariants += (p.variants || []).length;
+        nImages += (p.images || []).length;
         if (p.product_type) types.add(p.product_type);
         if (p.title && titles.length < 8) titles.push(p.title);
       }
     } catch { /* ignore */ }
   }
   const home = await get(`https://${d}`);
-  let title = "", metaDesc = "";
+  let title = "", metaDesc = "", socials = {}, contacts = { emails: [], phones: [] }, plus = false;
   if (home) {
     const html = await home.text().catch(() => "");
     title = (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "").trim().slice(0, 160);
     metaDesc = (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i)?.[1]
       || html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)/i)?.[1]
       || "").trim().slice(0, 300);
+    socials = extractSocials(html);
+    contacts = extractContacts(html);
+    plus = /shopify plus|"plus"|plus_store/i.test(html);
   }
-  return { domain: d, title, metaDesc, types: [...types].slice(0, 10), titles };
+  return {
+    domain: d, title, metaDesc, types: [...types].slice(0, 10), titles,
+    nProducts, nVariants, nImages, socials, contacts, plus,
+  };
 }
 
 function buildPrompt(g) {
@@ -117,23 +160,21 @@ async function main() {
     process.exit(2);
   }
 
+  const socialStr = (s) => Object.entries(s).map(([k, v]) => `${k}:${v}`).join("  ") || "—";
   for (const t of targets) {
     const g = await gather(t.domain);
-    if (DRY) {
-      console.log(`\n● ${g.domain}   [StoreLeads: ${t.category ?? "—"}]`);
-      console.log(`  title:  ${g.title || "—"}`);
-      console.log(`  meta:   ${g.metaDesc || "—"}`);
-      console.log(`  types:  ${g.types.join(", ") || "—"}`);
-      continue;
-    }
+    console.log(`\n● ${g.domain}   [StoreLeads: ${t.category ?? "—"}]`);
+    console.log(`  catalogue: ${g.nProducts} products · ${g.nVariants} variants · ${g.nImages} images${g.plus ? " · PLUS" : ""}`);
+    console.log(`  socials:   ${socialStr(g.socials)}`);
+    console.log(`  contacts:  ${[...g.contacts.emails, ...g.contacts.phones].join("  ") || "—"}`);
+    console.log(`  meta:      ${g.metaDesc || "—"}`);
+    if (DRY) continue;
     try {
       const ai = await askClaude(g);
-      console.log(`\n● ${g.domain}`);
-      console.log(`  StoreLeads category: ${t.category ?? "—"}`);
-      console.log(`  AI category:         ${ai.category}`);
-      console.log(`  AI description:      ${ai.description}`);
+      console.log(`  AI category:    ${ai.category}   (StoreLeads said: ${t.category ?? "—"})`);
+      console.log(`  AI description: ${ai.description}`);
     } catch (e) {
-      console.log(`\n● ${g.domain} — AI failed: ${e.message}`);
+      console.log(`  AI failed: ${e.message}`);
     }
   }
 }
