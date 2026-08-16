@@ -68,6 +68,12 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS employee_count INTEGER;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS store_created TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS status TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS raw JSONB;
+-- Promoted from raw for cheap display (never SELECT the full raw jsonb per-request).
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS instagram TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS facebook TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS tiktok TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS technologies TEXT;
 -- Our own verified liveness (separate from the source's `status` snapshot).
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_status TEXT;      -- active | migrated | dead
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_platform TEXT;    -- detected platform when migrated

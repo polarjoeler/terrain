@@ -181,12 +181,17 @@ export async function publishedLeads(): Promise<Lead[]> {
   // this runs on every dashboard/homepage load.
   const rows = await db()`
     SELECT domain, name, product_count, price_min, price_max, email,
-           first_product_at, plus, first_seen, country, currency, payments, theme
+           first_product_at, plus, first_seen, country, currency, payments, theme,
+           category, estimated_monthly_sales, products_sold, city, plan,
+           description, technologies, instagram, facebook, tiktok,
+           instagram_followers, facebook_followers
     FROM imported_stores
     WHERE published
       -- Exclude verified-dead / migrated-off-Shopify stores: they aren't leads.
       AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
+  const str = (v: unknown) => (v ? String(v) : null);
+  const numOrNull = (v: unknown) => (v != null && v !== "" ? Number(v) : null);
   return rows.map((r) => ({
     domain: r.domain as string,
     name: (r.name as string) ?? (r.domain as string),
@@ -202,5 +207,17 @@ export async function publishedLeads(): Promise<Lead[]> {
     payments: r.payments ? (r.payments as string).split(";").filter(Boolean) : [],
     theme: (r.theme as string) ?? null,
     finalUrl: null,
+    category: str(r.category),
+    estMonthlySales: numOrNull(r.estimated_monthly_sales),
+    productsSold: numOrNull(r.products_sold),
+    city: str(r.city),
+    plan: str(r.plan),
+    description: str(r.description),
+    technologies: str(r.technologies),
+    instagram: str(r.instagram),
+    facebook: str(r.facebook),
+    tiktok: str(r.tiktok),
+    instagramFollowers: numOrNull(r.instagram_followers),
+    facebookFollowers: numOrNull(r.facebook_followers),
   }));
 }

@@ -16,6 +16,19 @@ export type Lead = {
   payments?: string[];
   theme?: string | null;
   finalUrl?: string | null;
+  /** Rich fields (present on imported base stores; null on discovery-feed rows). */
+  category?: string | null;
+  estMonthlySales?: number | null;
+  productsSold?: number | null;
+  city?: string | null;
+  plan?: string | null;
+  description?: string | null;
+  technologies?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
+  instagramFollowers?: number | null;
+  facebookFollowers?: number | null;
 };
 
 export const sampleLeads: Lead[] = [

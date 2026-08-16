@@ -75,6 +75,14 @@ export function LeadsTable({
       ? `${l.currency && l.currency !== "ZAR" ? l.currency + " " : "R"}${l.priceMin}–${l.priceMax}`
       : "—";
 
+  // Estimated monthly sales (USD) — a rough StoreLeads rank proxy, shown compactly.
+  const compactUsd = (n: number | null | undefined) => {
+    if (n == null) return <span className="text-ink/30">—</span>;
+    if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
+    return `$${Math.round(n)}`;
+  };
+
   const reset = () => setShown(PAGE);
 
   const pageRows = rows.slice(0, shown);
@@ -238,7 +246,7 @@ export function LeadsTable({
       )}
 
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[960px] text-left text-sm">
+        <table className="w-full min-w-[1140px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-ink/40">
             <tr>
               {canExport && (
@@ -253,6 +261,8 @@ export function LeadsTable({
               )}
               <th className="pb-3 pr-4">Store</th>
               <th className="pb-3 pr-4">Market</th>
+              <th className="pb-3 pr-4">Category</th>
+              <th className="pb-3 pr-4">Est. revenue</th>
               <th className="pb-3 pr-4">Products</th>
               <th className="pb-3 pr-4">Price range</th>
               <th className="pb-3 pr-4">Payments</th>
@@ -299,6 +309,12 @@ export function LeadsTable({
                 </td>
                 <td className="py-4 pr-4 whitespace-nowrap text-ink/70">
                   {marketOf(l)}
+                </td>
+                <td className="py-4 pr-4 whitespace-nowrap text-ink/70">
+                  {l.category ?? <span className="text-ink/30">—</span>}
+                </td>
+                <td className="py-4 pr-4 whitespace-nowrap font-medium">
+                  {compactUsd(l.estMonthlySales)}
                 </td>
                 <td className="py-4 pr-4">{l.productCount ?? "—"}</td>
                 <td className="py-4 pr-4 whitespace-nowrap">{money(l)}</td>
