@@ -1,0 +1,34 @@
+name: Radar monitor
+
+# The monitoring sweep runs in the cloud (free) — it's pure computation over
+# fingerprints already in Postgres (no merchant fetches, no LLM), so it doesn't
+# need the Mac. Fingerprinting + AI enrichment stay on the Mac cron for now.
+#
+# Requires one repo secret: DATABASE_URL (Settings -> Secrets and variables ->
+# Actions -> New repository secret). Same Supabase transaction-pooler URL as
+# .env.local. No ANTHROPIC_API_KEY needed — the monitor makes no API calls.
+
+on:
+  schedule:
+    - cron: "0 */4 * * *" # every 4 hours (UTC)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: radar-monitor
+  cancel-in-progress: false # never overlap runs
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Run monitor sweep
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/radar-monitor.mjs
