@@ -175,6 +175,44 @@ export async function importedLiveness(): Promise<Liveness> {
   };
 }
 
+/** AI-enrichment health for the /admin dashboard (read-only; the sweep itself
+ *  runs from the Mac cron, not the web app). */
+export type AiEnrichmentStatus = {
+  live: number;
+  categorised: number;
+  uncategorised: number;
+  aiEnriched: number;
+  lowInfo: number; // swept but nothing to classify (parked/empty stores)
+  lastRun: string | null;
+};
+
+export async function aiEnrichmentStatus(): Promise<AiEnrichmentStatus> {
+  await ensure();
+  const [r] = await db()`
+    SELECT
+      COUNT(*) FILTER (WHERE live)::int                                 AS live,
+      COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int        AS categorised,
+      COUNT(*) FILTER (WHERE live AND category IS NULL)::int            AS uncategorised,
+      COUNT(*) FILTER (WHERE ai_enriched_at IS NOT NULL)::int           AS ai_enriched,
+      COUNT(*) FILTER (WHERE ai_enriched_at IS NOT NULL
+                       AND category IS NULL)::int                       AS low_info,
+      MAX(ai_enriched_at)                                              AS last_run
+    FROM (
+      SELECT category, ai_enriched_at,
+             (published AND (live_status IS NULL
+                             OR live_status NOT IN ('dead', 'migrated'))) AS live
+      FROM imported_stores
+    ) s`;
+  return {
+    live: Number(r?.live ?? 0),
+    categorised: Number(r?.categorised ?? 0),
+    uncategorised: Number(r?.uncategorised ?? 0),
+    aiEnriched: Number(r?.ai_enriched ?? 0),
+    lowInfo: Number(r?.low_info ?? 0),
+    lastRun: r?.last_run ? new Date(r.last_run as string).toISOString() : null,
+  };
+}
+
 export async function publishedLeads(): Promise<Lead[]> {
   await ensure();
   // Explicit columns only — never SELECT * here: the `raw` jsonb is large and

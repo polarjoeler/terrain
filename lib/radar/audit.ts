@@ -13,6 +13,7 @@
 
 import { randomBytes } from "node:crypto";
 import { db, ensureSchema } from "./db";
+import { enrollBrand } from "./brands";
 import { loadFingerprints } from "./fingerprints";
 import { fetchLeads } from "../sheets";
 import { marketOf, type Market } from "../prioritize";
@@ -120,6 +121,25 @@ export async function runAudit(input: AuditInput): Promise<AuditResult> {
   const own = new Set(
     [brandDomain, ...(input.officialDomains ?? [])].map(cleanDomain),
   );
+
+  // Fingerprint-on-file: persist this brand's catalogue as a monitoring baseline
+  // (plus its allowlist + trademark). Running the free audit is what enrols them.
+  // Never let a persistence hiccup fail the scan the user is waiting on.
+  try {
+    await enrollBrand(
+      {
+        brandDomain,
+        brandName: input.brandName ?? null,
+        market,
+        email: input.email,
+        officialDomains: input.officialDomains,
+        trademark: input.trademark,
+      },
+      brandFp,
+    );
+  } catch (err) {
+    console.error("brand enrollment failed (audit continues)", err);
+  }
 
   // 2. Compare against the cached fingerprint universe — instant, and covers
   //    the WHOLE market (so a clone on an unrelated domain is caught too).
@@ -244,7 +264,8 @@ export type Detection = {
   verdict: MatchReport["verdict"];
   score: number;
   reasons: string[];
-  auditId: string;
+  auditId?: string; // present for audit-sourced detections; absent for monitoring
+  source: "audit" | "monitor";
   at: string;
 };
 
@@ -278,9 +299,42 @@ export async function listDetections(minScore = 25): Promise<Detection[]> {
         score: m.score,
         reasons: m.reasons,
         auditId: row.id,
+        source: "audit",
         at: new Date(row.created_at).toISOString(),
       });
     }
   }
   return [...byPair.values()].sort((a, b) => b.score - a.score);
+}
+
+/** Detections found by the ongoing monitoring sweep (radar_detections), for the
+ *  admin dashboard. Same shape as audit detections so they render side-by-side. */
+export async function listMonitorDetections(minScore = 25): Promise<Detection[]> {
+  await ensureSchema();
+  const rows = await db()<
+    {
+      brand_domain: string;
+      brand_name: string | null;
+      suspect: string;
+      suspect_name: string | null;
+      verdict: MatchReport["verdict"];
+      score: number;
+      reasons: string[];
+      last_seen_at: Date;
+    }[]
+  >`
+    SELECT brand_domain, brand_name, suspect, suspect_name, verdict, score, reasons, last_seen_at
+    FROM radar_detections WHERE score >= ${minScore}
+    ORDER BY score DESC, last_seen_at DESC`;
+  return rows.map((r) => ({
+    brandDomain: r.brand_domain,
+    brandName: r.brand_name,
+    suspect: r.suspect,
+    suspectName: r.suspect_name ?? undefined,
+    verdict: r.verdict,
+    score: r.score,
+    reasons: r.reasons ?? [],
+    source: "monitor",
+    at: new Date(r.last_seen_at).toISOString(),
+  }));
 }

@@ -533,6 +533,68 @@ function ComingSoon() {
   );
 }
 
+function RadarSection() {
+  const props = [
+    {
+      title: "Scans the whole market",
+      body: "Not just name look-alikes. Radar compares your catalogue against every Shopify store we track, so it catches clones hiding on unrelated domains.",
+    },
+    {
+      title: "Matches your actual products",
+      body: "It fingerprints your real product images, SKUs, handles and prices — so a hit is evidence someone copied you, not a guess based on a similar name.",
+    },
+    {
+      title: "Always watching",
+      body: "Once your fingerprint is on file, every newly-registered store is checked against it automatically — new clones surface as they appear, with evidence captured.",
+    },
+    {
+      title: "Takedown-ready",
+      body: "Each detection comes with the matched images, SKUs and mirrored prices — the proof a platform or your lawyer needs to act.",
+    },
+  ];
+  return (
+    <section className="px-4 pb-24">
+      <div className="mx-auto max-w-6xl rounded-[3rem] border border-cyan/20 bg-cyan/[0.04] px-6 py-16 md:px-14">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan">
+            ◎ Tembo Radar
+          </span>
+          <span className="text-xs uppercase tracking-wide text-cream/40">
+            Brand protection
+          </span>
+        </div>
+        <h2 className="mt-6 max-w-2xl font-display text-4xl tracking-tight md:text-5xl">
+          Someone&apos;s copying your store. Radar finds them.
+        </h2>
+        <p className="mt-3 max-w-xl text-cream/55">
+          Knockoff stores don&apos;t guess at your products — they copy your
+          catalogue: your images, your SKUs, your prices. Radar finds every store
+          doing it, and keeps watching for new ones.
+        </p>
+        <div className="mt-10 grid gap-4 md:grid-cols-2">
+          {props.map((p) => (
+            <div key={p.title} className="rounded-[1.75rem] border border-cream/12 p-7 text-cream">
+              <div className="text-lg font-semibold">{p.title}</div>
+              <p className="mt-2 text-sm text-cream/55">{p.body}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-10 flex flex-wrap items-center gap-4">
+          <Link
+            href="/radar/scan"
+            className="rounded-full bg-cyan px-6 py-3 text-sm font-medium text-cyan-deep transition hover:brightness-110"
+          >
+            Run a free brand audit →
+          </Link>
+          <Link href="/radar" className="text-sm text-cream/60 hover:text-cream">
+            How Radar works
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Footer() {
   return (
     <footer className="overflow-hidden px-6 pb-8 pt-10">
@@ -572,6 +634,7 @@ export default async function Home() {
       <Comparison />
       <Bento />
       <DashboardPreview />
+      <RadarSection />
       <ComingSoon />
       <Pricing />
       <Footer />

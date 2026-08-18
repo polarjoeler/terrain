@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { listAudits, listDetections, type Detection } from "@/lib/radar/audit";
+import { listAudits, listDetections, listMonitorDetections, type Detection } from "@/lib/radar/audit";
+import { monitoredBrandCount } from "@/lib/radar/brands";
 import { coverage } from "@/lib/radar/fingerprints";
 import type { Verdict } from "@/lib/radar/catalog";
 
@@ -53,9 +54,17 @@ function DetectionCard({ d }: { d: Detection }) {
           <li key={i}>› {r}</li>
         ))}
       </ul>
-      <Link href={`/radar/scan/${d.auditId}`} className="mt-3 inline-block text-xs text-cyan hover:underline">
-        View audit →
-      </Link>
+      <div className="mt-3 flex items-center gap-3 text-xs">
+        {d.source === "monitor" ? (
+          <span className="inline-flex items-center gap-1.5 text-cream/45">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan" /> Live monitor
+          </span>
+        ) : (
+          <Link href={`/radar/scan/${d.auditId}`} className="text-cyan hover:underline">
+            View audit →
+          </Link>
+        )}
+      </div>
     </div>
   );
 }
@@ -65,9 +74,11 @@ export default async function RadarDashboard() {
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  const [audits, detections, cov] = await Promise.all([
+  const [audits, auditDetections, monitorDetections, monitored, cov] = await Promise.all([
     listAudits(100).catch(() => []),
     listDetections(25).catch(() => []),
+    listMonitorDetections(25).catch(() => []),
+    monitoredBrandCount().catch(() => 0),
     coverage("South Africa").catch(() => ({
       universe: 0,
       fingerprinted: 0,
@@ -76,9 +87,18 @@ export default async function RadarDashboard() {
     })),
   ]);
 
+  // Merge audit + monitoring detections, deduped per (brand, suspect), keeping
+  // the higher-scoring sighting (a live-monitor hit usually supersedes an audit).
+  const byPair = new Map<string, Detection>();
+  for (const d of [...auditDetections, ...monitorDetections]) {
+    const key = `${d.brandDomain}→${d.suspect}`;
+    const prev = byPair.get(key);
+    if (!prev || d.score > prev.score) byPair.set(key, d);
+  }
+  const detections = [...byPair.values()].sort((a, b) => b.score - a.score);
+
   const confirmed = detections.filter((d) => d.verdict === "COPY" || d.verdict === "LIKELY");
   const partials = detections.filter((d) => d.verdict === "PARTIAL");
-  const brands = new Set(audits.map((a) => a.brandDomain)).size;
 
   return (
     <div className="min-h-screen bg-[#0b0e10] px-4 py-6 md:px-8">
@@ -107,8 +127,8 @@ export default async function RadarDashboard() {
 
         <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">
           <Tile n={confirmed.length} label="Confirmed clones" accent />
+          <Tile n={monitored} label="Monitored brands" />
           <Tile n={audits.length} label="Audits run" />
-          <Tile n={brands} label="Brands scanned" />
           <Tile n={cov.withCatalogue.toLocaleString()} label="Stores fingerprinted" />
         </div>
 

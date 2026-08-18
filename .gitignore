@@ -45,3 +45,7 @@ next-env.d.ts
 google-service-account.json
 .data/
 vercel-env.txt
+
+# local tooling / runtime
+.claude/
+logs/

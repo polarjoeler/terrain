@@ -74,6 +74,9 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS instagram TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS facebook TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS tiktok TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS technologies TEXT;
+-- AI enrichment stamp: set once we've synthesised category/description from the
+-- live site (via scripts/ai-enrich.mjs), so we never re-spend on the same store.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ;
 -- Our own verified liveness (separate from the source's `status` snapshot).
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_status TEXT;      -- active | migrated | dead
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_platform TEXT;    -- detected platform when migrated
@@ -139,3 +142,47 @@ CREATE TABLE IF NOT EXISTS store_fingerprints (
 );
 CREATE INDEX IF NOT EXISTS idx_store_fp_market ON store_fingerprints(market);
 CREATE INDEX IF NOT EXISTS idx_store_fp_enriched ON store_fingerprints(enriched_at);
+
+-- Enrolled brands — the fingerprint-on-file that turns a one-off audit into
+-- ongoing monitoring. Captured when a brand runs an audit: their catalogue
+-- fingerprint becomes a persistent reference, and official_domains is the
+-- allowlist that keeps their own stores from ever being flagged. The monitoring
+-- side matches every newly-discovered store against these rows.
+CREATE TABLE IF NOT EXISTS radar_brands (
+  brand_domain     TEXT PRIMARY KEY,
+  brand_name       TEXT,
+  market           TEXT,
+  email            TEXT,
+  official_domains JSONB NOT NULL DEFAULT '[]',  -- allowlist (never flagged)
+  trademark        TEXT,
+  -- Reference fingerprint (same shape as store_fingerprints).
+  n_products       INTEGER NOT NULL DEFAULT 0,
+  image_stems      JSONB NOT NULL DEFAULT '[]',
+  skus             JSONB NOT NULL DEFAULT '[]',
+  handles          JSONB NOT NULL DEFAULT '[]',
+  titles           JSONB NOT NULL DEFAULT '[]',
+  price_by_handle  JSONB NOT NULL DEFAULT '{}',
+  monitoring       BOOLEAN NOT NULL DEFAULT true,
+  fingerprinted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_radar_brands_monitoring ON radar_brands(monitoring);
+
+-- Monitoring detections — clones found by the ongoing sweep (scripts/radar-
+-- monitor.mjs) matching newly-fingerprinted stores against enrolled brands.
+-- Distinct from audit matches (which live inside radar_audits.results_json):
+-- these are the always-on alerts. One row per (brand, suspect); re-runs refresh
+-- score/last_seen, so the table is a deduped live detection log.
+CREATE TABLE IF NOT EXISTS radar_detections (
+  brand_domain  TEXT NOT NULL,
+  suspect       TEXT NOT NULL,
+  brand_name    TEXT,
+  suspect_name  TEXT,
+  verdict       TEXT NOT NULL,
+  score         INTEGER NOT NULL,
+  reasons       JSONB NOT NULL DEFAULT '[]',
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (brand_domain, suspect)
+);
+CREATE INDEX IF NOT EXISTS idx_radar_detections_score ON radar_detections(score DESC);

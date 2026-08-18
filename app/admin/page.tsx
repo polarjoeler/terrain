@@ -2,8 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { counts, listPending } from "@/lib/imported";
+import { counts, listPending, aiEnrichmentStatus } from "@/lib/imported";
 import { EnrichPanel } from "./enrich-panel";
+import { AiStatusPanel } from "./ai-status";
 
 export const metadata = { title: "Terrain — Admin" };
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export default async function Admin() {
 
   const c = await counts().catch(() => ({ pending: 0, published: 0 }));
   const pending = await listPending().catch(() => []);
+  const aiStatus = await aiEnrichmentStatus().catch(() => null);
   const { AdminImport } = await import("./admin-import");
 
   return (
@@ -49,6 +51,7 @@ export default async function Admin() {
           sample={pending}
         />
 
+        {aiStatus && <AiStatusPanel status={aiStatus} />}
         <EnrichPanel />
       </div>
     </div>
