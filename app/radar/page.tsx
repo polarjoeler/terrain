@@ -38,11 +38,13 @@ function RadarScope() {
       ))}
       <div className="absolute inset-x-0 top-1/2 h-px bg-cyan/10" />
       <div className="absolute inset-y-0 left-1/2 w-px bg-cyan/10" />
+      {/* Static scope glow — no rotation, no colour wash. (The rotating sweep
+          recoloured a big area every few seconds, which read as jarring.) */}
       <div
-        className="radar-sweep absolute inset-0 rounded-full"
+        className="absolute inset-0 rounded-full"
         style={{
           background:
-            "conic-gradient(from 0deg, transparent 310deg, rgba(76,201,212,0.08) 352deg, rgba(76,201,212,0.28) 360deg)",
+            "radial-gradient(circle at 50% 50%, rgba(76,201,212,0.07), transparent 68%)",
         }}
       />
       <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan" />
