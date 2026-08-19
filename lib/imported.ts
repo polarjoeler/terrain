@@ -220,7 +220,7 @@ export async function publishedLeads(): Promise<Lead[]> {
   // this runs on every dashboard/homepage load.
   const rows = await db()`
     SELECT domain, name, product_count, price_min, price_max, email,
-           first_product_at, plus, first_seen, created_at, country, currency, payments, theme,
+           first_product_at, plus, first_seen, discovered_at, created_at, country, currency, payments, theme,
            category, estimated_monthly_sales, products_sold, city, plan,
            description, technologies, instagram, facebook, tiktok,
            instagram_followers, facebook_followers
@@ -242,6 +242,7 @@ export async function publishedLeads(): Promise<Lead[]> {
     plus: Boolean(r.plus),
     firstSeen: (r.first_seen as string) ?? "",
     addedAt: r.created_at ? new Date(r.created_at as string).toISOString().slice(0, 10) : null,
+    discoveredAt: r.discovered_at ? new Date(r.discovered_at as string).toISOString().slice(0, 10) : null,
     country: (r.country as string) ?? null,
     currency: (r.currency as string) ?? null,
     payments: r.payments ? cleanPayments((r.payments as string).split(";")) : [],
@@ -260,4 +261,79 @@ export async function publishedLeads(): Promise<Lead[]> {
     instagramFollowers: numOrNull(r.instagram_followers),
     facebookFollowers: numOrNull(r.facebook_followers),
   }));
+}
+
+/** A South African store? (the tracked universe). Cert-transparency finds carry
+ *  a country/TLD we can trust; anything .za or flagged ZA counts. */
+function isZa(l: Lead): boolean {
+  const d = (l.domain || "").toLowerCase();
+  const c = (l.country || "").toLowerCase();
+  return d.endsWith(".za") || c === "za" || c.includes("south africa");
+}
+
+/** Sync the cert-transparency discovery feed (Sheet) into Postgres so it's the
+ *  complete store universe:
+ *   - backfill discovered_at (= Sheet first_seen, the genuine "found" date) and
+ *     first_product_at onto existing rows WITHOUT clobbering their enrichment;
+ *   - insert freshly-found ZA stores that aren't in Postgres yet (published, so
+ *     they surface immediately; the AI/enrichment passes fill them in later).
+ *  Idempotent: safe to run on every pipeline pass. */
+export async function syncFromSheet(): Promise<{
+  live: boolean;
+  updated: number;
+  inserted: number;
+  skippedNonZa: number;
+}> {
+  await ensure();
+  const { fetchSheetLeadsRaw } = await import("./sheets");
+  const { leads, live } = await fetchSheetLeadsRaw();
+  if (!live || !leads.length) return { live, updated: 0, inserted: 0, skippedNonZa: 0 };
+
+  const zaLeads = leads.filter(isZa);
+  const skippedNonZa = leads.length - zaLeads.length;
+
+  const existing = new Set(
+    (await db()<{ domain: string }[]>`SELECT domain FROM imported_stores`).map((r) => r.domain),
+  );
+  const date = (s: string | null | undefined) => (s && s.length >= 8 ? s.slice(0, 10) : null);
+
+  // Rows to upsert. On conflict we only touch the discovery dates so the richer
+  // StoreLeads enrichment (size, social, category) is never overwritten.
+  const rows = zaLeads.map((l) => ({
+    domain: l.domain,
+    name: l.name,
+    country: "ZA",
+    email: l.email ?? null,
+    theme: l.theme ?? null,
+    plus: l.plus,
+    payments: (l.payments ?? []).join(";") || null,
+    product_count: l.productCount,
+    price_min: l.priceMin,
+    price_max: l.priceMax,
+    currency: l.currency ?? null,
+    first_seen: date(l.firstSeen),
+    first_product_at: date(l.firstProductAt),
+    discovered_at: date(l.firstSeen),
+    published: true,
+    source: "discovery",
+  }));
+
+  let updated = 0;
+  let inserted = 0;
+  const cols = [
+    "domain", "name", "country", "email", "theme", "plus", "payments",
+    "product_count", "price_min", "price_max", "currency", "first_seen",
+    "first_product_at", "discovered_at", "published", "source",
+  ] as const;
+  // Batch to stay under the per-statement timeout.
+  for (let i = 0; i < rows.length; i += 400) {
+    const batch = rows.slice(i, i + 400);
+    await db()`
+      INSERT INTO imported_stores ${db()(batch, ...cols)}
+      ON CONFLICT (domain) DO UPDATE SET
+        discovered_at    = COALESCE(EXCLUDED.discovered_at, imported_stores.discovered_at),
+        first_product_at = COALESCE(EXCLUDED.first_product_at, imported_stores.first_product_at)`;
+    for (const r of batch) (existing.has(r.domain) ? (updated++) : (inserted++));
+  }
+  return { live, updated, inserted, skippedNonZa };
 }

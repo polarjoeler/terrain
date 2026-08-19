@@ -3,32 +3,38 @@
 import { Fragment, useMemo, useState } from "react";
 import type { Lead } from "@/lib/leads";
 import {
-  isNewLaunch,
-  marketOf,
+  foundDate,
+  foundWithin,
+  isNewThisWeek,
+  socialReach,
   sortLeads,
-  type Market,
   type SortKey,
 } from "@/lib/prioritize";
 
-type Quality = "all" | "email" | "plus" | "payments" | "new";
+type Quality = "all" | "email" | "plus" | "social" | "payments";
 
 const qualityFilters: { key: Quality; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "new", label: "New launches" },
   { key: "email", label: "With email" },
   { key: "plus", label: "Plus only" },
+  { key: "social", label: "Has social" },
   { key: "payments", label: "Payments known" },
 ];
 
-const markets: { key: Market | "all"; label: string }[] = [
-  { key: "all", label: "All markets" },
-  { key: "South Africa", label: "South Africa" },
-  { key: "Africa", label: "Africa" },
+type Window = "all" | "week" | "month" | "quarter";
+
+const windows: { key: Window; label: string; days: number | null }[] = [
+  { key: "all", label: "All time", days: null },
+  { key: "week", label: "Found this week", days: 7 },
+  { key: "month", label: "This month", days: 30 },
+  { key: "quarter", label: "This quarter", days: 90 },
 ];
 
 const sorts: { key: SortKey; label: string }[] = [
-  { key: "priority", label: "Priority" },
-  { key: "newest", label: "Newest seen" },
+  { key: "priority", label: "Best prospects" },
+  { key: "newest", label: "Newest found" },
+  { key: "size", label: "Biggest" },
+  { key: "social", label: "Most social" },
   { key: "launched", label: "Newest launched" },
 ];
 
@@ -44,7 +50,7 @@ export function LeadsTable({
   exportRemaining?: number;
 }) {
   const [quality, setQuality] = useState<Quality>("all");
-  const [market, setMarket] = useState<Market | "all">("all");
+  const [window, setWindow] = useState<Window>("all");
   const [sort, setSort] = useState<SortKey>("priority");
   const [q, setQ] = useState("");
   const [shown, setShown] = useState(PAGE);
@@ -56,12 +62,13 @@ export function LeadsTable({
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    const winDays = windows.find((w) => w.key === window)?.days ?? null;
     const filtered = leads.filter((l) => {
       if (quality === "email" && !l.email) return false;
       if (quality === "plus" && !l.plus) return false;
+      if (quality === "social" && socialReach(l) <= 0) return false;
       if (quality === "payments" && !(l.payments?.length ?? 0)) return false;
-      if (quality === "new" && !isNewLaunch(l)) return false;
-      if (market !== "all" && marketOf(l) !== market) return false;
+      if (winDays != null && !foundWithin(l, winDays)) return false;
       if (!needle) return true;
       return (
         l.domain.toLowerCase().includes(needle) ||
@@ -69,12 +76,23 @@ export function LeadsTable({
       );
     });
     return sortLeads(filtered, sort);
-  }, [leads, quality, market, sort, q]);
+  }, [leads, quality, window, sort, q]);
 
   const money = (l: Lead) =>
     l.priceMin != null
       ? `${l.currency && l.currency !== "ZAR" ? l.currency + " " : "R"}${l.priceMin}–${l.priceMax}`
       : "—";
+
+  // Genuine discovery date, shown relative ("3d ago") — the real "found first".
+  const foundLabel = (l: Lead) => {
+    const d = foundDate(l);
+    if (!d) return <span className="text-ink/30">—</span>;
+    const days = Math.floor((Date.now() - new Date(d).getTime()) / 864e5);
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 30) return `${days}d ago`;
+    return d;
+  };
 
   // Estimated monthly sales (USD) — a rough StoreLeads rank proxy, shown compactly.
   const compactUsd = (n: number | null | undefined) => {
@@ -91,6 +109,8 @@ export function LeadsTable({
   // main table stays readable. Only fields with a value are included.
   const detailPairs = (l: Lead): [string, string][] => {
     const out: [string, string][] = [];
+    if (l.priceMin != null) out.push(["Price range", money(l)]);
+    if (l.firstProductAt) out.push(["First product", l.firstProductAt]);
     if (l.city) out.push(["City", l.city]);
     if (l.plan) out.push(["Plan", l.plan]);
     if (l.productsSold != null) out.push(["Products sold", l.productsSold.toLocaleString()]);
@@ -168,9 +188,9 @@ export function LeadsTable({
     <div className="mt-8 rounded-[2rem] bg-paper p-6 text-ink md:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold">
-          Leads{" "}
+          Stores{" "}
           <span className="text-sm font-normal text-ink/45">
-            {rows.length} of {leads.length}
+            {rows.length.toLocaleString()} of {leads.length.toLocaleString()}
           </span>
         </h2>
         <input
@@ -184,25 +204,25 @@ export function LeadsTable({
         />
       </div>
 
-      {/* Market row */}
+      {/* Time-window row — keyed off the genuine discovery date */}
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-ink/40">
-          Market
+          Found
         </span>
-        {markets.map((m) => (
+        {windows.map((w) => (
           <button
-            key={m.key}
+            key={w.key}
             onClick={() => {
-              setMarket(m.key);
+              setWindow(w.key);
               reset();
             }}
             className={`rounded-full px-3.5 py-1.5 text-sm transition ${
-              market === m.key
-                ? "bg-ink text-cream"
+              window === w.key
+                ? "bg-mint text-ink"
                 : "border border-ink/15 text-ink/60 hover:border-ink/40"
             }`}
           >
-            {m.label}
+            {w.label}
           </button>
         ))}
       </div>
@@ -273,7 +293,7 @@ export function LeadsTable({
       )}
 
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[1140px] text-left text-sm">
+        <table className="w-full min-w-[980px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-ink/40">
             <tr>
               {canExport && (
@@ -287,15 +307,13 @@ export function LeadsTable({
                 </th>
               )}
               <th className="pb-3 pr-4">Store</th>
-              <th className="pb-3 pr-4">Market</th>
               <th className="pb-3 pr-4">Category</th>
               <th className="pb-3 pr-4">Est. revenue</th>
+              <th className="pb-3 pr-4">Social reach</th>
               <th className="pb-3 pr-4">Products</th>
-              <th className="pb-3 pr-4">Price range</th>
               <th className="pb-3 pr-4">Payments</th>
-              <th className="pb-3 pr-4">Launched</th>
               <th className="pb-3 pr-4">Contact</th>
-              <th className="pb-3">First seen</th>
+              <th className="pb-3">Found</th>
             </tr>
           </thead>
           <tbody>
@@ -320,9 +338,9 @@ export function LeadsTable({
                         PLUS
                       </span>
                     )}
-                    {isNewLaunch(l) && (
+                    {isNewThisWeek(l) && (
                       <span className="rounded-full bg-mint px-2 py-0.5 text-[10px] font-bold">
-                        NEW LAUNCH
+                        NEW
                       </span>
                     )}
                   </div>
@@ -343,16 +361,19 @@ export function LeadsTable({
                   </button>
                 </td>
                 <td className="py-4 pr-4 whitespace-nowrap text-ink/70">
-                  {marketOf(l)}
-                </td>
-                <td className="py-4 pr-4 whitespace-nowrap text-ink/70">
                   {l.category ?? <span className="text-ink/30">—</span>}
                 </td>
                 <td className="py-4 pr-4 whitespace-nowrap font-medium">
                   {compactUsd(l.estMonthlySales)}
                 </td>
+                <td className="py-4 pr-4 whitespace-nowrap">
+                  {socialReach(l) > 0 ? (
+                    <span title="Instagram + Facebook followers">{compactNum(socialReach(l))}</span>
+                  ) : (
+                    <span className="text-ink/30">—</span>
+                  )}
+                </td>
                 <td className="py-4 pr-4">{l.productCount ?? "—"}</td>
-                <td className="py-4 pr-4 whitespace-nowrap">{money(l)}</td>
                 <td className="py-4 pr-4">
                   {l.payments?.length ? (
                     <div className="flex flex-wrap gap-1">
@@ -374,9 +395,6 @@ export function LeadsTable({
                     <span className="text-ink/30">—</span>
                   )}
                 </td>
-                <td className="py-4 pr-4 whitespace-nowrap">
-                  {l.firstProductAt ?? "—"}
-                </td>
                 <td className="py-4 pr-4">
                   {l.email ? (
                     <a href={`mailto:${l.email}`} className="text-orange">
@@ -387,12 +405,12 @@ export function LeadsTable({
                   )}
                 </td>
                 <td className="py-4 whitespace-nowrap text-ink/60">
-                  {l.firstSeen}
+                  {foundLabel(l)}
                 </td>
               </tr>
               {expanded.has(l.domain) && (
                 <tr className="align-top">
-                  <td colSpan={canExport ? 11 : 10} className="px-1 pb-5">
+                  <td colSpan={canExport ? 9 : 8} className="px-1 pb-5">
                     {detailPairs(l).length > 0 || l.description ? (
                       <div className="rounded-2xl border border-ink/10 bg-ink/[0.02] p-4">
                         {detailPairs(l).length > 0 && (

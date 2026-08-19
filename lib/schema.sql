@@ -84,6 +84,11 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_checked_at TIMESTAMPTZ
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL DEFAULT 0;
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
+-- Genuine "found first" date from the cert-transparency discovery engine (Sheet
+-- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
+-- the bulk StoreLeads import holds the store's historical launch date.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE;
+CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
 -- Manual lead corrections. Applied LAST by fetchLeads (after Sheet + imported),
 -- so a fix always wins regardless of source and survives re-enrichment. Any

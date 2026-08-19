@@ -130,15 +130,14 @@ async function readRange(range: string, revalidate?: number): Promise<string[][]
   return json.values ?? [];
 }
 
-export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; live: boolean }> {
+/** Raw discovery-feed rows straight from the Sheet's Enriched tab — no Postgres
+ *  merge, no overrides. This is the source the Sheet→Postgres sync reads. */
+export async function fetchSheetLeadsRaw(revalidate?: number): Promise<{ leads: Lead[]; live: boolean }> {
   const hasCreds =
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  if (!SHEET_ID || !hasCreds) {
-    return { leads: [], live: false };
-  }
+  if (!SHEET_ID || !hasCreds) return { leads: [], live: false };
   try {
     const rows = await readRange(`${ENRICHED_TAB}!A2:S`, revalidate);
-
     const leads: Lead[] = rows
       .filter((r) => r[COL.domain])
       .map((r) => ({
@@ -159,7 +158,17 @@ export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; 
       }))
       // newest discoveries first
       .sort((a, b) => (b.firstSeen ?? "").localeCompare(a.firstSeen ?? ""));
+    return { leads, live: true };
+  } catch (err) {
+    console.error("[terrain] sheet read failed:", err);
+    return { leads: [], live: false };
+  }
+}
 
+export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; live: boolean }> {
+  const { leads, live } = await fetchSheetLeadsRaw(revalidate);
+  if (!live) return { leads: [], live: false };
+  try {
     // Merge in any admin-published "base" stores (Sheet wins on domain clash).
     try {
       const { publishedLeads } = await import("./imported");
