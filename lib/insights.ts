@@ -169,3 +169,21 @@ export async function insightsHistory(limit = 400): Promise<InsightsData[]> {
     SELECT data FROM insights_snapshots ORDER BY date DESC LIMIT ${limit}`;
   return rows.map((r) => r.data as InsightsData).reverse();
 }
+
+/** The date from which trends & forward-churn are measured (null = since first
+ *  snapshot). Reset after a bulk import so the batch doesn't skew the trends. */
+export async function getBaselineDate(): Promise<string | null> {
+  try {
+    const rows = await db()`SELECT value FROM app_settings WHERE key = 'insights_baseline_date'`;
+    return rows.length ? (rows[0].value as string) : null;
+  } catch {
+    return null; // table not yet created
+  }
+}
+
+export async function setBaselineDate(date: string): Promise<void> {
+  await db()`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ('insights_baseline_date', ${date}, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+}

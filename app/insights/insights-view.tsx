@@ -113,14 +113,24 @@ function DistroCard({
   );
 }
 
-export function InsightsView({ data, history }: { data: InsightsData; history: InsightsData[] }) {
+export function InsightsView({
+  data, history, baselineDate,
+}: {
+  data: InsightsData;
+  history: InsightsData[];
+  baselineDate?: string | null;
+}) {
   const [platform, setPlatform] = useState("Shopify");
   const [period, setPeriod] = useState<Period>("Week");
+
+  // Trends/comparisons only look back to the baseline (reset after a bulk import
+  // so the batch doesn't skew growth or forward-churn).
+  const effHistory = baselineDate ? history.filter((h) => h.date >= baselineDate) : history;
 
   // A period is available only if we have a snapshot at least that far back.
   const baselineFor = (p: Period): InsightsData | null => {
     const want = PERIOD_DAYS[p];
-    const older = history.filter((h) => h.date !== data.date && daysAgo(h.date) >= want);
+    const older = effHistory.filter((h) => h.date !== data.date && daysAgo(h.date) >= want);
     return older.length ? older[older.length - 1] : null;
   };
   const available = (p: Period) => baselineFor(p) !== null;
@@ -133,7 +143,7 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
     return { abs, pct: b > 0 ? Math.round((100 * abs) / b) : null };
   };
 
-  const plusTrend = history.length >= 2 ? history.map((h) => h.plusTotal) : null;
+  const plusTrend = effHistory.length >= 2 ? effHistory.map((h) => h.plusTotal) : null;
 
   // Group providers by PSP / BNPL / APM for the segmented payment breakdown.
   const groupByType = (list?: InsightItem[]): Record<PayType, InsightItem[]> => {
@@ -147,7 +157,7 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
   // Store survival "going forward" — measured against the earliest snapshot
   // (the baseline), so the one-time import's dead/migrated stores don't count;
   // we only show what churns from that point on.
-  const baseline = history.length >= 2 ? history[0] : null;
+  const baseline = effHistory.length >= 2 ? effHistory[0] : null;
   const fwdMigrated = baseline ? Math.max(0, data.churn.migrated - baseline.churn.migrated) : 0;
   const fwdDead = baseline ? Math.max(0, data.churn.dead - baseline.churn.dead) : 0;
   const trackedBase = data.churn.active + fwdMigrated + fwdDead;

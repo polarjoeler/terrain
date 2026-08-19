@@ -5,6 +5,7 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { counts, listPending, aiEnrichmentStatus } from "@/lib/imported";
 import { EnrichPanel } from "./enrich-panel";
 import { AiStatusPanel } from "./ai-status";
+import { BaselineReset } from "./baseline-reset";
 
 export const metadata = { title: "Terrain — Admin" };
 export const dynamic = "force-dynamic";
@@ -52,6 +53,7 @@ export default async function Admin() {
         />
 
         {aiStatus && <AiStatusPanel status={aiStatus} />}
+        <BaselineReset />
         <EnrichPanel />
       </div>
     </div>

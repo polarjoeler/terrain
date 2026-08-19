@@ -195,3 +195,12 @@ CREATE TABLE IF NOT EXISTS insights_snapshots (
   data       JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Small key/value settings store. Holds `insights_baseline_date` — the point
+-- from which Insights trends & forward-churn are measured, so a bulk import can
+-- be reset out (import lands as a level-shift, not fake growth/churn).
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
