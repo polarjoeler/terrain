@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS radar_detections (
   reasons       JSONB NOT NULL DEFAULT '[]',
   first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  alerted_at    TIMESTAMPTZ,  -- when the brand was emailed about this detection
   PRIMARY KEY (brand_domain, suspect)
 );
 CREATE INDEX IF NOT EXISTS idx_radar_detections_score ON radar_detections(score DESC);

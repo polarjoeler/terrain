@@ -83,15 +83,74 @@ const toFp = (r) => ({
   priceByHandle: new Map(Object.entries(r.price_by_handle || {})),
 });
 
+// Email brands (with active monitoring) about NEW detections they haven't been
+// alerted on. One email per brand summarising the fresh clones. Idempotent via
+// radar_detections.alerted_at. Needs RESEND_API_KEY (Mac has it; the GitHub
+// Actions runner skips unless the secret is added there too).
+async function sendAlerts(sql) {
+  const KEY = process.env.RESEND_API_KEY;
+  const FROM = process.env.EMAIL_FROM || "Radar <onboarding@resend.dev>";
+  if (!KEY) { console.log("alerts: no RESEND_API_KEY — skipping"); return; }
+
+  const rows = await sql`
+    SELECT d.brand_domain, b.brand_name, b.email, d.suspect, d.verdict, d.score
+    FROM radar_detections d
+    JOIN radar_brands b ON b.brand_domain = d.brand_domain
+    WHERE d.alerted_at IS NULL
+      AND b.subscription_status IN ('active', 'trialing')
+      AND b.email IS NOT NULL AND b.email <> ''
+      AND d.score >= ${MIN_SCORE}
+    ORDER BY d.brand_domain, d.score DESC`;
+  if (!rows.length) { console.log("alerts: no new detections for subscribed brands"); return; }
+
+  const byBrand = new Map();
+  for (const r of rows) {
+    if (!byBrand.has(r.brand_domain)) {
+      byBrand.set(r.brand_domain, { email: r.email, name: r.brand_name || r.brand_domain, brand: r.brand_domain, hits: [] });
+    }
+    byBrand.get(r.brand_domain).hits.push(r);
+  }
+
+  let sent = 0;
+  for (const g of byBrand.values()) {
+    const n = g.hits.length;
+    const list = g.hits.slice(0, 10).map((h) => `• ${h.suspect} — ${h.verdict} (score ${h.score})`).join("\n");
+    const subject = `Radar: ${n} new store${n === 1 ? "" : "s"} copying ${g.name}`;
+    const text = `Radar detected ${n} new store${n === 1 ? "" : "s"} reproducing ${g.name}'s catalogue:\n\n${list}\n\nSee the full evidence and take action:\nhttps://radar.tembocommerce.app/dashboard\n\n— Radar, part of Tembo Commerce`;
+    const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;color:#0f2b2a">
+      <p style="font-size:22px;margin:0 0 16px">◎ <strong>Radar</strong> alert</p>
+      <p style="color:#4a5f5e;line-height:1.6;margin:0 0 20px">We detected <strong>${n} new store${n === 1 ? "" : "s"}</strong> reproducing <strong>${g.name}</strong>'s catalogue:</p>
+      <ul style="color:#0f2b2a;line-height:1.9;margin:0 0 24px;padding-left:18px">
+        ${g.hits.slice(0, 10).map((h) => `<li><code>${h.suspect}</code> — ${h.verdict} · ${h.score}</li>`).join("")}
+      </ul>
+      <a href="https://radar.tembocommerce.app/dashboard" style="display:inline-block;background:#4cc9d4;color:#0c2b30;text-decoration:none;padding:14px 28px;border-radius:999px;font-weight:600">See the evidence →</a>
+      <p style="color:#8a9a99;font-size:13px;line-height:1.6;margin:28px 0 0">Radar, part of Tembo Commerce · You're receiving this because monitoring is active for ${g.name}.</p>
+    </div>`;
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: FROM, to: [g.email], subject, html, text }),
+      });
+      if (!res.ok) { console.log(`  ! alert to ${g.email} failed: ${res.status}`); continue; }
+      await sql`UPDATE radar_detections SET alerted_at = now() WHERE brand_domain = ${g.brand} AND alerted_at IS NULL`;
+      sent++;
+      console.log(`  ✉ alerted ${g.email} — ${n} new for ${g.name}`);
+    } catch (e) { console.log(`  ! alert error: ${e.message}`); }
+  }
+  console.log(`alerts: ${sent} email(s) sent`);
+}
+
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3 });
   try {
     await sql`SELECT 1`; // fail fast on a bad DATABASE_URL
+    await sql`ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS alerted_at TIMESTAMPTZ`;
     const brands = await sql`
       SELECT brand_domain, brand_name, market, official_domains, n_products,
              image_stems, skus, handles, titles, price_by_handle, fingerprinted_at
       FROM radar_brands WHERE monitoring AND n_products > 0`;
-    if (!brands.length) { console.log("No monitored brands enrolled — nothing to sweep."); return; }
+    if (!brands.length) { console.log("No monitored brands enrolled — nothing to sweep."); await sendAlerts(sql); return; }
 
     const cutoff = new Date(Date.now() - SINCE_DAYS * 864e5);
     console.log(`Sweeping ${brands.length} brand(s)${ALL ? " [full re-scan]" : ` (incremental, ${SINCE_DAYS}d)`}, min score ${MIN_SCORE}…\n`);
@@ -131,6 +190,7 @@ async function main() {
       console.log(`— ${b.brand_domain}: ${stores.length} store(s) checked, ${brandHits} detection(s)`);
     }
     console.log(`\nDone. ${comparisons} comparisons, ${hits} detection(s) recorded/refreshed.`);
+    await sendAlerts(sql);
   } finally { await sql.end(); }
 }
 
