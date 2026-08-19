@@ -7,12 +7,19 @@ const radarHost = [{ type: "host" as const, value: "radar.tembocommerce.app" }];
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    return [
-      { source: "/", has: radarHost, destination: "/radar" },
-      { source: "/scan", has: radarHost, destination: "/radar/scan" },
-      { source: "/scan/:id", has: radarHost, destination: "/radar/scan/:id" },
-      { source: "/detections", has: radarHost, destination: "/admin/radar" },
-    ];
+    // beforeFiles: these run BEFORE the filesystem, so the radar host's "/" is
+    // rewritten to /radar before Next serves the real homepage. As a plain array
+    // (afterFiles) the "/" rewrite is skipped because "/" already matches the
+    // Terrain homepage — which is why radar.tembocommerce.app showed Terrain.
+    // All entries are host-gated, so the Terrain host is unaffected.
+    return {
+      beforeFiles: [
+        { source: "/", has: radarHost, destination: "/radar" },
+        { source: "/scan", has: radarHost, destination: "/radar/scan" },
+        { source: "/scan/:id", has: radarHost, destination: "/radar/scan/:id" },
+        { source: "/detections", has: radarHost, destination: "/admin/radar" },
+      ],
+    };
   },
 };
 
