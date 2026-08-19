@@ -1,12 +1,15 @@
 name: Radar monitor
 
-# The monitoring sweep runs in the cloud (free) — it's pure computation over
-# fingerprints already in Postgres (no merchant fetches, no LLM), so it doesn't
-# need the Mac. Fingerprinting + AI enrichment stay on the Mac cron for now.
+# Two cloud sweeps (free) that need no Mac: the clone monitor (pure computation
+# over fingerprints already in Postgres) and the domain & email intel sweep
+# (pure DNS — typosquat lookalikes + SPF/DMARC posture). Fingerprinting + AI
+# enrichment stay on the Mac cron for now.
 #
-# Requires one repo secret: DATABASE_URL (Settings -> Secrets and variables ->
-# Actions -> New repository secret). Same Supabase transaction-pooler URL as
-# .env.local. No ANTHROPIC_API_KEY needed — the monitor makes no API calls.
+# Required repo secret: DATABASE_URL (Settings -> Secrets and variables ->
+# Actions -> New repository secret) — same Supabase pooler URL as .env.local.
+# Optional: RESEND_API_KEY + EMAIL_FROM to also send clone alert emails from the
+# cloud run (without them the monitor just skips the alert pass). No
+# ANTHROPIC_API_KEY needed — neither sweep makes LLM calls.
 
 on:
   schedule:
@@ -31,4 +34,10 @@ jobs:
       - name: Run monitor sweep
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
         run: node scripts/radar-monitor.mjs
+      - name: Run domain & email intel sweep
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/radar-domain-watch.mjs

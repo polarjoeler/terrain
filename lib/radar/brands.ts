@@ -145,6 +145,9 @@ export type BrandAccount = {
   status: string | null; // subscription_status
   currentPeriodEnd: string | null;
   fingerprintedAt: string;
+  spfPresent: boolean | null;
+  dmarcPolicy: string | null; // none|quarantine|reject|null(no record)
+  emailCheckedAt: string | null;
 };
 
 /** An active (or trialing) Radar monitoring subscription unlocks the dashboard. */
@@ -162,9 +165,13 @@ export async function brandsForEmail(email: string): Promise<BrandAccount[]> {
       subscription_status: string | null;
       current_period_end: Date | null;
       fingerprinted_at: Date;
+      spf_present: boolean | null;
+      dmarc_policy: string | null;
+      email_checked_at: Date | null;
     }[]
   >`
-    SELECT brand_domain, brand_name, market, subscription_status, current_period_end, fingerprinted_at
+    SELECT brand_domain, brand_name, market, subscription_status, current_period_end,
+           fingerprinted_at, spf_present, dmarc_policy, email_checked_at
     FROM radar_brands WHERE lower(email) = ${email.toLowerCase()}
     ORDER BY fingerprinted_at DESC`;
   return rows.map((r) => ({
@@ -174,6 +181,9 @@ export async function brandsForEmail(email: string): Promise<BrandAccount[]> {
     status: r.subscription_status,
     currentPeriodEnd: r.current_period_end ? new Date(r.current_period_end).toISOString() : null,
     fingerprintedAt: new Date(r.fingerprinted_at).toISOString(),
+    spfPresent: r.spf_present,
+    dmarcPolicy: r.dmarc_policy,
+    emailCheckedAt: r.email_checked_at ? new Date(r.email_checked_at).toISOString() : null,
   }));
 }
 

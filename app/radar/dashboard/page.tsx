@@ -3,6 +3,13 @@ import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import { brandsForEmail, hasActiveMonitoring, type BrandAccount } from "@/lib/radar/brands";
 import { detectionsForBrands, type Detection } from "@/lib/radar/audit";
+import {
+  domainWatchesForBrands,
+  emailPosture,
+  kindLabel,
+  watchRisk,
+  type DomainWatch,
+} from "@/lib/radar/domains";
 import { SubscribeButton } from "../subscribe-button";
 import type { Verdict } from "@/lib/radar/catalog";
 
@@ -52,7 +59,81 @@ function DetectionCard({ d }: { d: Detection }) {
   );
 }
 
-function ActiveBrand({ brand, detections }: { brand: BrandAccount; detections: Detection[] }) {
+const RISK: Record<"high" | "medium" | "low", string> = {
+  high: "bg-orange/20 text-orange",
+  medium: "bg-cyan/15 text-cyan",
+  low: "bg-cream/10 text-cream/50",
+};
+
+function SectionHead({ children, count }: { children: React.ReactNode; count?: number }) {
+  return (
+    <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-cream/40">
+      {children}
+      {count != null && count > 0 && (
+        <span className="rounded-full bg-cream/10 px-2 py-0.5 text-[0.65rem] text-cream/60">{count}</span>
+      )}
+    </h3>
+  );
+}
+
+function LookalikeCard({ w }: { w: DomainWatch }) {
+  const risk = watchRisk(w);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cream/10 bg-cream/[0.02] px-4 py-3">
+      <div className="min-w-0">
+        <div className="font-mono text-sm text-cream">{w.lookalike}</div>
+        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.7rem] text-cream/40">
+          <span>{kindLabel(w.kind)}</span>
+          {w.hasSite && <span>› live site</span>}
+          {w.hasMail && <span>› sends email</span>}
+        </div>
+      </div>
+      <span className={`shrink-0 rounded-full px-2.5 py-1 text-[0.65rem] font-bold uppercase ${RISK[risk]}`}>
+        {risk === "high" ? "Phishing risk" : risk === "medium" ? "Active" : "Watch"}
+      </span>
+    </div>
+  );
+}
+
+function EmailProtection({ brand }: { brand: BrandAccount }) {
+  const p = emailPosture(brand);
+  if (!p.checkedAt) return null;
+  const chip = (ok: boolean, label: string) => (
+    <span className={`rounded-full px-2.5 py-1 text-[0.65rem] font-semibold ${ok ? "bg-mint/15 text-mint" : "bg-orange/20 text-orange"}`}>
+      {label}
+    </span>
+  );
+  return (
+    <div className="mt-8">
+      <SectionHead>Email spoofing protection</SectionHead>
+      <div className={`rounded-2xl border p-5 ${p.spoofable ? "border-orange/25 bg-orange/[0.05]" : "border-mint/20 bg-mint/[0.04]"}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          {chip(!!p.spfPresent, p.spfPresent ? "SPF set" : "SPF missing")}
+          {chip(!p.spoofable && p.dmarcPolicy != null && p.dmarcPolicy !== "none",
+            p.dmarcPolicy == null ? "DMARC missing" : `DMARC p=${p.dmarcPolicy}`)}
+        </div>
+        <p className="mt-3 text-sm text-cream/70">{p.summary}</p>
+        {p.spoofable && (
+          <p className="mt-2 text-xs text-cream/45">
+            Fix: publish a DMARC record at <span className="font-mono">_dmarc.{brand.brandDomain}</span> with{" "}
+            <span className="font-mono">p=quarantine</span> or <span className="font-mono">p=reject</span> once your SPF/DKIM are in place.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActiveBrand({
+  brand,
+  detections,
+  watches,
+}: {
+  brand: BrandAccount;
+  detections: Detection[];
+  watches: DomainWatch[];
+}) {
+  const mailers = watches.filter((w) => w.hasMail).length;
   return (
     <section className="rounded-[2rem] border border-cream/12 p-6 md:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -64,16 +145,14 @@ function ActiveBrand({ brand, detections }: { brand: BrandAccount; detections: D
           <span className="h-1.5 w-1.5 rounded-full bg-mint" /> Monitoring active
         </span>
       </div>
+
+      {/* Catalogue clones */}
       <div className="mt-6">
+        <SectionHead count={detections.length}>Catalogue clones</SectionHead>
         {detections.length ? (
-          <>
-            <p className="mb-3 text-sm text-cream/60">
-              {detections.length} store{detections.length === 1 ? "" : "s"} reproducing your catalogue:
-            </p>
-            <div className="space-y-3">
-              {detections.map((d) => <DetectionCard key={`${d.brandDomain}-${d.suspect}`} d={d} />)}
-            </div>
-          </>
+          <div className="space-y-3">
+            {detections.map((d) => <DetectionCard key={`${d.brandDomain}-${d.suspect}`} d={d} />)}
+          </div>
         ) : (
           <div className="rounded-2xl border border-cream/12 p-6 text-sm text-cream/55">
             <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-mint align-middle" />
@@ -82,6 +161,34 @@ function ActiveBrand({ brand, detections }: { brand: BrandAccount; detections: D
           </div>
         )}
       </div>
+
+      {/* Look-alike domains */}
+      <div className="mt-8">
+        <SectionHead count={watches.length}>Look-alike domains</SectionHead>
+        {watches.length ? (
+          <>
+            <p className="mb-3 text-sm text-cream/60">
+              {watches.length} registered domain{watches.length === 1 ? "" : "s"} imitate{watches.length === 1 ? "s" : ""} yours
+              {mailers > 0 && <> — <span className="text-orange">{mailers} can send email as you</span></>}.
+            </p>
+            <div className="space-y-2">
+              {watches.slice(0, 15).map((w) => <LookalikeCard key={w.lookalike} w={w} />)}
+            </div>
+            {watches.length > 15 && (
+              <p className="mt-3 text-xs text-cream/40">+ {watches.length - 15} more being watched.</p>
+            )}
+          </>
+        ) : (
+          <div className="rounded-2xl border border-cream/12 p-6 text-sm text-cream/55">
+            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-mint align-middle" />
+            No look-alike domains registered against you. Radar sweeps typo, homoglyph and
+            wrong-TLD variants of {brand.brandDomain} and flags any that go live.
+          </div>
+        )}
+      </div>
+
+      {/* Email spoofing posture */}
+      <EmailProtection brand={brand} />
     </section>
   );
 }
@@ -115,12 +222,21 @@ export default async function RadarDashboard() {
 
   const brands = await brandsForEmail(email);
   const active = brands.filter((b) => hasActiveMonitoring(b.status));
-  const all = active.length ? await detectionsForBrands(active.map((b) => b.brandDomain)) : [];
+  const activeDomains = active.map((b) => b.brandDomain);
+  const [all, allWatches] = activeDomains.length
+    ? await Promise.all([detectionsForBrands(activeDomains), domainWatchesForBrands(activeDomains)])
+    : [[] as Detection[], [] as DomainWatch[]];
   const byBrand = new Map<string, Detection[]>();
   for (const d of all) {
     const arr = byBrand.get(d.brandDomain) ?? [];
     arr.push(d);
     byBrand.set(d.brandDomain, arr);
+  }
+  const watchesByBrand = new Map<string, DomainWatch[]>();
+  for (const w of allWatches) {
+    const arr = watchesByBrand.get(w.brandDomain) ?? [];
+    arr.push(w);
+    watchesByBrand.set(w.brandDomain, arr);
   }
 
   return (
@@ -151,7 +267,12 @@ export default async function RadarDashboard() {
           <div className="mt-8 space-y-5">
             {brands.map((b) =>
               hasActiveMonitoring(b.status) ? (
-                <ActiveBrand key={b.brandDomain} brand={b} detections={byBrand.get(b.brandDomain) ?? []} />
+                <ActiveBrand
+                  key={b.brandDomain}
+                  brand={b}
+                  detections={byBrand.get(b.brandDomain) ?? []}
+                  watches={watchesByBrand.get(b.brandDomain) ?? []}
+                />
               ) : (
                 <LockedBrand key={b.brandDomain} brand={b} email={email} />
               ),

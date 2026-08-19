@@ -60,7 +60,6 @@ const LIVE = () =>
 
 export async function computeInsights(): Promise<InsightsData> {
   const sql = db();
-  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
 
   const [t] = await sql`
     SELECT
@@ -81,7 +80,10 @@ export async function computeInsights(): Promise<InsightsData> {
       SELECT *,
         (published AND country = 'ZA' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
         (published AND country = 'ZA') AS za,
-        (first_seen >= ${weekAgo}) AS fresh
+        -- "new this week" = added to Terrain in the last 7 days (created_at).
+        -- NOT first_seen: that's the store's historical launch date (2006-2023),
+        -- so it would always read 0. Matches getHomeStats so the pages agree.
+        (created_at >= now() - interval '7 days') AS fresh
       FROM imported_stores
     ) s`;
 
@@ -153,6 +155,38 @@ export async function computeInsights(): Promise<InsightsData> {
       dead: Number(t.churn_dead),
       survival: Number(t.churn_checked) ? pct(Number(t.churn_active), Number(t.churn_checked)) : null,
     },
+  };
+}
+
+/** Homepage headline numbers, computed from the SAME live universe as /insights
+ *  (Postgres imported_stores) so the two public pages never disagree. Replaces
+ *  the old Google-Sheet feed, which only saw ~200-700 discovery-engine stores. */
+export async function getHomeStats(): Promise<import("./sheets").FeedStats> {
+  const sql = db();
+  const [t] = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE live)::int                                        AS stores,
+      COUNT(*) FILTER (WHERE live AND created_at >= now() - interval '7 days')::int AS new_week,
+      COUNT(*) FILTER (WHERE live AND email IS NOT NULL AND email <> '')::int  AS with_email,
+      COUNT(*) FILTER (WHERE live AND plus)::int                              AS plus
+    FROM (
+      SELECT *,
+        (published AND country = 'ZA' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live
+      FROM imported_stores
+    ) s`;
+  // Freshness = the discovery pipeline's last run (updates every pipeline pass),
+  // not the imported first_seen dates (historical) or created_at (frozen at import).
+  const [f] = await sql`SELECT MAX(enriched_at)::date AS d FROM store_fingerprints`;
+
+  const stores = Number(t.stores);
+  return {
+    storesTracked: stores,
+    southAfrica: stores, // the tracked universe is South Africa
+    newThisWeek: Number(t.new_week),
+    withEmailPct: pct(Number(t.with_email), stores),
+    plusFlagged: Number(t.plus),
+    updatedAt: (f?.d as string) || null,
+    live: stores > 0,
   };
 }
 

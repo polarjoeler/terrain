@@ -4,6 +4,7 @@
 #   1. fingerprint the SA universe   (store_fingerprints)
 #   2. AI category + description      (imported_stores)
 #   3. monitor stores vs brands       (radar_detections)
+#   4. domain & email intel           (radar_domain_watches + SPF/DMARC posture)
 #
 # Every step is resumable/idempotent, so the first run does the full backfill and
 # each later run only touches new/stale stores — cheap, and keeps discoveries
@@ -23,8 +24,11 @@ node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! finge
 echo "--- 2/3 AI enrich (category + description) ---"
 node --env-file=.env.local scripts/ai-enrich.mjs --all || echo "!! ai-enrich step failed (continuing)"
 
-echo "--- 3/3 monitor brands ---"
+echo "--- 3/4 monitor brands ---"
 node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
+
+echo "--- 4/4 domain & email intel ---"
+node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-watch step failed (continuing)"
 
 # Trigger the daily market-insights snapshot (the page computes + upserts it).
 echo "--- insights snapshot ---"

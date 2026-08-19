@@ -174,6 +174,27 @@ ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS stripe_customer_id     TEXT;
 ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
 ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS subscription_status    TEXT; -- trialing|active|past_due|cancelled|expired
 ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS current_period_end     TIMESTAMPTZ;
+-- Email-spoofing posture of the brand's OWN domain (from scripts/radar-domain-watch.mjs).
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS spf_present      BOOLEAN;
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS dmarc_policy     TEXT;   -- none|quarantine|reject|null(missing)
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS email_checked_at TIMESTAMPTZ;
+
+-- Lookalike / typosquat domains found for an enrolled brand (registered
+-- permutations that resolve or are mail-configured). Populated by the domain
+-- watch sweep; surfaced on the customer dashboard.
+CREATE TABLE IF NOT EXISTS radar_domain_watches (
+  brand_domain  TEXT NOT NULL,
+  lookalike     TEXT NOT NULL,
+  kind          TEXT,                              -- homoglyph|typo|tld|wordadd|hyphen
+  has_site      BOOLEAN NOT NULL DEFAULT false,    -- resolves to an A record
+  has_mail      BOOLEAN NOT NULL DEFAULT false,    -- has MX (mail-configured → phishing risk)
+  ips           JSONB NOT NULL DEFAULT '[]',
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  dismissed     BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (brand_domain, lookalike)
+);
+CREATE INDEX IF NOT EXISTS idx_domain_watches_brand ON radar_domain_watches(brand_domain);
 
 -- Monitoring detections — clones found by the ongoing sweep (scripts/radar-
 -- monitor.mjs) matching newly-fingerprinted stores against enrolled brands.

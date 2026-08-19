@@ -2,6 +2,7 @@ import Link from "next/link";
 import { TerrainMark, Wordmark } from "@/app/components/logo";
 import { CountrySelector } from "@/app/components/country-selector";
 import { getFeedStats, type FeedStats } from "@/lib/sheets";
+import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
 
 function Nav() {
@@ -622,7 +623,16 @@ function Footer() {
 export const revalidate = 900;
 
 export default async function Home() {
-  const stats = await getFeedStats();
+  // Headline numbers come from the Postgres store universe (same as /insights).
+  // Fall back to the legacy feed only if the DB is unreachable, so the marketing
+  // page never shows zeros or breaks.
+  let stats: FeedStats;
+  try {
+    stats = await getHomeStats();
+    if (!stats.live) stats = await getFeedStats();
+  } catch {
+    stats = await getFeedStats();
+  }
   return (
     <main className="pt-4">
       <div className="px-4">
