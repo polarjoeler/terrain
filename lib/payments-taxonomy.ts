@@ -23,3 +23,26 @@ export const PAY_TYPES: PayType[] = ["PSP", "BNPL", "APM"];
 export function classify(provider: string): PayType {
   return TYPE[provider] ?? "APM";
 }
+
+// Shopify's universal express-checkout buttons and generic card icons appear in
+// almost every store's storefront markup regardless of the actual gateway, so
+// markup detection over-reports them and inflates the provider list. They aren't
+// meaningful "providers" (the real acquirer — e.g. Paystack — is only visible at
+// checkout), so drop them from provider views.
+const NON_PROVIDER = new Set([
+  "Shop Pay", "Apple Pay", "Google Pay", "Amazon Pay",
+  "Visa", "Mastercard", "Amex", "Credit Card",
+]);
+
+/** Strip non-provider noise (universal wallets/card icons) and dedupe. */
+export function cleanPayments(list: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const label = raw.trim();
+    if (!label || NON_PROVIDER.has(label) || seen.has(label)) continue;
+    seen.add(label);
+    out.push(label);
+  }
+  return out;
+}

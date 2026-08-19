@@ -10,6 +10,7 @@
 
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { cleanPayments } from "./payments-taxonomy";
 import type { Lead } from "./leads";
 
 const SHEET_ID = process.env.TERRAIN_SHEET_ID;
@@ -152,7 +153,7 @@ export async function fetchLeads(revalidate?: number): Promise<{ leads: Lead[]; 
         firstSeen: str(r[COL.firstSeen])?.slice(0, 10) ?? "",
         country: str(r[COL.country]),
         currency: str(r[COL.currency]),
-        payments: str(r[COL.payments])?.split(";").filter(Boolean) ?? [],
+        payments: cleanPayments(str(r[COL.payments])?.split(";") ?? []),
         theme: str(r[COL.theme]),
         finalUrl: str(r[COL.finalUrl]),
       }))

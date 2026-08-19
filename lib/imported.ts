@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import type { Lead } from "./leads";
+import { cleanPayments } from "./payments-taxonomy";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 let _ready: Promise<void> | null = null;
@@ -242,7 +243,7 @@ export async function publishedLeads(): Promise<Lead[]> {
     firstSeen: (r.first_seen as string) ?? "",
     country: (r.country as string) ?? null,
     currency: (r.currency as string) ?? null,
-    payments: r.payments ? (r.payments as string).split(";").filter(Boolean) : [],
+    payments: r.payments ? cleanPayments((r.payments as string).split(";")) : [],
     theme: (r.theme as string) ?? null,
     finalUrl: null,
     category: str(r.category),

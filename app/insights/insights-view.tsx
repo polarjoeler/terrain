@@ -3,13 +3,16 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
-import { PAY_TYPES } from "@/lib/payments-taxonomy";
+import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { InsightsData, InsightItem } from "@/lib/insights";
 
-const PERIODS = ["Week", "Month", "Quarter", "Year"] as const;
+const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
-const PERIOD_DAYS: Record<Period, number> = { Week: 7, Month: 30, Quarter: 91, Year: 365 };
-const COMPARISON: Record<Period, string> = { Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
+const PERIOD_DAYS: Record<Period, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365 };
+const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
+const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
+const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
+const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
 
 const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
@@ -23,6 +26,18 @@ function Delta({ v }: { v: number | null }) {
     <span className={up ? "text-mint" : "text-orange"}>
       {up ? "▲" : "▼"} {Math.abs(v)}
       {Math.abs(v) < 100 ? "%" : ""}
+    </span>
+  );
+}
+
+function TileDelta({ abs, pct }: { abs: number | null; pct: number | null }) {
+  if (abs === null) return <span className="text-cream/25">—</span>;
+  if (abs === 0) return <span className="text-cream/35">±0</span>;
+  const up = abs > 0;
+  return (
+    <span className={up ? "text-mint" : "text-orange"}>
+      {up ? "▲" : "▼"} {up ? "+" : "−"}{Math.abs(abs).toLocaleString()}
+      {pct != null ? ` · ${Math.abs(pct)}%` : ""}
     </span>
   );
 }
@@ -110,18 +125,39 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
   };
   const available = (p: Period) => baselineFor(p) !== null;
   const base = available(period) ? baselineFor(period) : null;
-  const tileDelta = (key: keyof InsightsData) =>
-    base && typeof base[key] === "number" && (base[key] as number) > 0
-      ? Math.round((100 * ((data[key] as number) - (base[key] as number))) / (base[key] as number))
-      : null;
+  // Absolute + % change of a metric vs the selected period's baseline.
+  const metric = (key: keyof InsightsData): { abs: number | null; pct: number | null } => {
+    const b = base && typeof base[key] === "number" ? (base[key] as number) : null;
+    if (b == null) return { abs: null, pct: null };
+    const abs = (data[key] as number) - b;
+    return { abs, pct: b > 0 ? Math.round((100 * abs) / b) : null };
+  };
 
   const plusTrend = history.length >= 2 ? history.map((h) => h.plusTotal) : null;
 
+  // Group providers by PSP / BNPL / APM for the segmented payment breakdown.
+  const groupByType = (list?: InsightItem[]): Record<PayType, InsightItem[]> => {
+    const g: Record<PayType, InsightItem[]> = { PSP: [], BNPL: [], APM: [] };
+    for (const p of list ?? []) g[classify(p.label)].push(p);
+    return g;
+  };
+  const provByType = groupByType(data.paymentsByProvider);
+  const baseProvByType = base ? groupByType(base.paymentsByProvider) : null;
+
+  // Store survival "going forward" — measured against the earliest snapshot
+  // (the baseline), so the one-time import's dead/migrated stores don't count;
+  // we only show what churns from that point on.
+  const baseline = history.length >= 2 ? history[0] : null;
+  const fwdMigrated = baseline ? Math.max(0, data.churn.migrated - baseline.churn.migrated) : 0;
+  const fwdDead = baseline ? Math.max(0, data.churn.dead - baseline.churn.dead) : 0;
+  const trackedBase = data.churn.active + fwdMigrated + fwdDead;
+  const fwdSurvival = trackedBase > 0 ? Math.round((100 * data.churn.active) / trackedBase) : null;
+
   const tiles = [
-    { n: data.storesTotal.toLocaleString(), label: "stores tracked", del: tileDelta("storesTotal"), tone: "outline" },
-    { n: `+${data.newThisWeek}`, label: "new this week", del: null, tone: "mint" },
-    { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", del: tileDelta("plusTotal"), tone: "lilac" },
-    { n: data.paymentsVerifiedStores.toLocaleString(), label: "checkout-verified", del: null, tone: "outline" },
+    { n: data.storesTotal.toLocaleString(), label: "stores tracked", ...metric("storesTotal"), tone: "outline" },
+    { n: `+${data.newThisWeek}`, label: "new this week", abs: null, pct: null, tone: "mint" },
+    { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", ...metric("plusTotal"), tone: "lilac" },
+    { n: data.paymentsVerifiedStores.toLocaleString(), label: "with payment data", abs: null, pct: null, tone: "outline" },
   ];
 
   return (
@@ -178,7 +214,7 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
               );
             })}
             <span className="ml-1 text-xs text-cream/40">
-              {base ? `vs last · ${COMPARISON[period]}` : "trends build as daily snapshots accumulate"}
+              {base ? `vs ${PERIOD_PREV[period]} · ${COMPARISON[period]}` : "comparisons build as daily snapshots accumulate"}
             </span>
           </div>
         </div>
@@ -190,25 +226,30 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
               <div className="font-display text-5xl leading-none">{s.n}</div>
               <div className="mt-2 flex items-center justify-between">
                 <span className={`text-xs font-medium uppercase tracking-wide ${s.tone === "outline" ? "text-cream/45" : "opacity-70"}`}>{s.label}</span>
-                <span className="text-xs font-semibold"><Delta v={s.del} /></span>
+                <span className="text-xs font-semibold"><TileDelta abs={s.abs} pct={s.pct} /></span>
               </div>
             </div>
           ))}
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          {/* Payment providers — type breakdown + drill-in to every provider */}
-          <Card title="Payment providers" subtitle={`Share of ${data.paymentsVerifiedStores.toLocaleString()} checkout-verified stores`}>
-            <div className="mb-6 grid grid-cols-3 gap-3">
-              {PAY_TYPES.map((t) => (
-                <div key={t} className="rounded-2xl border border-cream/12 px-3 py-3 text-center">
-                  <div className="font-display text-2xl text-cream">{data.paymentsByType[t].pct}%</div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-cream/45">{t}</div>
-                  <div className="text-[11px] text-cream/35">{data.paymentsByType[t].count.toLocaleString()} stores</div>
-                </div>
-              ))}
+          {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
+          <Card title="Payment providers" subtitle={`Detected across ${data.paymentsVerifiedStores.toLocaleString()} stores' storefront markup — not checkout-verified`}>
+            <div className="space-y-7">
+              {PAY_TYPES.map((t) =>
+                provByType[t].length ? (
+                  <div key={t}>
+                    <div className="mb-3 flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
+                      <span className="text-[11px] text-cream/40">
+                        {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
+                      </span>
+                    </div>
+                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} />
+                  </div>
+                ) : null,
+              )}
             </div>
-            <DrillList data={data.paymentsByProvider} baseline={base?.paymentsByProvider ?? null} tone="orange" showBaseline={!!base} />
           </Card>
 
           <div className="space-y-5">
@@ -232,20 +273,21 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
           <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" />
         </div>
 
-        {/* Churn / survival — moved down into the report */}
+        {/* Store survival & churn — measured GOING FORWARD from our baseline, so
+            the one-time bulk import's already-dead/migrated stores don't skew it. */}
         <section className="mt-10">
           <div className="mb-3 flex items-baseline justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/50">Store survival &amp; churn</h2>
             <span className="text-xs text-cream/35">
-              verified {data.churn.checked.toLocaleString()} of {data.churn.total.toLocaleString()} stores
+              {baseline ? `tracked since ${baseline.date}` : "tracking from today — forward churn accrues daily"}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {[
-              { n: data.churn.survival != null ? `${data.churn.survival}%` : "—", label: "still live", tone: "mint" },
-              { n: data.churn.active.toLocaleString(), label: "active", tone: "outline" },
-              { n: data.churn.migrated.toLocaleString(), label: "migrated off Shopify", tone: "outline" },
-              { n: data.churn.dead.toLocaleString(), label: "closed", tone: "outline" },
+              { n: fwdSurvival != null ? `${fwdSurvival}%` : "—", label: "still live", tone: "mint" },
+              { n: data.churn.active.toLocaleString(), label: "actively tracked", tone: "outline" },
+              { n: fwdMigrated.toLocaleString(), label: "migrated off · since baseline", tone: "outline" },
+              { n: fwdDead.toLocaleString(), label: "closed · since baseline", tone: "outline" },
             ].map((c) => (
               <div key={c.label} className={`rounded-3xl px-5 py-6 ${c.tone === "mint" ? "bg-mint text-ink" : "border border-cream/12 text-cream"}`}>
                 <div className="font-display text-4xl leading-none tracking-tight md:text-5xl">{c.n}</div>
@@ -253,6 +295,10 @@ export function InsightsView({ data, history }: { data: InsightsData; history: I
               </div>
             ))}
           </div>
+          <p className="mt-3 text-xs text-cream/40">
+            Forward-looking: we only count stores that migrate off Shopify or close <em>after</em> we
+            started tracking them — the one-time bulk import is excluded so this reflects real ongoing churn.
+          </p>
         </section>
 
         <p className="mt-8 text-center text-xs text-cream/40">

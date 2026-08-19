@@ -6,7 +6,7 @@
  */
 
 import postgres from "postgres";
-import { classify, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { classify, cleanPayments, PAY_TYPES, type PayType } from "./payments-taxonomy";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -86,7 +86,6 @@ export async function computeInsights(): Promise<InsightsData> {
     ) s`;
 
   const storesTotal = Number(t.stores_total);
-  const verified = Number(t.verified);
   const themesKnown = Number(t.themes_known);
   const categoriesKnown = Number(t.categories_known);
   const appsKnown = Number(t.apps_known);
@@ -99,9 +98,11 @@ export async function computeInsights(): Promise<InsightsData> {
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
+  let verified = 0; // stores with ≥1 real provider after stripping wallet noise
   for (const r of payRows) {
-    const gws = String(r.payments).split(";").map((x) => x.trim()).filter(Boolean);
+    const gws = cleanPayments(String(r.payments).split(";"));
     if (!gws.length) continue;
+    verified++;
     firstCount.set(gws[0], (firstCount.get(gws[0]) ?? 0) + 1);
     const seenTypes = new Set<PayType>();
     for (const g of gws) {
