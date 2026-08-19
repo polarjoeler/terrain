@@ -190,6 +190,28 @@ export async function getHomeStats(): Promise<import("./sheets").FeedStats> {
   };
 }
 
+/** The weekly digest's market-pulse block, computed from Postgres (same universe
+ *  as /insights) and shaped as the legacy InsightSnapshot the digest expects.
+ *  Replaces the old Sheet-backed fetchInsights() so the email agrees with the app. */
+export async function digestSnapshot(): Promise<import("./sheets").InsightSnapshot> {
+  const d = await computeInsights();
+  return {
+    date: d.date,
+    stores_total: d.storesTotal,
+    new_this_week: d.newThisWeek,
+    plus_total: d.plusTotal,
+    plus_new_this_week: d.plusNewThisWeek,
+    payments_verified_stores: d.paymentsVerifiedStores,
+    payments_by_provider: d.paymentsByProvider,
+    payments_by_type: Object.fromEntries(
+      Object.entries(d.paymentsByType).map(([k, v]) => [k, v.count]),
+    ),
+    first_at_checkout: d.firstProvider,
+    themes: d.themes,
+    apps: d.apps,
+  };
+}
+
 /** Persist today's snapshot (idempotent per day) — call from the daily cron. */
 export async function snapshotInsights(data: InsightsData): Promise<void> {
   await db()`

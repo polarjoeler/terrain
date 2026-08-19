@@ -220,7 +220,7 @@ export async function publishedLeads(): Promise<Lead[]> {
   // this runs on every dashboard/homepage load.
   const rows = await db()`
     SELECT domain, name, product_count, price_min, price_max, email,
-           first_product_at, plus, first_seen, country, currency, payments, theme,
+           first_product_at, plus, first_seen, created_at, country, currency, payments, theme,
            category, estimated_monthly_sales, products_sold, city, plan,
            description, technologies, instagram, facebook, tiktok,
            instagram_followers, facebook_followers
@@ -241,6 +241,7 @@ export async function publishedLeads(): Promise<Lead[]> {
     firstProductAt: (r.first_product_at as string) ?? null,
     plus: Boolean(r.plus),
     firstSeen: (r.first_seen as string) ?? "",
+    addedAt: r.created_at ? new Date(r.created_at as string).toISOString().slice(0, 10) : null,
     country: (r.country as string) ?? null,
     currency: (r.currency as string) ?? null,
     payments: r.payments ? cleanPayments((r.payments as string).split(";")) : [],

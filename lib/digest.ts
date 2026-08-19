@@ -72,8 +72,14 @@ export function buildDigest(opts: {
 }): { subject: string; html: string; text: string } {
   const { insights, siteUrl } = opts;
   const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
-  const fresh = opts.leads.filter((l) => (l.firstSeen ?? "") >= weekAgo);
-  const pool = fresh.length ? fresh : opts.leads;
+  // "New this week" = entered Terrain in the last 7 days (addedAt/created_at).
+  // firstSeen is the store's historical launch date, so it can't answer this.
+  const fresh = opts.leads.filter((l) => (l.addedAt ?? l.firstSeen ?? "") >= weekAgo);
+  // When nothing is genuinely new this week, fall back to the whole feed so the
+  // email isn't empty — but drop the "new" framing (isFresh) so we never claim
+  // thousands of stores are "new" when they aren't.
+  const isFresh = fresh.length > 0;
+  const pool = isFresh ? fresh : opts.leads;
   const ranked = [...pool].sort((a, b) => priorityScore(b) - priorityScore(a));
   const picks = ranked.slice(0, 3);
   const withEmail = pool.filter((l) => l.email).length;
@@ -85,7 +91,7 @@ export function buildDigest(opts: {
   // Actionable pulse line.
   const topFirst = insights?.first_at_checkout?.[0];
   const pulse = [
-    `${pool.length} new stores`,
+    isFresh ? `${pool.length} new stores` : `${pool.length} stores tracked`,
     `${Math.round((100 * withEmail) / Math.max(pool.length, 1))}% with contact emails`,
     topFirst ? `${topFirst.label} leads checkout (${topFirst.pct}%)` : "",
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
@@ -96,7 +102,9 @@ export function buildDigest(opts: {
       ? `Top theme this week: <b>${insights.themes[0].label}</b>. Most-installed app: <b>${insights.apps[0].label}</b>.`
       : "";
 
-  const subject = `Terrain — ${pool.length} new African stores this week`;
+  const subject = isFresh
+    ? `Terrain — ${pool.length} new African stores this week`
+    : `Terrain — your African commerce brief`;
 
   const html = `<!-- digest -->
 <div style="background:${C.cream};padding:24px 0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
@@ -117,7 +125,7 @@ export function buildDigest(opts: {
       ${picks.map((l) => leadCard(l, siteUrl)).join("")}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:14px 0 4px;">
         <a href="${siteUrl}/dashboard" style="display:inline-block;background:${C.ink};color:${C.cream};text-decoration:none;font-weight:600;font-size:14px;padding:12px 26px;border-radius:999px;">
-          View all ${pool.length} new stores →
+          View all ${pool.length} ${isFresh ? "new " : ""}stores →
         </a>
       </td></tr></table>
     </td></tr>

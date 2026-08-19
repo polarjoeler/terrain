@@ -10,6 +10,9 @@ export type Lead = {
   firstProductAt: string | null;
   plus: boolean;
   firstSeen: string;
+  /** When the store entered Terrain (imported_stores.created_at), YYYY-MM-DD.
+   *  Used for "new this week" — firstSeen is the store's historical launch date. */
+  addedAt?: string | null;
   /** Present on live rows from the Sheet; absent in the bundled samples. */
   country?: string | null;
   currency?: string | null;
