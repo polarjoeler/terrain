@@ -39,7 +39,15 @@ function DetectionCard({ d }: { d: Detection }) {
       <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-cream/55">
         {d.reasons.slice(0, 3).map((r, i) => <li key={i}>› {r}</li>)}
       </ul>
-      <div className="mt-3 text-xs text-cream/40">first seen {ago(d.at)}</div>
+      <div className="mt-3 flex items-center justify-between text-xs">
+        <span className="text-cream/40">first seen {ago(d.at)}</span>
+        <Link
+          href={`/radar/dossier/${encodeURIComponent(d.brandDomain)}/${encodeURIComponent(d.suspect)}`}
+          className="font-medium text-cyan hover:underline"
+        >
+          Prepare takedown →
+        </Link>
+      </div>
     </div>
   );
 }
