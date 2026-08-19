@@ -2,10 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
-import { sampleLeads } from "@/lib/leads";
-import { fetchLeads, summarise, dataUpdatedAt } from "@/lib/sheets";
+import { sampleLeads, type Lead } from "@/lib/leads";
+import { summarise } from "@/lib/sheets";
+import { publishedLeads } from "@/lib/imported";
+import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
-import { marketOf } from "@/lib/prioritize";
 import {
   exportQuota,
   getSubscriber,
@@ -26,11 +27,34 @@ export default async function Dashboard() {
 
   const daysLeft = trialDaysLeft(subscriber);
 
-  const { leads, live } = await fetchLeads();
-  // Japan will get its own dedicated site — exclude it here.
-  const source = live && leads.length ? leads : sampleLeads;
-  const data = source.filter((l) => marketOf(l) !== "Japan");
-  const s = summarise(data);
+  // Store universe now comes from Postgres (imported_stores) — the same source
+  // as /insights and the homepage, so the counts agree (~8,781 live SA stores).
+  // Tile numbers come from getHomeStats() so "new this week" matches those pages
+  // (created_at basis, not the historical first_seen). Fall back to bundled
+  // samples only if the DB is unreachable, so the dashboard never breaks.
+  let data: Lead[];
+  let live: boolean;
+  let updatedAt: string | null;
+  let stats: { storesTracked: number; newThisWeek: number; plusFlagged: number; withEmail: number };
+  try {
+    const [leads, home] = await Promise.all([publishedLeads(), getHomeStats()]);
+    if (!leads.length) throw new Error("no leads");
+    data = leads;
+    live = true;
+    updatedAt = home.updatedAt;
+    stats = {
+      storesTracked: home.storesTracked,
+      newThisWeek: home.newThisWeek,
+      plusFlagged: home.plusFlagged,
+      withEmail: leads.filter((l) => l.email).length,
+    };
+  } catch {
+    data = sampleLeads;
+    live = false;
+    updatedAt = null;
+    const s = summarise(data);
+    stats = { storesTracked: s.storesTracked, newThisWeek: s.newThisWeek, plusFlagged: s.plusFlagged, withEmail: s.withEmail };
+  }
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -66,7 +90,7 @@ export default async function Dashboard() {
               {live ? (
                 <>
                   <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-mint align-middle" />
-                  Live feed · {s.newThisWeek} new this week
+                  Live feed · {stats.newThisWeek} new this week
                 </>
               ) : (
                 "Sample data"
@@ -93,31 +117,31 @@ export default async function Dashboard() {
             discovered as they launch.
           </p>
           <div className="mt-3">
-            <FreshnessStamp updatedAt={dataUpdatedAt(data)} live={live && leads.length > 0} />
+            <FreshnessStamp updatedAt={updatedAt} live={live} />
           </div>
         </header>
 
         <div className="mt-8 grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-mint p-5 text-ink">
-            <div className="font-display text-4xl">+{s.newThisWeek}</div>
+            <div className="font-display text-4xl">+{stats.newThisWeek}</div>
             <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">
               New this week
             </div>
           </div>
           <div className="rounded-3xl bg-lilac p-5 text-ink">
-            <div className="font-display text-4xl">{s.plusFlagged}</div>
+            <div className="font-display text-4xl">{stats.plusFlagged}</div>
             <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">
               Shopify Plus
             </div>
           </div>
           <div className="rounded-3xl border border-cream/15 p-5">
-            <div className="font-display text-4xl">{s.withEmail}</div>
+            <div className="font-display text-4xl">{stats.withEmail}</div>
             <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
               With direct email
             </div>
           </div>
           <div className="rounded-3xl border border-cream/15 p-5">
-            <div className="font-display text-4xl">{s.storesTracked}</div>
+            <div className="font-display text-4xl">{stats.storesTracked.toLocaleString()}</div>
             <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
               Stores tracked
             </div>

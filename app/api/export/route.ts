@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth";
-import { fetchLeads } from "@/lib/sheets";
+import { publishedLeads } from "@/lib/imported";
 import { consumeExportQuota } from "@/lib/subscriptions";
 import type { Lead } from "@/lib/leads";
 
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { leads } = await fetchLeads();
+  const leads = await publishedLeads();
   const selected = leads.filter((l) => wanted.has(l.domain));
 
   const header = COLUMNS.map((c) => c.label).join(",");
