@@ -167,6 +167,13 @@ CREATE TABLE IF NOT EXISTS radar_brands (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_radar_brands_monitoring ON radar_brands(monitoring);
+-- Radar monitoring subscription (Stripe) — a brand pays to see live detections
+-- and get alerts. Detection still runs for all enrolled brands (cheap); the
+-- paywall gates the customer-facing dashboard + alerts.
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS stripe_customer_id     TEXT;
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS subscription_status    TEXT; -- trialing|active|past_due|cancelled|expired
+ALTER TABLE radar_brands ADD COLUMN IF NOT EXISTS current_period_end     TIMESTAMPTZ;
 
 -- Monitoring detections — clones found by the ongoing sweep (scripts/radar-
 -- monitor.mjs) matching newly-fingerprinted stores against enrolled brands.

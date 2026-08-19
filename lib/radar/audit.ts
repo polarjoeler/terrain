@@ -307,6 +307,40 @@ export async function listDetections(minScore = 25): Promise<Detection[]> {
   return [...byPair.values()].sort((a, b) => b.score - a.score);
 }
 
+/** Monitoring detections for a specific set of brands — the customer dashboard. */
+export async function detectionsForBrands(brandDomains: string[], minScore = 25): Promise<Detection[]> {
+  await ensureSchema();
+  if (!brandDomains.length) return [];
+  const rows = await db()<
+    {
+      brand_domain: string;
+      brand_name: string | null;
+      suspect: string;
+      suspect_name: string | null;
+      verdict: MatchReport["verdict"];
+      score: number;
+      reasons: string[];
+      first_seen_at: Date;
+      last_seen_at: Date;
+    }[]
+  >`
+    SELECT brand_domain, brand_name, suspect, suspect_name, verdict, score, reasons, first_seen_at, last_seen_at
+    FROM radar_detections
+    WHERE brand_domain = ANY(${brandDomains}) AND score >= ${minScore}
+    ORDER BY score DESC, last_seen_at DESC`;
+  return rows.map((r) => ({
+    brandDomain: r.brand_domain,
+    brandName: r.brand_name,
+    suspect: r.suspect,
+    suspectName: r.suspect_name ?? undefined,
+    verdict: r.verdict,
+    score: r.score,
+    reasons: r.reasons ?? [],
+    source: "monitor",
+    at: new Date(r.last_seen_at).toISOString(),
+  }));
+}
+
 /** Detections found by the ongoing monitoring sweep (radar_detections), for the
  *  admin dashboard. Same shape as audit detections so they render side-by-side. */
 export async function listMonitorDetections(minScore = 25): Promise<Detection[]> {

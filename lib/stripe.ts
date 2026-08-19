@@ -57,6 +57,32 @@ export async function createCheckoutSession(opts: {
   return session.url;
 }
 
+/** Hosted Checkout for a Radar monitoring subscription (separate product).
+ *  Keyed to the brand via subscription metadata so the webhook can find it. */
+export async function createRadarCheckoutSession(opts: {
+  email?: string;
+  brandDomain: string;
+  origin: string;
+}): Promise<string> {
+  const price = process.env.STRIPE_PRICE_RADAR;
+  if (!price) {
+    throw new Error("No STRIPE_PRICE_RADAR set. Run scripts/setup-radar-stripe.mjs and set it.");
+  }
+  const session = await stripe().checkout.sessions.create({
+    mode: "subscription",
+    line_items: [{ price, quantity: 1 }],
+    customer_email: opts.email || undefined,
+    payment_method_collection: "always",
+    subscription_data: { metadata: { product: "radar", brand_domain: opts.brandDomain } },
+    metadata: { product: "radar", brand_domain: opts.brandDomain, email: opts.email ?? null },
+    allow_promotion_codes: true,
+    success_url: `${opts.origin}/dashboard?welcome=1`,
+    cancel_url: `${opts.origin}/`,
+  });
+  if (!session.url) throw new Error("Stripe returned no checkout URL");
+  return session.url;
+}
+
 /** Map a Stripe subscription status to our internal status. */
 export function mapStatus(s: Stripe.Subscription.Status): Status {
   switch (s) {

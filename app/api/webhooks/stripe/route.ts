@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { mapStatus, planFromMetadata, stripe } from "@/lib/stripe";
 import { upsertSubscriber } from "@/lib/subscriptions";
+import { setBrandSubscription } from "@/lib/radar/brands";
 
 export const runtime = "nodejs";
 
@@ -19,7 +20,22 @@ function iso(unixSeconds: number | null | undefined): string | null {
 }
 
 async function applySubscription(sub: Stripe.Subscription, email?: string | null) {
-  // Resolve the email from the customer if not already known.
+  const periodEndTs = sub.items?.data?.[0]?.current_period_end ?? null;
+
+  // Radar monitoring subscription → update the enrolled brand, keyed by metadata.
+  if (sub.metadata?.product === "radar") {
+    const brandDomain = sub.metadata.brand_domain;
+    if (!brandDomain) return;
+    await setBrandSubscription(brandDomain, {
+      customerId: typeof sub.customer === "string" ? sub.customer : sub.customer.id,
+      subscriptionId: sub.id,
+      status: mapStatus(sub.status),
+      currentPeriodEnd: iso(periodEndTs),
+    });
+    return;
+  }
+
+  // Terrain lead-gen subscription → keyed on the customer's email.
   let addr = email ?? null;
   if (!addr && typeof sub.customer === "string") {
     const cust = await stripe().customers.retrieve(sub.customer);

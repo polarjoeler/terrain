@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getAudit } from "@/lib/radar/audit";
 import type { MatchReport, Verdict } from "@/lib/radar/catalog";
+import { SubscribeButton } from "../../subscribe-button";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,11 +43,7 @@ function MatchCard({ m }: { m: MatchReport }) {
   );
 }
 
-function MonitoringCTA({ brand, id }: { brand: string; id: string }) {
-  const subject = encodeURIComponent(`Start Radar monitoring — ${brand}`);
-  const body = encodeURIComponent(
-    `I'd like to turn on real-time monitoring for ${brand}.\nAudit: ${id}`,
-  );
+function MonitoringCTA({ brandDomain, email }: { brandDomain: string; email?: string }) {
   return (
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-8 text-center md:p-12">
       <h2 className="font-display text-3xl tracking-tight text-cream md:text-4xl">
@@ -65,12 +62,7 @@ function MonitoringCTA({ brand, id }: { brand: string; id: string }) {
         </span>
       </div>
       <div className="mt-6">
-        <a
-          href={`mailto:hello@tembocommerce.com?subject=${subject}&body=${body}`}
-          className="inline-block rounded-full bg-cyan px-7 py-3.5 font-medium text-cyan-deep transition hover:brightness-110"
-        >
-          Start monitoring {brand} →
-        </a>
+        <SubscribeButton brandDomain={brandDomain} email={email} label="Start monitoring →" />
       </div>
     </div>
   );
@@ -180,7 +172,7 @@ export default async function AuditResultPage({
 
       {/* upsell */}
       <div className="mt-10">
-        <MonitoringCTA brand={brand} id={audit.id} />
+        <MonitoringCTA brandDomain={audit.brandDomain} />
       </div>
 
       <p className="mt-8 text-center text-xs text-cream/40">

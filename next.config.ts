@@ -17,6 +17,7 @@ const nextConfig: NextConfig = {
         { source: "/", has: radarHost, destination: "/radar" },
         { source: "/scan", has: radarHost, destination: "/radar/scan" },
         { source: "/scan/:id", has: radarHost, destination: "/radar/scan/:id" },
+        { source: "/dashboard", has: radarHost, destination: "/radar/dashboard" },
         { source: "/detections", has: radarHost, destination: "/admin/radar" },
       ],
     };

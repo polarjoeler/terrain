@@ -135,3 +135,64 @@ export async function monitoredBrandCount(): Promise<number> {
   const [r] = await db()`SELECT COUNT(*)::int AS n FROM radar_brands WHERE monitoring`;
   return Number(r?.n ?? 0);
 }
+
+/* ---- customer subscriptions -------------------------------------------------- */
+
+export type BrandAccount = {
+  brandDomain: string;
+  brandName: string | null;
+  market: string;
+  status: string | null; // subscription_status
+  currentPeriodEnd: string | null;
+  fingerprintedAt: string;
+};
+
+/** An active (or trialing) Radar monitoring subscription unlocks the dashboard. */
+export const hasActiveMonitoring = (status: string | null | undefined) =>
+  status === "active" || status === "trialing";
+
+/** The brands enrolled under a signed-in customer's email. */
+export async function brandsForEmail(email: string): Promise<BrandAccount[]> {
+  await ensureSchema();
+  const rows = await db()<
+    {
+      brand_domain: string;
+      brand_name: string | null;
+      market: string;
+      subscription_status: string | null;
+      current_period_end: Date | null;
+      fingerprinted_at: Date;
+    }[]
+  >`
+    SELECT brand_domain, brand_name, market, subscription_status, current_period_end, fingerprinted_at
+    FROM radar_brands WHERE lower(email) = ${email.toLowerCase()}
+    ORDER BY fingerprinted_at DESC`;
+  return rows.map((r) => ({
+    brandDomain: r.brand_domain,
+    brandName: r.brand_name,
+    market: r.market,
+    status: r.subscription_status,
+    currentPeriodEnd: r.current_period_end ? new Date(r.current_period_end).toISOString() : null,
+    fingerprintedAt: new Date(r.fingerprinted_at).toISOString(),
+  }));
+}
+
+/** Persist a Stripe subscription state onto a brand (called by the webhook). */
+export async function setBrandSubscription(
+  brandDomain: string,
+  s: {
+    customerId?: string | null;
+    subscriptionId?: string | null;
+    status?: string | null;
+    currentPeriodEnd?: string | null;
+  },
+): Promise<void> {
+  await ensureSchema();
+  await db()`
+    UPDATE radar_brands SET
+      stripe_customer_id     = COALESCE(${s.customerId ?? null}, stripe_customer_id),
+      stripe_subscription_id = COALESCE(${s.subscriptionId ?? null}, stripe_subscription_id),
+      subscription_status    = ${s.status ?? null},
+      current_period_end     = ${s.currentPeriodEnd ?? null}
+    WHERE brand_domain = ${cleanDomain(brandDomain)}`;
+}
