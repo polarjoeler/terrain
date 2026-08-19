@@ -3,63 +3,27 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
-import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
-import type { InsightSnapshot, Share } from "@/lib/sheets";
-
-/* ---- fallback sample data (used only when no live snapshot exists) -------- */
-const MOCK: InsightSnapshot = {
-  date: "",
-  stores_total: 531,
-  new_this_week: 46,
-  plus_total: 31,
-  plus_new_this_week: 8,
-  payments_verified_stores: 240,
-  payments_by_provider: [
-    { label: "PayFast", pct: 60 }, { label: "Yoco", pct: 32 },
-    { label: "Payflex", pct: 28 }, { label: "Mobicred", pct: 22 },
-    { label: "Shop Pay", pct: 14 }, { label: "Apple Pay", pct: 12 },
-    { label: "PayPal", pct: 9 },
-  ],
-  payments_by_type: { PSP: 95, BNPL: 43, APM: 67 },
-  first_at_checkout: [
-    { label: "PayFast", pct: 60 }, { label: "Yoco", pct: 24 },
-    { label: "Peach Payments", pct: 4 }, { label: "Ozow", pct: 3 },
-  ],
-  themes: [
-    { label: "Dawn", pct: 34 }, { label: "Impulse", pct: 18 },
-    { label: "Refresh", pct: 12 }, { label: "Custom / agency", pct: 27 },
-  ],
-  apps: [
-    { label: "Meta Pixel", pct: 71 }, { label: "Klaviyo", pct: 44 },
-    { label: "Judge.me", pct: 33 }, { label: "Recharge", pct: 12 },
-  ],
-};
+import { PAY_TYPES } from "@/lib/payments-taxonomy";
+import type { InsightsData, InsightItem } from "@/lib/insights";
 
 const PERIODS = ["Week", "Month", "Quarter", "Year"] as const;
-const COMPARISON: Record<(typeof PERIODS)[number], string> = {
-  Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY",
-};
+type Period = (typeof PERIODS)[number];
+const PERIOD_DAYS: Record<Period, number> = { Week: 7, Month: 30, Quarter: 91, Year: 365 };
+const COMPARISON: Record<Period, string> = { Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
+
+const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
+const fill = (tone: string) =>
+  tone === "mint" ? "bg-mint" : tone === "lilac" ? "bg-lilac" : tone === "cyan" ? "bg-cyan" : "bg-orange";
 
 function Delta({ v }: { v: number | null }) {
-  if (v === null) return <span className="text-cream/30">—</span>;
-  const up = v >= 0;
+  if (v === null) return <span className="text-cream/25">—</span>;
+  if (v === 0) return <span className="text-cream/35">±0</span>;
+  const up = v > 0;
   return (
     <span className={up ? "text-mint" : "text-orange"}>
-      {up ? "▲" : "▼"} {Math.abs(v)}%
+      {up ? "▲" : "▼"} {Math.abs(v)}
+      {Math.abs(v) < 100 ? "%" : ""}
     </span>
-  );
-}
-
-function Bar({ label, pct, tone = "orange" }: Share & { tone?: string }) {
-  const fill = tone === "mint" ? "bg-mint" : tone === "lilac" ? "bg-lilac" : "bg-orange";
-  return (
-    <div className="flex items-center gap-3">
-      <div className="w-36 shrink-0 truncate text-sm text-cream/70">{label}</div>
-      <div className="h-3 flex-1 overflow-hidden rounded-full bg-cream/10">
-        <div className={`h-full rounded-full ${fill}`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
-      <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream/60">{pct}%</div>
-    </div>
   );
 }
 
@@ -74,7 +38,7 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
 }
 
 function TrendLine({ data }: { data: number[] }) {
-  const w = 520, h = 180;
+  const w = 520, h = 160;
   const max = Math.max(...data, 1);
   const step = w / Math.max(data.length - 1, 1);
   const pts = data.map((v, i) => [i * step, h - (v / max) * (h - 20)] as const);
@@ -88,38 +52,76 @@ function TrendLine({ data }: { data: number[] }) {
   );
 }
 
-export function InsightsView({
-  snapshot,
-  history,
-  live,
+/** A distribution (providers / themes / apps / categories) with % + absolute
+ *  counts, drill-in to see every item, and per-item change vs the chosen period. */
+function DistroCard({
+  title, subtitle, data, baseline, tone = "orange",
 }: {
-  snapshot: InsightSnapshot | null;
-  history: InsightSnapshot[];
-  live: boolean;
+  title: string;
+  subtitle: string;
+  data: InsightItem[];
+  baseline: InsightItem[] | null;
+  tone?: string;
 }) {
-  const [platform, setPlatform] = useState("Shopify");
-  const [period, setPeriod] = useState<(typeof PERIODS)[number]>("Week");
-  const d = snapshot ?? MOCK;
+  const [all, setAll] = useState(false);
+  const shown = all ? data : data.slice(0, 6);
+  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.pct])) : null;
 
-  // WoW delta vs the previous snapshot, when we have one.
-  const prev = history.length >= 2 ? history[history.length - 2] : null;
-  const delta = (cur: number, key: keyof InsightSnapshot) =>
-    prev && typeof prev[key] === "number" && (prev[key] as number) > 0
-      ? Math.round((100 * (cur - (prev[key] as number))) / (prev[key] as number))
+  return (
+    <Card title={title} subtitle={subtitle}>
+      <div className={`space-y-3 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
+        {shown.map((i) => {
+          const prev = bmap?.get(i.label);
+          const del = prev != null ? i.pct - prev : null;
+          return (
+            <div key={i.label} className="flex items-center gap-3">
+              <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                <div className={`h-full rounded-full ${fill(tone)}`} style={{ width: `${Math.min(i.pct, 100)}%` }} />
+              </div>
+              <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
+              <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
+              {bmap && <div className="w-12 shrink-0 text-right text-xs">{<Delta v={del} />}</div>}
+            </div>
+          );
+        })}
+      </div>
+      {data.length > 6 && (
+        <button
+          onClick={() => setAll((a) => !a)}
+          className="mt-4 text-sm font-medium text-cream/50 transition hover:text-cream"
+        >
+          {all ? "Show top 6" : `See all ${data.length} →`}
+        </button>
+      )}
+    </Card>
+  );
+}
+
+export function InsightsView({ data, history }: { data: InsightsData; history: InsightsData[] }) {
+  const [platform, setPlatform] = useState("Shopify");
+  const [period, setPeriod] = useState<Period>("Week");
+
+  // A period is available only if we have a snapshot at least that far back.
+  const baselineFor = (p: Period): InsightsData | null => {
+    const want = PERIOD_DAYS[p];
+    const older = history.filter((h) => h.date !== data.date && daysAgo(h.date) >= want);
+    return older.length ? older[older.length - 1] : null;
+  };
+  const available = (p: Period) => baselineFor(p) !== null;
+  const base = available(period) ? baselineFor(period) : null;
+  const tileDelta = (key: keyof InsightsData) =>
+    base && typeof base[key] === "number" && (base[key] as number) > 0
+      ? Math.round((100 * ((data[key] as number) - (base[key] as number))) / (base[key] as number))
       : null;
 
-  // Group providers by PSP/BNPL/APM for the segmented view.
-  const byType: Record<PayType, Share[]> = { PSP: [], BNPL: [], APM: [] };
-  for (const p of d.payments_by_provider) byType[classify(p.label)].push(p);
-
-  // Cumulative Plus trend from history (falls back to a single point).
-  const plusTrend = history.length ? history.map((h) => h.plus_total) : [d.plus_total];
+  const plusTrend = history.length >= 2 ? history.map((h) => h.plusTotal) : null;
 
   const tiles = [
-    { n: `${d.stores_total}`, label: "stores tracked", del: delta(d.stores_total, "stores_total"), tone: "outline" },
-    { n: `+${d.new_this_week}`, label: `new this ${period.toLowerCase()}`, del: null, tone: "mint" },
-    { n: `${d.plus_total}`, label: "Shopify Plus", del: delta(d.plus_total, "plus_total"), tone: "lilac" },
-    { n: `${d.payments_verified_stores}`, label: "checkout-verified", del: null, tone: "outline" },
+    { n: data.storesTotal.toLocaleString(), label: "stores tracked", del: tileDelta("storesTotal"), tone: "outline" },
+    { n: `+${data.newThisWeek}`, label: "new this week", del: null, tone: "mint" },
+    { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", del: tileDelta("plusTotal"), tone: "lilac" },
+    { n: data.paymentsVerifiedStores.toLocaleString(), label: "checkout-verified", del: null, tone: "outline" },
   ];
 
   return (
@@ -127,16 +129,20 @@ export function InsightsView({
       <div className="mx-auto max-w-6xl">
         <nav className="flex items-center justify-between">
           <Link href="/"><Wordmark size="text-xl" /></Link>
-          <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${live ? "border-mint/25 bg-mint/10 text-mint" : "border-cream/20 text-cream/50"}`}>
-            {live ? "Live data" : "Preview / mockup"}
-          </span>
+          <div className="flex items-center gap-3">
+            <Link href="/dashboard" className="text-sm text-cream/60 hover:text-cream">← Dashboard</Link>
+            <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
+              Live data
+            </span>
+          </div>
         </nav>
 
         <header className="mt-10">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Where the African Shopify market is heading — payment stacks, themes,
-            apps and enterprise adoption, tracked over time.
+            Where the South African Shopify market is heading — payment stacks,
+            themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()} live
+            stores we track.
           </p>
         </header>
 
@@ -150,11 +156,30 @@ export function InsightsView({
             <button disabled className="cursor-not-allowed rounded-full border border-cream/10 px-3.5 py-1.5 text-sm text-cream/30">WooCommerce · soon</button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Period</span>
-            {PERIODS.map((p) => (
-              <button key={p} onClick={() => setPeriod(p)} className={`rounded-full px-3.5 py-1.5 text-sm ${period === p ? "bg-orange text-cream" : "border border-cream/15 text-cream/60"}`}>{p}</button>
-            ))}
-            <span className="ml-1 rounded-full border border-cream/15 px-3 py-1.5 text-xs text-cream/50">vs last · {COMPARISON[period]}</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Compare</span>
+            {PERIODS.map((p) => {
+              const ok = available(p);
+              return (
+                <button
+                  key={p}
+                  onClick={() => ok && setPeriod(p)}
+                  disabled={!ok}
+                  title={ok ? `Compare vs ${PERIOD_DAYS[p]} days ago` : "Not enough history yet — builds daily"}
+                  className={`rounded-full px-3.5 py-1.5 text-sm transition ${
+                    !ok
+                      ? "cursor-not-allowed border border-cream/8 text-cream/25"
+                      : period === p
+                        ? "bg-orange text-cream"
+                        : "border border-cream/15 text-cream/60 hover:border-cream/40"
+                  }`}
+                >
+                  {p}
+                </button>
+              );
+            })}
+            <span className="ml-1 text-xs text-cream/40">
+              {base ? `vs last · ${COMPARISON[period]}` : "trends build as daily snapshots accumulate"}
+            </span>
           </div>
         </div>
 
@@ -172,52 +197,108 @@ export function InsightsView({
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <Card title="Payment providers by type" subtitle="Share of checkout-verified stores">
-            <div className="space-y-6">
-              {PAY_TYPES.map((t) => byType[t].length ? (
-                <div key={t}>
-                  <div className="mb-3 flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
-                    <span className="text-[11px] text-cream/40">{t === "PSP" ? "Payment service providers" : t === "BNPL" ? "Buy now, pay later" : "Alternative payment methods"} · {d.payments_by_type[t] ?? 0}% of stores</span>
-                  </div>
-                  <div className="space-y-3">
-                    {byType[t].map((i) => <Bar key={i.label} {...i} tone={t === "PSP" ? "orange" : t === "BNPL" ? "mint" : "lilac"} />)}
-                  </div>
+          {/* Payment providers — type breakdown + drill-in to every provider */}
+          <Card title="Payment providers" subtitle={`Share of ${data.paymentsVerifiedStores.toLocaleString()} checkout-verified stores`}>
+            <div className="mb-6 grid grid-cols-3 gap-3">
+              {PAY_TYPES.map((t) => (
+                <div key={t} className="rounded-2xl border border-cream/12 px-3 py-3 text-center">
+                  <div className="font-display text-2xl text-cream">{data.paymentsByType[t].pct}%</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-cream/45">{t}</div>
+                  <div className="text-[11px] text-cream/35">{data.paymentsByType[t].count.toLocaleString()} stores</div>
                 </div>
-              ) : null)}
+              ))}
             </div>
+            <DrillList data={data.paymentsByProvider} baseline={base?.paymentsByProvider ?? null} tone="orange" showBaseline={!!base} />
           </Card>
 
           <div className="space-y-5">
             <Card title="Shopify Plus adoption" subtitle="Cumulative total over time">
-              <TrendLine data={plusTrend} />
+              {plusTrend ? <TrendLine data={plusTrend} /> : (
+                <div className="grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-sm text-cream/40">
+                  Trend builds as daily snapshots accumulate
+                </div>
+              )}
               <p className="pt-3 text-sm text-cream/45">
-                {d.plus_new_this_week} new this week · {d.plus_total} total.
-                {history.length < 2 && " Trend builds as weekly snapshots accumulate."}
+                {data.plusNewThisWeek} new this week · {data.plusTotal} total.
               </p>
             </Card>
-            <Card title="First at checkout" subtitle="The default / primary gateway">
-              <div className="space-y-3">
-                {d.first_at_checkout.map((f) => <Bar key={f.label} {...f} />)}
-              </div>
+            <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)">
+              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} />
             </Card>
           </div>
 
-          <Card title="Theme market share" subtitle="Most-used storefront themes">
-            <div className="space-y-3">{d.themes.map((t) => <Bar key={t.label} {...t} tone="mint" />)}</div>
-          </Card>
-
-          <Card title="Top apps installed" subtitle="Marketing & conversion stack">
-            <div className="space-y-3">{d.apps.map((a) => <Bar key={a.label} {...a} tone="lilac" />)}</div>
-          </Card>
+          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" />
+          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" />
+          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" />
         </div>
 
+        {/* Churn / survival — moved down into the report */}
+        <section className="mt-10">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/50">Store survival &amp; churn</h2>
+            <span className="text-xs text-cream/35">
+              verified {data.churn.checked.toLocaleString()} of {data.churn.total.toLocaleString()} stores
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {[
+              { n: data.churn.survival != null ? `${data.churn.survival}%` : "—", label: "still live", tone: "mint" },
+              { n: data.churn.active.toLocaleString(), label: "active", tone: "outline" },
+              { n: data.churn.migrated.toLocaleString(), label: "migrated off Shopify", tone: "outline" },
+              { n: data.churn.dead.toLocaleString(), label: "closed", tone: "outline" },
+            ].map((c) => (
+              <div key={c.label} className={`rounded-3xl px-5 py-6 ${c.tone === "mint" ? "bg-mint text-ink" : "border border-cream/12 text-cream"}`}>
+                <div className="font-display text-4xl leading-none tracking-tight md:text-5xl">{c.n}</div>
+                <div className={`mt-2 text-xs font-medium uppercase tracking-wide ${c.tone === "mint" ? "opacity-70" : "text-cream/45"}`}>{c.label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <p className="mt-8 text-center text-xs text-cream/40">
-          {live
-            ? `Live Terrain data · snapshot ${d.date}`
-            : "Mockup with sample figures · charts will be driven by live Terrain data"}
+          Live Terrain data · {data.date} · {data.storesTotal.toLocaleString()} live South African stores
         </p>
       </div>
     </div>
+  );
+}
+
+/** Compact drill-in list (used inside the payments cards). */
+function DrillList({
+  data, baseline, tone, showBaseline,
+}: {
+  data: InsightItem[];
+  baseline: InsightItem[] | null;
+  tone: string;
+  showBaseline: boolean;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? data : data.slice(0, 6);
+  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.pct])) : null;
+  return (
+    <>
+      <div className={`space-y-3 ${all && data.length > 10 ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
+        {shown.map((i) => {
+          const prev = bmap?.get(i.label);
+          const del = prev != null ? i.pct - prev : null;
+          return (
+            <div key={i.label} className="flex items-center gap-3">
+              <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                <div className={`h-full rounded-full ${fill(tone)}`} style={{ width: `${Math.min(i.pct, 100)}%` }} />
+              </div>
+              <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
+              <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
+              {showBaseline && <div className="w-12 shrink-0 text-right text-xs"><Delta v={del} /></div>}
+            </div>
+          );
+        })}
+      </div>
+      {data.length > 6 && (
+        <button onClick={() => setAll((a) => !a)} className="mt-4 text-sm font-medium text-cream/50 transition hover:text-cream">
+          {all ? "Show top 6" : `See all ${data.length} →`}
+        </button>
+      )}
+    </>
   );
 }

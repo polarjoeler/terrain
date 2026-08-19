@@ -186,3 +186,12 @@ CREATE TABLE IF NOT EXISTS radar_detections (
   PRIMARY KEY (brand_domain, suspect)
 );
 CREATE INDEX IF NOT EXISTS idx_radar_detections_score ON radar_detections(score DESC);
+
+-- Daily market-insights snapshots — one JSON blob per day, computed from
+-- imported_stores by scripts/insights-snapshot.mjs. Powers the over-time trends
+-- on /insights (Week/Month/Quarter/Year), which build up as days accrue.
+CREATE TABLE IF NOT EXISTS insights_snapshots (
+  date       DATE PRIMARY KEY,
+  data       JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

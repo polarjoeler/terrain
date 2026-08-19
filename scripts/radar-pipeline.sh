@@ -26,4 +26,8 @@ node --env-file=.env.local scripts/ai-enrich.mjs --all || echo "!! ai-enrich ste
 echo "--- 3/3 monitor brands ---"
 node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
 
+# Trigger the daily market-insights snapshot (the page computes + upserts it).
+echo "--- insights snapshot ---"
+curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://terrain.tembocommerce.app/insights || echo "!! insights snapshot failed (continuing)"
+
 echo "===== pipeline done $(date '+%H:%M:%S') ====="
