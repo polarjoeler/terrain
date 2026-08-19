@@ -62,30 +62,10 @@ body {
   animation: radar-sweep 4s linear infinite;
   transform-origin: center;
 }
-@keyframes blip-pulse {
-  0% {
-    transform: scale(0.7);
-    opacity: 0.9;
-  }
-  70% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-.blip-pulse::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 9999px;
-  background: var(--color-cyan);
-  animation: blip-pulse 2.4s ease-out infinite;
-}
+/* Detection blips are static solid cyan dots — no pulse. (The pulse animated a
+   cyan ::after in/out, which read as "colours changing" on the radar page.) */
 @media (prefers-reduced-motion: reduce) {
-  .radar-sweep,
-  .blip-pulse::after {
+  .radar-sweep {
     animation: none;
   }
 }
