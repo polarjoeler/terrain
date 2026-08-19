@@ -56,6 +56,12 @@ export default async function Dashboard() {
                 Payment failed — update card
               </Link>
             )}
+            <Link
+              href="/insights"
+              className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
+            >
+              Insights →
+            </Link>
             <span className="hidden whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 sm:inline">
               {live ? (
                 <>

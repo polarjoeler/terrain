@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { Lead } from "@/lib/leads";
 import {
   isNewLaunch,
@@ -49,6 +49,7 @@ export function LeadsTable({
   const [q, setQ] = useState("");
   const [shown, setShown] = useState(PAGE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [remaining, setRemaining] = useState(exportRemaining);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState("");
@@ -82,6 +83,32 @@ export function LeadsTable({
     if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
     return `$${Math.round(n)}`;
   };
+
+  const compactNum = (n?: number | null) =>
+    n == null ? null : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`;
+
+  // The richer enrichment fields, surfaced in an expandable detail row so the
+  // main table stays readable. Only fields with a value are included.
+  const detailPairs = (l: Lead): [string, string][] => {
+    const out: [string, string][] = [];
+    if (l.city) out.push(["City", l.city]);
+    if (l.plan) out.push(["Plan", l.plan]);
+    if (l.productsSold != null) out.push(["Products sold", l.productsSold.toLocaleString()]);
+    if (l.instagram)
+      out.push(["Instagram", `@${l.instagram}${l.instagramFollowers ? ` · ${compactNum(l.instagramFollowers)} followers` : ""}`]);
+    if (l.facebook)
+      out.push(["Facebook", `${l.facebook}${l.facebookFollowers ? ` · ${compactNum(l.facebookFollowers)} followers` : ""}`]);
+    if (l.tiktok) out.push(["TikTok", `@${l.tiktok}`]);
+    if (l.technologies) out.push(["Technologies", l.technologies]);
+    return out;
+  };
+
+  const toggleExpand = (domain: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(domain) ? next.delete(domain) : next.add(domain);
+      return next;
+    });
 
   const reset = () => setShown(PAGE);
 
@@ -273,7 +300,8 @@ export function LeadsTable({
           </thead>
           <tbody>
             {pageRows.map((l) => (
-              <tr key={l.domain} className="border-t border-ink/10 align-top">
+              <Fragment key={l.domain}>
+              <tr className="border-t border-ink/10 align-top">
                 {canExport && (
                   <td className="py-4 pr-3">
                     <input
@@ -306,6 +334,13 @@ export function LeadsTable({
                   >
                     {l.domain}
                   </a>
+                  <button
+                    onClick={() => toggleExpand(l.domain)}
+                    className="mt-1 block text-[11px] font-medium text-ink/40 hover:text-ink/70"
+                    aria-expanded={expanded.has(l.domain)}
+                  >
+                    {expanded.has(l.domain) ? "− less" : "+ details"}
+                  </button>
                 </td>
                 <td className="py-4 pr-4 whitespace-nowrap text-ink/70">
                   {marketOf(l)}
@@ -355,6 +390,38 @@ export function LeadsTable({
                   {l.firstSeen}
                 </td>
               </tr>
+              {expanded.has(l.domain) && (
+                <tr className="align-top">
+                  <td colSpan={canExport ? 11 : 10} className="px-1 pb-5">
+                    {detailPairs(l).length > 0 || l.description ? (
+                      <div className="rounded-2xl border border-ink/10 bg-ink/[0.02] p-4">
+                        {detailPairs(l).length > 0 && (
+                          <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2 md:grid-cols-3">
+                            {detailPairs(l).map(([label, value]) => (
+                              <div key={label} className="text-xs">
+                                <div className="font-semibold uppercase tracking-wide text-ink/35">
+                                  {label}
+                                </div>
+                                <div className="mt-0.5 break-words text-ink/75">{value}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {l.description && (
+                          <p className="mt-3 max-w-2xl text-xs leading-relaxed text-ink/60">
+                            {l.description}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="px-3 text-xs text-ink/40">
+                        No additional data for this store yet.
+                      </p>
+                    )}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
