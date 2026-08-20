@@ -67,17 +67,22 @@ async function main() {
     // 2. The value-ranked queue. --plus = every live Shopify Plus store (probe
     //    all of them, since Plus are the highest-value merchants); otherwise the
     //    highest-value live stores that still lack a provider.
+    // Curated cohorts (Top 100, Top 1000) jump the queue — payment companies
+    // care most about verified data there, so probe those first, then by value.
     const queue = await sql`
-      SELECT domain, estimated_monthly_sales sales, live_status
+      SELECT domain, estimated_monthly_sales sales, live_status,
+        (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
+        (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
         ${PLUS ? sql`AND plus = true` : sql`AND (payments IS NULL OR payments = '')`}
-      ORDER BY estimated_monthly_sales DESC NULLS LAST
+      ORDER BY t100 DESC, t1000 DESC, estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");
+    const tagged = queue.filter((r) => r.t100 || r.t1000).length;
 
     const [cov] = await sql`
       SELECT
@@ -86,10 +91,12 @@ async function main() {
       FROM imported_stores WHERE published`;
 
     console.log(`\nPayment coverage: ${cov.have.toLocaleString()} have a provider · ${cov.live.toLocaleString()} live stores.`);
-    console.log(`Wrote ${queue.length.toLocaleString()} highest-value unverified domains → ${OUT}`);
+    console.log(`Wrote ${queue.length.toLocaleString()} unverified domains → ${OUT} (${tagged.toLocaleString()} tagged Top100/Top1000, queued first)`);
     console.log("Queue head (probe these first):");
-    for (const r of queue.slice(0, 10))
-      console.log(`   $${Number(r.sales || 0).toLocaleString().padStart(14)}/mo  ${r.domain}`);
+    for (const r of queue.slice(0, 10)) {
+      const tag = r.t100 ? " [Top100]" : r.t1000 ? " [Top1000]" : "";
+      console.log(`   $${Number(r.sales || 0).toLocaleString().padStart(14)}/mo  ${r.domain}${tag}`);
+    }
     console.log(`\nFeed to the checkout probe, e.g.:  python checkout_probe.py --from-file ${OUT} --limit 75`);
   } finally {
     await sql.end();
