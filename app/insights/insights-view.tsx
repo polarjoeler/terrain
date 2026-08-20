@@ -18,14 +18,15 @@ const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
   tone === "mint" ? "bg-mint" : tone === "lilac" ? "bg-lilac" : tone === "cyan" ? "bg-cyan" : "bg-orange";
 
-function Delta({ v }: { v: number | null }) {
+/** Absolute change in store COUNT vs the comparison period (no % — a real number
+ *  of stores). Shown on the distribution drill-ins so "change" is unambiguous. */
+function CountDelta({ v }: { v: number | null }) {
   if (v === null) return <span className="text-cream/25">—</span>;
   if (v === 0) return <span className="text-cream/35">±0</span>;
   const up = v > 0;
   return (
     <span className={up ? "text-mint" : "text-orange"}>
-      {up ? "▲" : "▼"} {Math.abs(v)}
-      {Math.abs(v) < 100 ? "%" : ""}
+      {up ? "▲+" : "▼−"}{Math.abs(v).toLocaleString()}
     </span>
   );
 }
@@ -80,14 +81,14 @@ function DistroCard({
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
-  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.pct])) : null;
+  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
 
   return (
     <Card title={title} subtitle={subtitle}>
       <div className={`space-y-3 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
-          const del = prev != null ? i.pct - prev : null;
+          const cdel = prev != null ? i.count - prev : null;
           return (
             <div key={i.label} className="flex items-center gap-3">
               <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
@@ -96,7 +97,7 @@ function DistroCard({
               </div>
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {bmap && <div className="w-12 shrink-0 text-right text-xs">{<Delta v={del} />}</div>}
+              {bmap && <div className="w-16 shrink-0 text-right text-xs tabular-nums">{<CountDelta v={cdel} />}</div>}
             </div>
           );
         })}
@@ -244,7 +245,23 @@ export function InsightsView({
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
-          <Card title="Payment providers" subtitle={`Detected across ${data.paymentsVerifiedStores.toLocaleString()} stores' storefront markup — not checkout-verified`}>
+          <Card
+            title="Payment intelligence"
+            subtitle={`Checkout-verified across ${data.paymentsVerifiedStores.toLocaleString()} of ${data.storesTotal.toLocaleString()} stores (${Math.round((100 * data.paymentsVerifiedStores) / Math.max(data.storesTotal, 1))}% and growing)`}
+          >
+            {/* Headline signals for payment-company subscribers */}
+            <div className="mb-6 grid grid-cols-3 gap-3">
+              {[
+                { n: `${data.paymentsByType.BNPL.pct}%`, l: "offer BNPL" },
+                { n: (data.paymentsVerifiedStores - data.paymentsByType.BNPL.count).toLocaleString(), l: "no BNPL yet" },
+                { n: `${data.paymentsByType.PSP.pct}%`, l: "use a PSP" },
+              ].map((s) => (
+                <div key={s.l} className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-3 text-center">
+                  <div className="font-display text-2xl text-cream">{s.n}</div>
+                  <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">{s.l}</div>
+                </div>
+              ))}
+            </div>
             <div className="space-y-7">
               {PAY_TYPES.map((t) =>
                 provByType[t].length ? (
@@ -330,13 +347,13 @@ function DrillList({
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
-  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.pct])) : null;
+  const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
   return (
     <>
       <div className={`space-y-3 ${all && data.length > 10 ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
-          const del = prev != null ? i.pct - prev : null;
+          const cdel = prev != null ? i.count - prev : null;
           return (
             <div key={i.label} className="flex items-center gap-3">
               <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
@@ -345,7 +362,7 @@ function DrillList({
               </div>
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {showBaseline && <div className="w-12 shrink-0 text-right text-xs"><Delta v={del} /></div>}
+              {showBaseline && <div className="w-16 shrink-0 text-right text-xs tabular-nums"><CountDelta v={cdel} /></div>}
             </div>
           );
         })}

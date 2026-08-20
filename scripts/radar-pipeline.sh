@@ -40,7 +40,7 @@ node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-wat
 # top N highest-value stores that still lack a verified gateway (ground truth,
 # skips already-probed), then sync the results into imported_stores.payments.
 # Capped per run: each probe leaves an abandoned checkout in the merchant's admin.
-echo "--- 6/6 payments (queue + checkout probe + sync) ---"
+echo "--- 6/7 payments (queue + checkout probe + sync) ---"
 node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
@@ -51,6 +51,14 @@ if [ -x "$PROBE_PY" ]; then
 else
   echo "checkout probe env ($PROBE_PY) not found — skipping payments"
 fi
+
+# Step 7: liveness re-check — re-verify a batch of stores (value-ranked, skips
+# anything checked in the last 10 days) so live_status stays current and the
+# Insights "Store survival & churn" tracks real forward churn instead of freezing
+# at the import snapshot. Lightweight HTTP (products.json), not a checkout probe.
+echo "--- 7/7 liveness re-check ---"
+node --env-file=.env.local scripts/verify-liveness.mjs --limit 600 --min-age-days 10 --concurrency 10 \
+  || echo "!! liveness step failed (continuing)"
 
 # Trigger the daily market-insights snapshot (the page computes + upserts it).
 echo "--- insights snapshot ---"
