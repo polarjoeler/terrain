@@ -131,6 +131,17 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
   return r.map((x) => ({ domain: x.domain as string, name: (x.name as string) ?? null }));
 }
 
+/** Which of these domains are already in imported_stores (published or pending)?
+ *  Powers the "new vs duplicate" check on screenshot/CSV import. */
+export async function existingDomains(domains: string[]): Promise<string[]> {
+  const clean = [...new Set(domains.map((d) => cleanDomain(d)).filter((d) => d && d.includes(".")))];
+  if (!clean.length) return [];
+  await ensure();
+  const rows = await db()<{ domain: string }[]>`
+    SELECT domain FROM imported_stores WHERE domain = ANY(${db().array(clean)})`;
+  return rows.map((r) => r.domain);
+}
+
 export type ManagerStore = {
   domain: string;
   name: string | null;

@@ -19,8 +19,55 @@ export function AdminImport({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [preview, setPreview] = useState(""); // extracted CSV awaiting review
+  const [dupes, setDupes] = useState<Set<string>>(new Set()); // already in the DB
+  const [checking, setChecking] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLInputElement>(null);
+
+  // Domains from a CSV (first column, header dropped), normalised like the importer.
+  function csvDomains(csv: string): string[] {
+    return csv.trim().split("\n").slice(1).map((l) =>
+      (l.split(",")[0] ?? "").trim().replace(/^"|"$/g, "").toLowerCase()
+        .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, ""),
+    ).filter((d) => d.includes("."));
+  }
+
+  // Check the current preview's domains against the DB (what's already imported).
+  async function checkDupes(csv: string) {
+    const domains = csvDomains(csv);
+    if (!domains.length) { setDupes(new Set()); return; }
+    setChecking(true);
+    try {
+      const res = await fetch("/api/admin/import-check", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domains }),
+      });
+      const j = await res.json();
+      setDupes(new Set(res.ok ? (j.existing ?? []) : []));
+    } catch {
+      setDupes(new Set());
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  // Strip rows already in the DB + within-preview repeats (keep first), re-check.
+  function removeDuplicates() {
+    const lines = preview.trim().split("\n");
+    const header = lines[0];
+    const seen = new Set<string>();
+    const kept = lines.slice(1).filter((l) => {
+      const d = (l.split(",")[0] ?? "").trim().replace(/^"|"$/g, "").toLowerCase()
+        .replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
+      if (!d.includes(".")) return true;
+      if (dupes.has(d) || seen.has(d)) return false;
+      seen.add(d);
+      return true;
+    });
+    const next = [header, ...kept].join("\n");
+    setPreview(next);
+    checkDupes(next);
+  }
 
   // Commit CSV text through the shared import path (used by CSV upload + the
   // reviewed screenshot extraction).
@@ -89,7 +136,9 @@ export function AdminImport({
         setMsg(`No rows extracted. ${failures.join(" · ")}`);
         return;
       }
-      setPreview([header, ...dataLines].join("\n"));
+      const nextCsv = [header, ...dataLines].join("\n");
+      setPreview(nextCsv);
+      checkDupes(nextCsv);
       const added = dataLines.length - startCount;
       const note = failures.length ? ` (${failures.length} failed)` : "";
       setMsg(
@@ -139,6 +188,10 @@ export function AdminImport({
       setBusy(false);
     }
   }
+
+  const previewDomains = csvDomains(preview);
+  const dupeCount = previewDomains.filter((d) => dupes.has(d)).length;
+  const newCount = previewDomains.length - dupeCount;
 
   return (
     <div className="mt-8 space-y-5">
@@ -217,9 +270,28 @@ export function AdminImport({
                 </button>
               </div>
             </div>
+            {/* new-vs-duplicate summary */}
+            <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
+              <span className="text-cream/60">
+                {previewDomains.length} row{previewDomains.length === 1 ? "" : "s"} ·{" "}
+                <span className="font-semibold text-mint">{newCount} new</span>
+                {dupeCount > 0 && <> · <span className="font-semibold text-orange">{dupeCount} already in your DB</span></>}
+                {checking && <span className="text-cream/40"> · checking…</span>}
+              </span>
+              {dupeCount > 0 && (
+                <button
+                  onClick={removeDuplicates}
+                  disabled={busy}
+                  className="rounded-full border border-orange/40 px-3 py-1 font-medium text-orange transition hover:border-orange disabled:opacity-40"
+                >
+                  Remove {dupeCount} duplicate{dupeCount === 1 ? "" : "s"}
+                </button>
+              )}
+            </div>
             <textarea
               value={preview}
               onChange={(e) => setPreview(e.target.value)}
+              onBlur={(e) => checkDupes(e.target.value)}
               spellCheck={false}
               rows={12}
               className="w-full rounded-2xl border border-cream/15 bg-ink-deep/60 p-4 font-mono text-xs leading-relaxed text-cream/85 outline-none focus:border-cream/40"
