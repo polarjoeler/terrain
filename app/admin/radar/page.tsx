@@ -115,6 +115,9 @@ export default async function RadarDashboard() {
             <Link href="/admin" className="text-cream/50 hover:text-cream">
               Import
             </Link>
+            <Link href="/admin/radar/fraud" className="text-orange hover:underline">
+              Market fraud →
+            </Link>
             <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan">
               Detections
             </span>
