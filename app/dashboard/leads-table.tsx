@@ -38,6 +38,17 @@ const sorts: { key: SortKey; label: string }[] = [
   { key: "launched", label: "Newest launched" },
 ];
 
+// One-click persona views: each sets window + quality + sort together, so a
+// subscriber lands on the stores that matter to them without fiddling filters.
+type Segment = { key: string; label: string; hint: string; window: Window; quality: Quality; sort: SortKey };
+const segments: Segment[] = [
+  { key: "fresh", label: "🌱 Fresh launches", hint: "Found this week, newest first", window: "week", quality: "all", sort: "newest" },
+  { key: "enterprise", label: "🏢 Enterprise", hint: "Shopify Plus, biggest first", window: "all", quality: "plus", sort: "size" },
+  { key: "reach", label: "📣 High reach", hint: "Biggest social audiences", window: "all", quality: "social", sort: "social" },
+  { key: "contact", label: "✉️ Ready to contact", hint: "Has email, best prospects first", window: "all", quality: "email", sort: "priority" },
+  { key: "biggest", label: "💰 Biggest", hint: "Top by estimated monthly sales", window: "all", quality: "all", sort: "size" },
+];
+
 const PAGE = 25;
 
 export function LeadsTable({
@@ -123,6 +134,16 @@ export function LeadsTable({
     return out;
   };
 
+  const applySegment = (s: Segment) => {
+    setWindow(s.window);
+    setQuality(s.quality);
+    setSort(s.sort);
+    setShown(PAGE);
+  };
+  const activeSegment = segments.find(
+    (s) => s.window === window && s.quality === quality && s.sort === sort,
+  )?.key;
+
   const toggleExpand = (domain: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -204,8 +225,26 @@ export function LeadsTable({
         />
       </div>
 
+      {/* Persona segments — one click sets window + filter + sort together */}
+      <div className="mt-5 flex flex-wrap gap-2">
+        {segments.map((s) => (
+          <button
+            key={s.key}
+            onClick={() => applySegment(s)}
+            title={s.hint}
+            className={`rounded-xl px-3.5 py-2 text-sm font-medium transition ${
+              activeSegment === s.key
+                ? "bg-ink text-cream"
+                : "border border-ink/15 text-ink/70 hover:border-ink/40"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
       {/* Time-window row — keyed off the genuine discovery date */}
-      <div className="mt-5 flex flex-wrap items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-ink/40">
           Found
         </span>
