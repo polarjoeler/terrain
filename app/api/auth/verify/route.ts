@@ -1,14 +1,16 @@
 /** Redeem a magic link and start a session. */
 
 import { NextResponse } from "next/server";
-import { redeemMagicToken, startSession } from "@/lib/auth";
+import { redeemMagicToken, startSession, originFromRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? url.origin;
+  // Redirect back to the host the link was for (radar stays on radar, where
+  // /dashboard rewrites to /radar/dashboard).
+  const origin = originFromRequest(req);
 
   const email = await redeemMagicToken(token);
   if (!email) {

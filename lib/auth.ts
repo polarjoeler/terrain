@@ -8,8 +8,21 @@
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { consumeToken, wasTokenUsed } from "./subscriptions";
+
+/** Share the session across *.tembocommerce.app (Terrain + Radar subdomains) by
+ *  scoping the cookie to the parent domain. Host-only (undefined) on localhost
+ *  and *.vercel.app previews, where a parent-domain cookie would be rejected. */
+async function sessionCookieDomain(): Promise<string | undefined> {
+  try {
+    const host = ((await headers()).get("host") ?? "").split(":")[0];
+    if (host.endsWith("tembocommerce.app")) return ".tembocommerce.app";
+  } catch {
+    /* headers() unavailable (e.g. non-request context) */
+  }
+  return undefined;
+}
 
 export const SESSION_COOKIE = "terrain_session";
 const LINK_TTL_MS = 15 * 60 * 1000;
@@ -50,6 +63,21 @@ function unsign(token: string | undefined): Payload | null {
 
 /* --------------------------------------------------------- magic links --- */
 
+/** The public origin the request actually came in on (radar or terrain host),
+ *  so magic links + post-login redirects stay on the host the user is using. */
+export function originFromRequest(req: Request): string {
+  const h = req.headers;
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  if (host) return `${h.get("x-forwarded-proto") ?? "https"}://${host}`;
+  return process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
+}
+
+/** Is this request on the Radar host? (drives Radar-branded login + redirects) */
+export function isRadarHost(req: Request): boolean {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+  return host.startsWith("radar.");
+}
+
 export function createMagicToken(email: string): string {
   return sign({
     email: email.trim().toLowerCase(),
@@ -84,11 +112,17 @@ export async function startSession(email: string): Promise<void> {
     secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
+    domain: await sessionCookieDomain(),
   });
 }
 
 export async function endSession(): Promise<void> {
-  (await cookies()).delete(SESSION_COOKIE);
+  (await cookies()).set(SESSION_COOKIE, "", {
+    httpOnly: true,
+    path: "/",
+    maxAge: 0,
+    domain: await sessionCookieDomain(),
+  });
 }
 
 /** Email of the signed-in user, or null. */

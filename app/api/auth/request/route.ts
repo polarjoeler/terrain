@@ -2,7 +2,7 @@
  *  (the dashboard sends users without one to /billing to start their trial). */
 
 import { NextResponse } from "next/server";
-import { createMagicToken } from "@/lib/auth";
+import { createMagicToken, originFromRequest } from "@/lib/auth";
 import { sendMagicLink } from "@/lib/email";
 
 export const runtime = "nodejs";
@@ -22,7 +22,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Enter a valid email address" }, { status: 400 });
   }
 
-  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
+  // Host-aware: a Radar-host login gets a radar.* link and returns to Radar.
+  const origin = originFromRequest(req);
   const url = `${origin}/api/auth/verify?token=${encodeURIComponent(createMagicToken(email))}`;
 
   let devPreview: string | undefined;
