@@ -265,7 +265,7 @@ export type Detection = {
   score: number;
   reasons: string[];
   auditId?: string; // present for audit-sourced detections; absent for monitoring
-  source: "audit" | "monitor";
+  source: "audit" | "monitor" | "fraud";
   at: string;
 };
 
@@ -354,10 +354,11 @@ export async function listMonitorDetections(minScore = 25): Promise<Detection[]>
       verdict: MatchReport["verdict"];
       score: number;
       reasons: string[];
+      source: string | null;
       last_seen_at: Date;
     }[]
   >`
-    SELECT brand_domain, brand_name, suspect, suspect_name, verdict, score, reasons, last_seen_at
+    SELECT brand_domain, brand_name, suspect, suspect_name, verdict, score, reasons, source, last_seen_at
     FROM radar_detections WHERE score >= ${minScore}
     ORDER BY score DESC, last_seen_at DESC`;
   return rows.map((r) => ({
@@ -368,7 +369,7 @@ export async function listMonitorDetections(minScore = 25): Promise<Detection[]>
     verdict: r.verdict,
     score: r.score,
     reasons: r.reasons ?? [],
-    source: "monitor",
+    source: r.source === "fraud" ? "fraud" : "monitor",
     at: new Date(r.last_seen_at).toISOString(),
   }));
 }

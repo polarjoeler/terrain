@@ -33,6 +33,9 @@ node --env-file=.env.local scripts/ai-enrich.mjs --all || echo "!! ai-enrich ste
 echo "--- 4/5 monitor brands ---"
 node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
 
+echo "--- 4b market fraud sweep ---"
+node --env-file=.env.local scripts/radar-fraud-sweep.mjs --write || echo "!! fraud-sweep step failed (continuing)"
+
 echo "--- 5/6 domain & email intel ---"
 node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-watch step failed (continuing)"
 
