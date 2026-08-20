@@ -74,10 +74,12 @@ export function LeadsTable({
   leads,
   canExport = false,
   exportRemaining = 0,
+  isAdmin = false,
 }: {
   leads: Lead[];
   canExport?: boolean;
   exportRemaining?: number;
+  isAdmin?: boolean;
 }) {
   const [quality, setQuality] = useState<Quality>("all");
   const [window, setWindow] = useState<Window>("all");
@@ -548,8 +550,28 @@ export function LeadsTable({
               {expanded.has(l.domain) && (
                 <tr className="align-top">
                   <td colSpan={canExport ? 9 : 8} className="px-1 pb-5">
-                    {detailPairs(l).length > 0 || l.description ? (
-                      <div className="rounded-2xl border border-ink/10 bg-ink/[0.02] p-4">
+                    <div className="flex flex-col gap-4 rounded-2xl border border-ink/10 bg-ink/[0.02] p-4 md:flex-row">
+                      {isAdmin && (
+                        <a
+                          href={l.finalUrl ?? `https://${l.domain}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group relative shrink-0 self-start"
+                          title="Open store (screenshot via thum.io)"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`https://image.thum.io/get/width/400/crop/300/noanimate/https://${l.domain}`}
+                            alt={`${l.name} homepage`}
+                            loading="lazy"
+                            className="h-[150px] w-[200px] rounded-xl border border-ink/10 bg-ink/5 object-cover object-top"
+                          />
+                          <span className="absolute left-2 top-2 rounded-full bg-ink/70 px-2 py-0.5 text-[10px] font-semibold text-cream">
+                            Admin preview
+                          </span>
+                        </a>
+                      )}
+                      <div className="min-w-0 flex-1">
                         {detailPairs(l).length > 0 && (
                           <div className="grid gap-x-8 gap-y-3 sm:grid-cols-2 md:grid-cols-3">
                             {detailPairs(l).map(([label, value]) => (
@@ -567,12 +589,11 @@ export function LeadsTable({
                             {l.description}
                           </p>
                         )}
+                        {detailPairs(l).length === 0 && !l.description && (
+                          <p className="text-xs text-ink/40">No additional data for this store yet.</p>
+                        )}
                       </div>
-                    ) : (
-                      <p className="px-3 text-xs text-ink/40">
-                        No additional data for this store yet.
-                      </p>
-                    )}
+                    </div>
                   </td>
                 </tr>
               )}

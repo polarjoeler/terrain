@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
-import { currentUser } from "@/lib/auth";
+import { currentUser, isAdmin } from "@/lib/auth";
 import { sampleLeads, type Lead } from "@/lib/leads";
 import { summarise } from "@/lib/sheets";
 import { publishedLeads } from "@/lib/imported";
@@ -152,6 +152,7 @@ export default async function Dashboard() {
           leads={data}
           canExport={subscriber?.plan === "pro" && hasAccess(subscriber)}
           exportRemaining={exportQuota(subscriber).remaining}
+          isAdmin={isAdmin(email)}
         />
 
         <p className="mt-6 text-center text-xs text-cream/40">

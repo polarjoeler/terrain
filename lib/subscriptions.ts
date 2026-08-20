@@ -5,9 +5,55 @@
  * subscription status, updated by the Stripe webhook.
  */
 
+import postgres from "postgres";
 import { getStore } from "./store";
 
 export const TRIAL_DAYS = 7;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** All subscribers, newest-touched first — for the admin portal. Reads Postgres
+ *  directly (the store interface is get/upsert only); [] on the file fallback. */
+export async function listSubscribers(): Promise<Subscriber[]> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return [];
+  const sql = postgres(url, { prepare: false, max: 2 });
+  try {
+    const rows = await sql`SELECT * FROM subscribers ORDER BY updated_at DESC`;
+    return rows.map((r: any) => ({
+      email: r.email,
+      plan: (r.plan ?? "starter") as PlanKey,
+      status: (r.status ?? "trialing") as Status,
+      trialEndsAt: r.trial_ends_at ? new Date(r.trial_ends_at).toISOString() : null,
+      customerCode: r.customer_code ?? undefined,
+      subscriptionCode: r.subscription_code ?? undefined,
+      nextPaymentDate: r.next_payment_date ? new Date(r.next_payment_date).toISOString() : null,
+      exportMonth: r.export_month ?? null,
+      exportUsed: r.export_used ?? 0,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+    }));
+  } finally {
+    await sql.end();
+  }
+}
+
+/** Admin actions on a subscriber's access (used by /api/admin/subscriber). */
+export type SubscriberAction = "trial" | "activate" | "cancel" | "makePro" | "makeStarter";
+export async function applyAdminAction(email: string, action: SubscriberAction): Promise<Subscriber> {
+  const in7Days = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
+  switch (action) {
+    case "trial":
+      return upsertSubscriber(email, { plan: "pro", status: "trialing", trialEndsAt: in7Days });
+    case "activate":
+      return upsertSubscriber(email, { plan: "pro", status: "active" });
+    case "cancel":
+      return upsertSubscriber(email, { status: "cancelled" });
+    case "makePro":
+      return upsertSubscriber(email, { plan: "pro" });
+    case "makeStarter":
+      return upsertSubscriber(email, { plan: "starter" });
+  }
+}
 
 export type PlanKey = "starter" | "pro";
 export type Status = "trialing" | "active" | "past_due" | "cancelled" | "expired";
