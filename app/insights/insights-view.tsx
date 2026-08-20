@@ -203,19 +203,19 @@ export function InsightsView({
         {/* filters */}
         <div className="mt-6 flex flex-wrap items-center gap-6 rounded-3xl border border-cream/12 bg-cream/[0.03] px-5 py-4">
           {countries.length > 1 && (
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Market</span>
-              {countries.map((c) => (
-                <a
-                  key={c.country}
-                  href={`/insights?country=${c.country}`}
-                  className={`rounded-full px-3.5 py-1.5 text-sm transition ${
-                    country === c.country ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:border-cream/40"
-                  }`}
-                >
-                  {c.country} <span className="opacity-60">({c.stores.toLocaleString()})</span>
-                </a>
-              ))}
+              <select
+                value={country}
+                onChange={(e) => { window.location.href = `/insights?country=${e.target.value}`; }}
+                className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+              >
+                {countries.map((c) => (
+                  <option key={c.country} value={c.country} className="text-ink">
+                    {marketName(c.country)} ({c.stores.toLocaleString()})
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           <div className="flex items-center gap-2">
