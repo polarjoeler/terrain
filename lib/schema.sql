@@ -110,6 +110,22 @@ CREATE TABLE IF NOT EXISTS lead_overrides (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by    TEXT
 );
+-- Full overridable field set — every Lead attribute an admin can correct.
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS category                TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS estimated_monthly_sales NUMERIC;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS products_sold           INTEGER;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS city                    TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS plan                    TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS description             TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS technologies            TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS instagram               TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS facebook                TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS tiktok                  TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS instagram_followers     INTEGER;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS facebook_followers      INTEGER;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS first_product_at        TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS first_seen              TEXT;
+ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS discovered_at           TEXT;
 
 -- Radar Brand Audits — the on-demand initial scan of a brand against our known
 -- store universe. One row per scan; results_json holds the full report so the

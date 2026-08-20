@@ -10,14 +10,30 @@ const TEXT_FIELDS: [string, string][] = [
   ["email", "Email"],
   ["country", "Country (ZA)"],
   ["currency", "Currency (ZAR)"],
+  ["category", "Category"],
   ["theme", "Theme"],
+  ["plan", "Plan"],
+  ["city", "City"],
   ["payments", "Payments (semicolon-separated)"],
+  ["technologies", "Technologies"],
+  ["instagram", "Instagram handle"],
+  ["facebook", "Facebook"],
+  ["tiktok", "TikTok handle"],
+  ["first_product_at", "First product (YYYY-MM-DD)"],
+  ["first_seen", "First seen (YYYY-MM-DD)"],
+  ["discovered_at", "Discovered (YYYY-MM-DD)"],
 ];
 const NUM_FIELDS: [string, string][] = [
   ["product_count", "Products"],
   ["price_min", "Price min"],
   ["price_max", "Price max"],
+  ["estimated_monthly_sales", "Est. monthly sales (USD)"],
+  ["products_sold", "Products sold"],
+  ["instagram_followers", "Instagram followers"],
+  ["facebook_followers", "Facebook followers"],
 ];
+// Long free-text — rendered as a full-width textarea below the grid.
+const AREA_FIELDS: [string, string][] = [["description", "Description"]];
 
 const inputCls =
   "w-full rounded-xl border border-cream/15 bg-cream/[0.04] px-3 py-2 text-cream placeholder:text-cream/25 outline-none focus:border-mint/50";
@@ -47,7 +63,7 @@ export function LeadEditor() {
       setCurrent(data.current);
       const o: Override = data.override;
       const next: Record<string, string | boolean> = {};
-      for (const [k] of [...TEXT_FIELDS, ...NUM_FIELDS])
+      for (const [k] of [...TEXT_FIELDS, ...NUM_FIELDS, ...AREA_FIELDS])
         next[k] = o && o[k] != null ? String(o[k]) : "";
       next.plus = o && o.plus != null ? Boolean(o.plus) : false;
       next.hidden = o ? Boolean(o.hidden) : false;
@@ -141,6 +157,19 @@ export function LeadEditor() {
               </label>
             ))}
           </div>
+
+          {AREA_FIELDS.map(([k, label]) => (
+            <label key={k} className="block">
+              <span className="text-xs text-cream/60">{label}</span>
+              <textarea
+                className={inputCls}
+                rows={3}
+                value={(form[k] as string) ?? ""}
+                placeholder={cur(k)}
+                onChange={(e) => setField(k, e.target.value)}
+              />
+            </label>
+          ))}
 
           <label className="block">
             <span className="text-xs text-cream/60">Note (why corrected)</span>

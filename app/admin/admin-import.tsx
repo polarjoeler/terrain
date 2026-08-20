@@ -46,30 +46,48 @@ export function AdminImport({
     }
   }
 
-  // Screenshot → Claude vision → editable CSV preview (does not import yet).
-  async function extractFromImage(file: File) {
+  const toBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).replace(/^data:[^,]+,/, ""));
+      fr.onerror = () => reject(new Error("read failed"));
+      fr.readAsDataURL(file);
+    });
+
+  // One or more screenshots → Claude vision → one merged, editable CSV preview.
+  async function extractFromImages(files: FileList) {
+    const list = Array.from(files);
     setBusy(true);
-    setMsg("Reading the screenshot…");
     setPreview("");
+    let header = "";
+    const dataLines: string[] = [];
+    const failures: string[] = [];
     try {
-      const dataUrl: string = await new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result));
-        fr.onerror = () => reject(new Error("read failed"));
-        fr.readAsDataURL(file);
-      });
-      const base64 = dataUrl.replace(/^data:[^,]+,/, "");
-      const res = await fetch("/api/admin/import-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64, mediaType: file.type }),
-      });
-      const j = await res.json();
-      if (!res.ok) { setMsg(j.error ?? "Extraction failed"); return; }
-      setPreview(j.csv);
-      setMsg(`Extracted ${j.rows} row${j.rows === 1 ? "" : "s"} — review and edit below, then import.`);
-    } catch {
-      setMsg("Could not read the image");
+      for (let i = 0; i < list.length; i++) {
+        setMsg(`Reading screenshot ${i + 1} of ${list.length}…`);
+        try {
+          const base64 = await toBase64(list[i]);
+          const res = await fetch("/api/admin/import-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: base64, mediaType: list[i].type }),
+          });
+          const j = await res.json();
+          if (!res.ok) { failures.push(`#${i + 1}: ${j.error ?? "failed"}`); continue; }
+          const lines = String(j.csv).trim().split("\n");
+          if (!header) header = lines[0];
+          dataLines.push(...lines.slice(1)); // drop each file's header row
+        } catch {
+          failures.push(`#${i + 1}: read error`);
+        }
+      }
+      if (!header) {
+        setMsg(`No rows extracted. ${failures.join(" · ")}`);
+        return;
+      }
+      setPreview([header, ...dataLines].join("\n"));
+      const note = failures.length ? ` (${failures.length} image${failures.length === 1 ? "" : "s"} failed)` : "";
+      setMsg(`Extracted ${dataLines.length} row${dataLines.length === 1 ? "" : "s"} from ${list.length} image${list.length === 1 ? "" : "s"}${note} — review and edit below, then import.`);
     } finally {
       setBusy(false);
       if (imgRef.current) imgRef.current.value = "";
@@ -154,15 +172,17 @@ export function AdminImport({
         <div className="mt-6 border-t border-cream/10 pt-6">
           <h3 className="text-lg font-semibold">…or extract from a screenshot</h3>
           <p className="mt-1 text-sm text-cream/50">
-            Upload an image of a store table (StoreLeads grid, a spreadsheet, a
-            listing). Claude reads the rows into CSV for you to review before importing.
+            Upload one or more images of store tables (StoreLeads grid, a
+            spreadsheet, a listing). Claude reads every row into a single CSV for
+            you to review before importing.
           </p>
           <input
             ref={imgRef}
             type="file"
             accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
             disabled={busy}
-            onChange={(e) => e.target.files?.[0] && extractFromImage(e.target.files[0])}
+            onChange={(e) => e.target.files?.length && extractFromImages(e.target.files)}
             className="mt-4 block w-full text-sm text-cream/70 file:mr-4 file:rounded-full file:border-0 file:bg-cyan file:px-4 file:py-2 file:text-sm file:font-medium file:text-cyan-deep hover:file:brightness-110"
           />
         </div>

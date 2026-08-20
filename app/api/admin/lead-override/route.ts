@@ -25,7 +25,10 @@ export async function GET(req: Request) {
   await ensureSchema();
   const [cur] = await db()`
     SELECT domain, name, email, country, currency, plus, theme,
-           product_count, price_min, price_max, payments, estimated_monthly_sales
+           product_count, price_min, price_max, payments, category,
+           estimated_monthly_sales, products_sold, city, plan, description,
+           technologies, instagram, facebook, tiktok, instagram_followers,
+           facebook_followers, first_product_at, first_seen, discovered_at
     FROM imported_stores WHERE domain = ${domain} LIMIT 1`;
   const override = await getOverride(domain);
   return NextResponse.json({ domain, current: cur ?? null, override });
@@ -42,6 +45,7 @@ export async function POST(req: Request) {
 
   // Only pass through known fields; empty string means "clear this field" (null).
   const clean = (v: unknown) => (v === "" || v == null ? null : v);
+  const numOr = (v: unknown) => (v === "" || v == null ? null : Number(v));
   const fields: Partial<Override> = {
     name: clean(body.name) as string | null,
     email: clean(body.email) as string | null,
@@ -49,10 +53,25 @@ export async function POST(req: Request) {
     currency: clean(body.currency) as string | null,
     plus: body.plus == null ? null : Boolean(body.plus),
     theme: clean(body.theme) as string | null,
-    product_count: body.product_count === "" || body.product_count == null ? null : Number(body.product_count),
-    price_min: body.price_min === "" || body.price_min == null ? null : Number(body.price_min),
-    price_max: body.price_max === "" || body.price_max == null ? null : Number(body.price_max),
+    product_count: numOr(body.product_count),
+    price_min: numOr(body.price_min),
+    price_max: numOr(body.price_max),
     payments: clean(body.payments) as string | null,
+    category: clean(body.category) as string | null,
+    estimated_monthly_sales: numOr(body.estimated_monthly_sales),
+    products_sold: numOr(body.products_sold),
+    city: clean(body.city) as string | null,
+    plan: clean(body.plan) as string | null,
+    description: clean(body.description) as string | null,
+    technologies: clean(body.technologies) as string | null,
+    instagram: clean(body.instagram) as string | null,
+    facebook: clean(body.facebook) as string | null,
+    tiktok: clean(body.tiktok) as string | null,
+    instagram_followers: numOr(body.instagram_followers),
+    facebook_followers: numOr(body.facebook_followers),
+    first_product_at: clean(body.first_product_at) as string | null,
+    first_seen: clean(body.first_seen) as string | null,
+    discovered_at: clean(body.discovered_at) as string | null,
     hidden: Boolean(body.hidden),
     note: clean(body.note) as string | null,
   };

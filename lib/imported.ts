@@ -10,6 +10,7 @@ import { join } from "node:path";
 import postgres from "postgres";
 import type { Lead } from "./leads";
 import { cleanPayments } from "./payments-taxonomy";
+import { applyOverrides } from "./overrides";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 let _ready: Promise<void> | null = null;
@@ -231,7 +232,7 @@ export async function publishedLeads(): Promise<Lead[]> {
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
   const str = (v: unknown) => (v ? String(v) : null);
   const numOrNull = (v: unknown) => (v != null && v !== "" ? Number(v) : null);
-  return rows.map((r) => ({
+  const mapped: Lead[] = rows.map((r) => ({
     domain: r.domain as string,
     name: (r.name as string) ?? (r.domain as string),
     productCount: (r.product_count as number) ?? null,
@@ -261,6 +262,8 @@ export async function publishedLeads(): Promise<Lead[]> {
     instagramFollowers: numOrNull(r.instagram_followers),
     facebookFollowers: numOrNull(r.facebook_followers),
   }));
+  // Manual admin corrections win over the source and survive re-enrichment.
+  return applyOverrides(mapped);
 }
 
 /** A South African store? (the tracked universe). Cert-transparency finds carry
