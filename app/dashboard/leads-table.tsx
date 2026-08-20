@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import type { Lead } from "@/lib/leads";
+import { classify } from "@/lib/payments-taxonomy";
 import {
   foundDate,
   foundWithin,
@@ -11,15 +12,29 @@ import {
   type SortKey,
 } from "@/lib/prioritize";
 
-type Quality = "all" | "email" | "plus" | "social" | "payments";
+type Quality = "all" | "email" | "plus" | "social";
 
 const qualityFilters: { key: Quality; label: string }[] = [
   { key: "all", label: "All" },
   { key: "email", label: "With email" },
   { key: "plus", label: "Plus only" },
   { key: "social", label: "Has social" },
-  { key: "payments", label: "Payments known" },
 ];
+
+// Payment-provider filters for payment-company subscribers (fact #3). These only
+// mean something where we have a verified gateway list, so every option except
+// "any" implies a probed store.
+type PayFilter = "any" | "hasGw" | "noBnpl" | "hasBnpl";
+const payFilters: { key: PayFilter; label: string; hint: string }[] = [
+  { key: "any", label: "Any", hint: "No payment filter" },
+  { key: "hasGw", label: "Has gateway", hint: "A verified payment provider on file" },
+  { key: "noBnpl", label: "No BNPL", hint: "Takes payments but no buy-now-pay-later — a BNPL prospect" },
+  { key: "hasBnpl", label: "Has BNPL", hint: "Already offers a BNPL option" },
+];
+type ProviderMode = "uses" | "lacks";
+
+const hasBnpl = (l: Lead) => (l.payments ?? []).some((p) => classify(p) === "BNPL");
+const hasGateway = (l: Lead) => (l.payments?.length ?? 0) > 0;
 
 type Window = "all" | "week" | "month" | "quarter";
 
@@ -38,15 +53,19 @@ const sorts: { key: SortKey; label: string }[] = [
   { key: "launched", label: "Newest launched" },
 ];
 
-// One-click persona views: each sets window + quality + sort together, so a
+// One-click persona views: each sets the filters + sort together, so a
 // subscriber lands on the stores that matter to them without fiddling filters.
-type Segment = { key: string; label: string; hint: string; window: Window; quality: Quality; sort: SortKey };
+type Segment = {
+  key: string; label: string; hint: string;
+  window: Window; quality: Quality; sort: SortKey; pay?: PayFilter;
+};
 const segments: Segment[] = [
   { key: "fresh", label: "🌱 Fresh launches", hint: "Found this week, newest first", window: "week", quality: "all", sort: "newest" },
   { key: "enterprise", label: "🏢 Enterprise", hint: "Shopify Plus, biggest first", window: "all", quality: "plus", sort: "size" },
   { key: "reach", label: "📣 High reach", hint: "Biggest social audiences", window: "all", quality: "social", sort: "social" },
   { key: "contact", label: "✉️ Ready to contact", hint: "Has email, best prospects first", window: "all", quality: "email", sort: "priority" },
   { key: "biggest", label: "💰 Biggest", hint: "Top by estimated monthly sales", window: "all", quality: "all", sort: "size" },
+  { key: "bnpl", label: "💳 BNPL targets", hint: "Takes payments but no BNPL, biggest first", window: "all", quality: "all", sort: "size", pay: "noBnpl" },
 ];
 
 const PAGE = 25;
@@ -62,6 +81,9 @@ export function LeadsTable({
 }) {
   const [quality, setQuality] = useState<Quality>("all");
   const [window, setWindow] = useState<Window>("all");
+  const [pay, setPay] = useState<PayFilter>("any");
+  const [provider, setProvider] = useState<string>(""); // "" = any provider
+  const [providerMode, setProviderMode] = useState<ProviderMode>("uses");
   const [sort, setSort] = useState<SortKey>("priority");
   const [q, setQ] = useState("");
   const [shown, setShown] = useState(PAGE);
@@ -71,6 +93,15 @@ export function LeadsTable({
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState("");
 
+  // Providers actually present in the data, most common first — for the
+  // "uses / not on" competitor filter.
+  const providerOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of leads)
+      for (const p of l.payments ?? []) counts.set(p, (counts.get(p) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+  }, [leads]);
+
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const winDays = windows.find((w) => w.key === window)?.days ?? null;
@@ -78,7 +109,16 @@ export function LeadsTable({
       if (quality === "email" && !l.email) return false;
       if (quality === "plus" && !l.plus) return false;
       if (quality === "social" && socialReach(l) <= 0) return false;
-      if (quality === "payments" && !(l.payments?.length ?? 0)) return false;
+      if (pay === "hasGw" && !hasGateway(l)) return false;
+      if (pay === "hasBnpl" && !hasBnpl(l)) return false;
+      if (pay === "noBnpl" && (!hasGateway(l) || hasBnpl(l))) return false;
+      if (provider) {
+        const uses = (l.payments ?? []).includes(provider);
+        if (providerMode === "uses" && !uses) return false;
+        // "not on": a verified store that doesn't list this provider (a switch
+        // target) — exclude unprobed stores, where absence tells us nothing.
+        if (providerMode === "lacks" && (!hasGateway(l) || uses)) return false;
+      }
       if (winDays != null && !foundWithin(l, winDays)) return false;
       if (!needle) return true;
       return (
@@ -87,7 +127,7 @@ export function LeadsTable({
       );
     });
     return sortLeads(filtered, sort);
-  }, [leads, quality, window, sort, q]);
+  }, [leads, quality, window, pay, provider, providerMode, sort, q]);
 
   const money = (l: Lead) =>
     l.priceMin != null
@@ -138,10 +178,14 @@ export function LeadsTable({
     setWindow(s.window);
     setQuality(s.quality);
     setSort(s.sort);
+    setPay(s.pay ?? "any");
+    setProvider("");
     setShown(PAGE);
   };
   const activeSegment = segments.find(
-    (s) => s.window === window && s.quality === quality && s.sort === sort,
+    (s) =>
+      s.window === window && s.quality === quality && s.sort === sort &&
+      (s.pay ?? "any") === pay && !provider,
   )?.key;
 
   const toggleExpand = (domain: string) =>
@@ -264,6 +308,60 @@ export function LeadsTable({
             {w.label}
           </button>
         ))}
+      </div>
+
+      {/* Payments row — for payment-company subscribers (verified gateways) */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-ink/40">
+          Payments
+        </span>
+        {payFilters.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => {
+              setPay(f.key);
+              reset();
+            }}
+            title={f.hint}
+            className={`rounded-full px-3.5 py-1.5 text-sm transition ${
+              pay === f.key
+                ? "bg-lilac text-ink"
+                : "border border-ink/15 text-ink/60 hover:border-ink/40"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        {providerOptions.length > 0 && (
+          <span className="ml-1 flex items-center gap-1.5">
+            <select
+              value={providerMode}
+              onChange={(e) => {
+                setProviderMode(e.target.value as ProviderMode);
+                reset();
+              }}
+              className="rounded-full border border-ink/15 bg-transparent px-2.5 py-1.5 text-sm text-ink/70 outline-none focus:border-ink/50"
+              aria-label="Provider filter mode"
+            >
+              <option value="uses">Uses</option>
+              <option value="lacks">Not on</option>
+            </select>
+            <select
+              value={provider}
+              onChange={(e) => {
+                setProvider(e.target.value);
+                reset();
+              }}
+              className="rounded-full border border-ink/15 bg-transparent px-2.5 py-1.5 text-sm text-ink/70 outline-none focus:border-ink/50"
+              aria-label="Payment provider"
+            >
+              <option value="">any provider</option>
+              {providerOptions.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </span>
+        )}
       </div>
 
       {/* Quality + sort row */}
