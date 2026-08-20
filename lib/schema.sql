@@ -90,6 +90,17 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE;
 CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
+-- Manual store tags / cohorts (Top 100, Top 1000, Partner Managed, …) curated by
+-- an admin. Many-to-many; a store can carry several tags. Powers the admin lead
+-- manager and tagged-cohort insights.
+CREATE TABLE IF NOT EXISTS store_tags (
+  domain     TEXT NOT NULL,
+  tag        TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (domain, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_store_tags_tag ON store_tags(tag);
+
 -- Manual lead corrections. Applied LAST by fetchLeads (after Sheet + imported),
 -- so a fix always wins regardless of source and survives re-enrichment. Any
 -- NULL column means "no override for this field". `hidden` removes a bad lead.

@@ -55,8 +55,11 @@ const items = (rows: { label: string; n: number }[], denom: number): InsightItem
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
 // Published live stores for a market — the universe the insights describe.
-const LIVE = (country: string) =>
-  db()`published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))`;
+// An optional tag narrows to a curated cohort (e.g. the Top 100).
+const LIVE = (country: string, tag?: string) =>
+  db()`published AND country = ${country}
+       AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+       ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}`;
 
 /** Distinct markets with published live stores, most first — for the selector. */
 export async function availableCountries(): Promise<{ country: string; stores: number }[]> {
@@ -68,8 +71,10 @@ export async function availableCountries(): Promise<{ country: string; stores: n
   return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
 }
 
-export async function computeInsights(country = "ZA"): Promise<InsightsData> {
+export async function computeInsights(country = "ZA", tag?: string): Promise<InsightsData> {
   const sql = db();
+  // Optional cohort filter (Top 100 etc.) applied inside the flag subquery.
+  const inTag = tag ? sql`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : sql``;
 
   const [t] = await sql`
     SELECT
@@ -88,8 +93,8 @@ export async function computeInsights(country = "ZA"): Promise<InsightsData> {
       COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known
     FROM (
       SELECT *,
-        (published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = ${country}) AS za,
+        (published AND country = ${country} ${inTag} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
+        (published AND country = ${country} ${inTag}) AS za,
         -- "new this week" = added to Terrain in the last 7 days (created_at).
         -- NOT first_seen: that's the store's historical launch date (2006-2023),
         -- so it would always read 0. Matches getHomeStats so the pages agree.
@@ -106,7 +111,7 @@ export async function computeInsights(country = "ZA"): Promise<InsightsData> {
   // first-listed provider (best-effort ordering from the checkout sync).
   const payRows = await sql`
     SELECT payments FROM imported_stores
-    WHERE ${LIVE(country)} AND payments IS NOT NULL AND payments <> ''`;
+    WHERE ${LIVE(country, tag)} AND payments IS NOT NULL AND payments <> ''`;
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
@@ -132,12 +137,12 @@ export async function computeInsights(country = "ZA"): Promise<InsightsData> {
   type Agg = { label: string; n: number };
   const [themes, categories, apps] = await Promise.all([
     sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
+        WHERE ${LIVE(country, tag)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
     sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
+        WHERE ${LIVE(country, tag)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
     sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
           SELECT trim(unnest(string_to_array(apps, ';'))) AS app FROM imported_stores
-          WHERE ${LIVE(country)} AND apps IS NOT NULL AND apps <> ''
+          WHERE ${LIVE(country, tag)} AND apps IS NOT NULL AND apps <> ''
         ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`,
   ]);
 

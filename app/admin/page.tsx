@@ -29,6 +29,9 @@ export default async function Admin() {
             <Link href="/admin/pending" className="text-cream/60 hover:text-cream">
               Review imports →
             </Link>
+            <Link href="/admin/stores" className="text-cream/60 hover:text-cream">
+              Leads &amp; tags →
+            </Link>
             <Link href="/admin/leads" className="text-cream/60 hover:text-cream">
               Edit leads →
             </Link>

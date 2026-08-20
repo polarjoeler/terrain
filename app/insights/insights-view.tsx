@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { marketLabel, marketAdjective } from "@/lib/markets";
+import { tagLabel } from "@/lib/tag-defs";
 import type { InsightsData, InsightItem } from "@/lib/insights";
 
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
@@ -116,14 +117,25 @@ function DistroCard({
 }
 
 export function InsightsView({
-  data, history, baselineDate, countries = [], country = "ZA",
+  data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
 }: {
   data: InsightsData;
   history: InsightsData[];
   baselineDate?: string | null;
   countries?: { country: string; stores: number }[];
   country?: string;
+  cohorts?: { tag: string; count: number }[];
+  tag?: string;
 }) {
+  // Navigate preserving both country + cohort in the URL.
+  const go = (next: { country?: string; tag?: string }) => {
+    const c = next.country ?? country;
+    const t = next.tag ?? tag;
+    const qs = new URLSearchParams();
+    if (c) qs.set("country", c);
+    if (t) qs.set("tag", t);
+    window.location.href = `/insights?${qs.toString()}`;
+  };
   const [platform, setPlatform] = useState("Shopify");
   const [period, setPeriod] = useState<Period>("Week");
 
@@ -190,9 +202,9 @@ export function InsightsView({
         <header className="mt-10">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Where the {marketAdjective(country)} Shopify market is heading — payment stacks,
-            themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()} live
-            stores we track.
+            {tag ? <>The {marketAdjective(country)} <b className="text-cream">{tagLabel(tag)}</b> — </> : <>Where the {marketAdjective(country)} Shopify market is heading — </>}
+            payment stacks, themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()}{" "}
+            {tag ? "stores in this cohort" : "live stores we track"}.
           </p>
         </header>
 
@@ -203,12 +215,29 @@ export function InsightsView({
               <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Market</span>
               <select
                 value={country}
-                onChange={(e) => { window.location.href = `/insights?country=${e.target.value}`; }}
+                onChange={(e) => go({ country: e.target.value })}
                 className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
               >
                 {countries.map((c) => (
                   <option key={c.country} value={c.country} className="text-ink">
                     {marketLabel(c.country)} ({c.stores.toLocaleString()})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {cohorts.some((c) => c.count > 0) && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Cohort</span>
+              <select
+                value={tag}
+                onChange={(e) => go({ tag: e.target.value })}
+                className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+              >
+                <option value="" className="text-ink">All stores</option>
+                {cohorts.filter((c) => c.count > 0).map((c) => (
+                  <option key={c.tag} value={c.tag} className="text-ink">
+                    {tagLabel(c.tag)} ({c.count.toLocaleString()})
                   </option>
                 ))}
               </select>

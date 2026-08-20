@@ -131,6 +131,31 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
   return r.map((x) => ({ domain: x.domain as string, name: (x.name as string) ?? null }));
 }
 
+export type ManagerStore = {
+  domain: string;
+  name: string | null;
+  country: string | null;
+  estMonthlySales: number | null;
+  plus: boolean;
+};
+
+/** Light list of all published live stores for the admin lead manager. */
+export async function managerStores(): Promise<ManagerStore[]> {
+  await ensure();
+  const rows = await db()`
+    SELECT domain, name, country, estimated_monthly_sales, plus
+    FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+    ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
+  return rows.map((r) => ({
+    domain: r.domain as string,
+    name: (r.name as string) ?? null,
+    country: (r.country as string) ?? null,
+    estMonthlySales: r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null,
+    plus: Boolean(r.plus),
+  }));
+}
+
 export type PendingStore = {
   domain: string;
   name: string | null;
