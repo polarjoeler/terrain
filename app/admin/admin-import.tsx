@@ -54,13 +54,17 @@ export function AdminImport({
       fr.readAsDataURL(file);
     });
 
-  // One or more screenshots → Claude vision → one merged, editable CSV preview.
+  // One or more screenshots → Claude vision → merged, editable CSV preview.
+  // Uploads ACCUMULATE: select several at once, or add more in a later upload —
+  // every extracted row piles into the same CSV (use Cancel to start over).
   async function extractFromImages(files: FileList) {
     const list = Array.from(files);
     setBusy(true);
-    setPreview("");
-    let header = "";
-    const dataLines: string[] = [];
+    // Seed from whatever is already in the preview so new images append to it.
+    const existing = preview.trim() ? preview.trim().split("\n") : [];
+    let header = existing[0] ?? "";
+    const dataLines: string[] = existing.slice(1);
+    const startCount = dataLines.length;
     const failures: string[] = [];
     try {
       for (let i = 0; i < list.length; i++) {
@@ -86,8 +90,11 @@ export function AdminImport({
         return;
       }
       setPreview([header, ...dataLines].join("\n"));
-      const note = failures.length ? ` (${failures.length} image${failures.length === 1 ? "" : "s"} failed)` : "";
-      setMsg(`Extracted ${dataLines.length} row${dataLines.length === 1 ? "" : "s"} from ${list.length} image${list.length === 1 ? "" : "s"}${note} — review and edit below, then import.`);
+      const added = dataLines.length - startCount;
+      const note = failures.length ? ` (${failures.length} failed)` : "";
+      setMsg(
+        `Added ${added} row${added === 1 ? "" : "s"} from ${list.length} image${list.length === 1 ? "" : "s"}${note} — ${dataLines.length} total. Add more images or review and import below.`,
+      );
     } finally {
       setBusy(false);
       if (imgRef.current) imgRef.current.value = "";
@@ -172,9 +179,10 @@ export function AdminImport({
         <div className="mt-6 border-t border-cream/10 pt-6">
           <h3 className="text-lg font-semibold">…or extract from a screenshot</h3>
           <p className="mt-1 text-sm text-cream/50">
-            Upload one or more images of store tables (StoreLeads grid, a
-            spreadsheet, a listing). Claude reads every row into a single CSV for
-            you to review before importing.
+            Select several images at once (⌘/Ctrl-click), or keep adding more —
+            every store table (StoreLeads grid, spreadsheet, listing) is read and
+            its rows <span className="text-cream/70">accumulate into one CSV</span> to
+            review before importing.
           </p>
           <input
             ref={imgRef}
