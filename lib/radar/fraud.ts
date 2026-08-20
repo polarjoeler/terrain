@@ -35,7 +35,7 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
     FROM radar_detections d
     LEFT JOIN imported_stores i ON i.domain = d.brand_domain
     LEFT JOIN radar_brands rb   ON rb.brand_domain = d.brand_domain
-    WHERE d.source = 'fraud' AND d.score >= ${minScore}
+    WHERE d.source = 'fraud' AND d.score >= ${minScore} AND NOT COALESCE(d.dismissed, false)
     ORDER BY d.score DESC, d.last_seen_at DESC`;
 
   const byVictim = new Map<string, FraudCluster>();

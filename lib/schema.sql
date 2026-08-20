@@ -235,6 +235,11 @@ CREATE TABLE IF NOT EXISTS radar_detections (
   alerted_at    TIMESTAMPTZ,  -- when the brand was emailed about this detection
   PRIMARY KEY (brand_domain, suspect)
 );
+-- How the detection was found (audit | monitor | fraud) + admin dismissal (e.g.
+-- a same-owner false positive from the market fraud sweep, remembered so the
+-- sweep never resurfaces it).
+ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS source    TEXT;
+ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_radar_detections_score ON radar_detections(score DESC);
 
 -- Daily market-insights snapshots — one JSON blob per day, computed from

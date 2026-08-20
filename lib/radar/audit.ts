@@ -359,7 +359,7 @@ export async function listMonitorDetections(minScore = 25): Promise<Detection[]>
     }[]
   >`
     SELECT brand_domain, brand_name, suspect, suspect_name, verdict, score, reasons, source, last_seen_at
-    FROM radar_detections WHERE score >= ${minScore}
+    FROM radar_detections WHERE score >= ${minScore} AND NOT COALESCE(dismissed, false)
     ORDER BY score DESC, last_seen_at DESC`;
   return rows.map((r) => ({
     brandDomain: r.brand_domain,

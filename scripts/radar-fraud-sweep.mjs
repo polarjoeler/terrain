@@ -141,6 +141,7 @@ async function main() {
 
     if (WRITE) {
       await sql`ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS source TEXT`;
+      await sql`ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false`;
       let n = 0;
       for (const d of strong) {
         const verdict = d.score >= 75 ? "COPY" : d.score >= 50 ? "LIKELY" : "PARTIAL";
