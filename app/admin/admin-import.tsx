@@ -18,26 +18,70 @@ export function AdminImport({
   const [rows, setRows] = useState<Sample[]>(sample);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [preview, setPreview] = useState(""); // extracted CSV awaiting review
   const fileRef = useRef<HTMLInputElement>(null);
+  const imgRef = useRef<HTMLInputElement>(null);
+
+  // Commit CSV text through the shared import path (used by CSV upload + the
+  // reviewed screenshot extraction).
+  async function importText(text: string): Promise<boolean> {
+    const res = await fetch("/api/admin/import", { method: "POST", body: text });
+    const j = await res.json();
+    if (!res.ok) { setMsg(j.error ?? "Import failed"); return false; }
+    setMsg(`Imported ${j.inserted} stores (${j.skipped} skipped). Review below, then publish.`);
+    setPending((p) => p + j.inserted);
+    return true;
+  }
 
   async function upload(file: File) {
     setBusy(true);
     setMsg("");
     try {
-      const text = await file.text();
-      const res = await fetch("/api/admin/import", { method: "POST", body: text });
-      const j = await res.json();
-      if (!res.ok) {
-        setMsg(j.error ?? "Import failed");
-        return;
-      }
-      setMsg(`Imported ${j.inserted} stores (${j.skipped} skipped). Review below, then publish.`);
-      setPending((p) => p + j.inserted);
+      await importText(await file.text());
     } catch {
       setMsg("Could not read file");
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  // Screenshot → Claude vision → editable CSV preview (does not import yet).
+  async function extractFromImage(file: File) {
+    setBusy(true);
+    setMsg("Reading the screenshot…");
+    setPreview("");
+    try {
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(new Error("read failed"));
+        fr.readAsDataURL(file);
+      });
+      const base64 = dataUrl.replace(/^data:[^,]+,/, "");
+      const res = await fetch("/api/admin/import-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: base64, mediaType: file.type }),
+      });
+      const j = await res.json();
+      if (!res.ok) { setMsg(j.error ?? "Extraction failed"); return; }
+      setPreview(j.csv);
+      setMsg(`Extracted ${j.rows} row${j.rows === 1 ? "" : "s"} — review and edit below, then import.`);
+    } catch {
+      setMsg("Could not read the image");
+    } finally {
+      setBusy(false);
+      if (imgRef.current) imgRef.current.value = "";
+    }
+  }
+
+  async function importPreview() {
+    setBusy(true);
+    try {
+      if (await importText(preview)) setPreview("");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -105,6 +149,55 @@ export function AdminImport({
           onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
           className="mt-4 block w-full text-sm text-cream/70 file:mr-4 file:rounded-full file:border-0 file:bg-cream file:px-4 file:py-2 file:text-sm file:font-medium file:text-ink hover:file:bg-paper"
         />
+
+        {/* Screenshot → CSV via Claude vision */}
+        <div className="mt-6 border-t border-cream/10 pt-6">
+          <h3 className="text-lg font-semibold">…or extract from a screenshot</h3>
+          <p className="mt-1 text-sm text-cream/50">
+            Upload an image of a store table (StoreLeads grid, a spreadsheet, a
+            listing). Claude reads the rows into CSV for you to review before importing.
+          </p>
+          <input
+            ref={imgRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            disabled={busy}
+            onChange={(e) => e.target.files?.[0] && extractFromImage(e.target.files[0])}
+            className="mt-4 block w-full text-sm text-cream/70 file:mr-4 file:rounded-full file:border-0 file:bg-cyan file:px-4 file:py-2 file:text-sm file:font-medium file:text-cyan-deep hover:file:brightness-110"
+          />
+        </div>
+
+        {/* Editable extracted-CSV preview */}
+        {preview && (
+          <div className="mt-6">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-cream/70">Review extracted rows (editable)</span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPreview("")}
+                  disabled={busy}
+                  className="rounded-full border border-cream/20 px-4 py-1.5 text-sm text-cream/70 hover:border-cream/50 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={importPreview}
+                  disabled={busy}
+                  className="rounded-full bg-cyan px-4 py-1.5 text-sm font-medium text-cyan-deep hover:brightness-110 disabled:opacity-40"
+                >
+                  Import these rows
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={preview}
+              onChange={(e) => setPreview(e.target.value)}
+              spellCheck={false}
+              rows={12}
+              className="w-full rounded-2xl border border-cream/15 bg-ink-deep/60 p-4 font-mono text-xs leading-relaxed text-cream/85 outline-none focus:border-cream/40"
+            />
+          </div>
+        )}
       </div>
 
       {/* review + publish */}
