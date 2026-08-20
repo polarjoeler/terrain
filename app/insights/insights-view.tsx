@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
+import { marketLabel, marketAdjective } from "@/lib/markets";
 import type { InsightsData, InsightItem } from "@/lib/insights";
 
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
@@ -13,11 +14,6 @@ const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "Mo
 const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
-const COUNTRY_NAME: Record<string, string> = {
-  ZA: "South African", NG: "Nigerian", KE: "Kenyan", EG: "Egyptian", MA: "Moroccan",
-  GH: "Ghanaian", TZ: "Tanzanian", UG: "Ugandan",
-};
-const marketName = (c: string) => COUNTRY_NAME[c] ?? c;
 
 const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
@@ -194,7 +190,7 @@ export function InsightsView({
         <header className="mt-10">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Where the {marketName(country)} Shopify market is heading — payment stacks,
+            Where the {marketAdjective(country)} Shopify market is heading — payment stacks,
             themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()} live
             stores we track.
           </p>
@@ -212,7 +208,7 @@ export function InsightsView({
               >
                 {countries.map((c) => (
                   <option key={c.country} value={c.country} className="text-ink">
-                    {marketName(c.country)} ({c.stores.toLocaleString()})
+                    {marketLabel(c.country)} ({c.stores.toLocaleString()})
                   </option>
                 ))}
               </select>

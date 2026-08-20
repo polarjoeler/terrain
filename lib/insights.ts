@@ -171,7 +171,7 @@ export async function computeInsights(country = "ZA"): Promise<InsightsData> {
 /** Homepage headline numbers, computed from the SAME live universe as /insights
  *  (Postgres imported_stores) so the two public pages never disagree. Replaces
  *  the old Google-Sheet feed, which only saw ~200-700 discovery-engine stores. */
-export async function getHomeStats(): Promise<import("./sheets").FeedStats> {
+export async function getHomeStats(country = "ZA"): Promise<import("./sheets").FeedStats> {
   const sql = db();
   const [t] = await sql`
     SELECT
@@ -181,7 +181,7 @@ export async function getHomeStats(): Promise<import("./sheets").FeedStats> {
       COUNT(*) FILTER (WHERE live AND plus)::int                              AS plus
     FROM (
       SELECT *,
-        (published AND country = 'ZA' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live
+        (published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live
       FROM imported_stores
     ) s`;
   // Freshness = the discovery pipeline's last run (updates every pipeline pass),

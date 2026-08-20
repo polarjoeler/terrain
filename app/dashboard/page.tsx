@@ -5,7 +5,8 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { sampleLeads, type Lead } from "@/lib/leads";
 import { summarise } from "@/lib/sheets";
 import { publishedLeads } from "@/lib/imported";
-import { getHomeStats } from "@/lib/insights";
+import { getHomeStats, availableCountries } from "@/lib/insights";
+import { MarketPicker } from "./market-picker";
 import { FreshnessStamp } from "@/app/components/freshness";
 import {
   exportQuota,
@@ -18,7 +19,11 @@ import { LeadsTable } from "./leads-table";
 // Per-user paywall — never cache this page across requests.
 export const dynamic = "force-dynamic";
 
-export default async function Dashboard() {
+export default async function Dashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ country?: string }>;
+}) {
   const email = await currentUser();
   if (!email) redirect("/login");
 
@@ -26,6 +31,11 @@ export default async function Dashboard() {
   if (!hasAccess(subscriber)) redirect("/billing");
 
   const daysLeft = trialDaysLeft(subscriber);
+
+  // Market filter (default South Africa) — the tiles + table both respect it.
+  const markets = await availableCountries().catch(() => [] as { country: string; stores: number }[]);
+  const sp = await searchParams;
+  const country = sp.country && markets.some((m) => m.country === sp.country) ? sp.country : "ZA";
 
   // Store universe now comes from Postgres (imported_stores) — the same source
   // as /insights and the homepage, so the counts agree (~8,781 live SA stores).
@@ -37,7 +47,7 @@ export default async function Dashboard() {
   let updatedAt: string | null;
   let stats: { storesTracked: number; newThisWeek: number; plusFlagged: number; withEmail: number };
   try {
-    const [leads, home] = await Promise.all([publishedLeads(), getHomeStats()]);
+    const [leads, home] = await Promise.all([publishedLeads(country), getHomeStats(country)]);
     if (!leads.length) throw new Error("no leads");
     data = leads;
     live = true;
@@ -80,6 +90,7 @@ export default async function Dashboard() {
                 Payment failed — update card
               </Link>
             )}
+            <MarketPicker countries={markets} country={country} />
             <Link
               href="/insights"
               className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
