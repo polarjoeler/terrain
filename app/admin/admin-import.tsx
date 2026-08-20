@@ -232,7 +232,12 @@ export function AdminImport({
       {pending > 0 && (
         <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-lg font-semibold">Review pending ({pending})</h3>
+            <h3 className="text-lg font-semibold">
+              Review pending ({pending}) ·{" "}
+              <a href="/admin/pending" className="text-sm font-normal text-cyan hover:underline">
+                review &amp; pick individually →
+              </a>
+            </h3>
             <div className="flex gap-2">
               <button
                 onClick={() => act("discard")}

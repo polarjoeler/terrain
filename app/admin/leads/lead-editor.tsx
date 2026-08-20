@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Current = Record<string, unknown> | null;
 type Override = Record<string, unknown> | null;
@@ -38,13 +38,23 @@ const AREA_FIELDS: [string, string][] = [["description", "Description"]];
 const inputCls =
   "w-full rounded-xl border border-cream/15 bg-cream/[0.04] px-3 py-2 text-cream placeholder:text-cream/25 outline-none focus:border-mint/50";
 
-export function LeadEditor() {
-  const [domain, setDomain] = useState("");
+export function LeadEditor({ initialDomain = "" }: { initialDomain?: string }) {
+  const [domain, setDomain] = useState(initialDomain);
   const [loaded, setLoaded] = useState<string | null>(null);
   const [current, setCurrent] = useState<Current>(null);
   const [form, setForm] = useState<Record<string, string | boolean>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const didAuto = useRef(false);
+
+  // Auto-load when linked with ?domain= (e.g. from the review page's "edit").
+  useEffect(() => {
+    if (initialDomain && !didAuto.current) {
+      didAuto.current = true;
+      load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDomain]);
 
   function setField(k: string, v: string | boolean) {
     setForm((f) => ({ ...f, [k]: v }));

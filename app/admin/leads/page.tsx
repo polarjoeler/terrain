@@ -7,10 +7,15 @@ import { LeadEditor } from "./lead-editor";
 export const metadata = { title: "Terrain — Edit leads" };
 export const dynamic = "force-dynamic";
 
-export default async function EditLeads() {
+export default async function EditLeads({
+  searchParams,
+}: {
+  searchParams: Promise<{ domain?: string }>;
+}) {
   const email = await currentUser();
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
+  const { domain } = await searchParams;
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -34,7 +39,7 @@ export default async function EditLeads() {
           </p>
         </header>
 
-        <LeadEditor />
+        <LeadEditor initialDomain={domain ?? ""} />
       </div>
     </div>
   );

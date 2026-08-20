@@ -131,16 +131,55 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
   return r.map((x) => ({ domain: x.domain as string, name: (x.name as string) ?? null }));
 }
 
-export async function publishPending(): Promise<number> {
+export type PendingStore = {
+  domain: string;
+  name: string | null;
+  country: string | null;
+  category: string | null;
+  productCount: number | null;
+  estMonthlySales: number | null;
+  source: string | null;
+  createdAt: string;
+};
+
+/** Full pending list for the review page (newest first). */
+export async function pendingStores(limit = 500, offset = 0): Promise<PendingStore[]> {
   await ensure();
   const r = await db()`
-    UPDATE imported_stores SET published = true WHERE NOT published RETURNING domain`;
+    SELECT domain, name, country, category, product_count, estimated_monthly_sales,
+           source, created_at
+    FROM imported_stores WHERE NOT published
+    ORDER BY created_at DESC, estimated_monthly_sales DESC NULLS LAST
+    LIMIT ${limit} OFFSET ${offset}`;
+  return r.map((x) => ({
+    domain: x.domain as string,
+    name: (x.name as string) ?? null,
+    country: (x.country as string) ?? null,
+    category: (x.category as string) ?? null,
+    productCount: x.product_count != null ? Number(x.product_count) : null,
+    estMonthlySales: x.estimated_monthly_sales != null ? Number(x.estimated_monthly_sales) : null,
+    source: (x.source as string) ?? null,
+    createdAt: new Date(x.created_at as string).toISOString(),
+  }));
+}
+
+/** Publish pending stores into the live feed — all, or just the given domains. */
+export async function publishPending(domains?: string[]): Promise<number> {
+  await ensure();
+  const r = domains && domains.length
+    ? await db()`UPDATE imported_stores SET published = true
+        WHERE NOT published AND domain = ANY(${db().array(domains)}) RETURNING domain`
+    : await db()`UPDATE imported_stores SET published = true WHERE NOT published RETURNING domain`;
   return r.length;
 }
 
-export async function clearPending(): Promise<number> {
+/** Discard pending stores — all, or just the given domains. */
+export async function clearPending(domains?: string[]): Promise<number> {
   await ensure();
-  const r = await db()`DELETE FROM imported_stores WHERE NOT published RETURNING domain`;
+  const r = domains && domains.length
+    ? await db()`DELETE FROM imported_stores
+        WHERE NOT published AND domain = ANY(${db().array(domains)}) RETURNING domain`
+    : await db()`DELETE FROM imported_stores WHERE NOT published RETURNING domain`;
   return r.length;
 }
 
