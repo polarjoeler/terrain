@@ -19,19 +19,7 @@ function authorized(req: Request, email: string | null): boolean {
 async function run(req: Request) {
   const email = await currentUser();
   if (!authorized(req, email)) {
-    // Safe diagnostic (no secret value leaked): tells us whether prod has the
-    // env set and its length, to distinguish "not configured" from "mismatch".
-    const sent = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "");
-    return NextResponse.json(
-      {
-        error: "Not authorised",
-        prodConfigured: Boolean(process.env.CRON_SECRET),
-        prodLen: (process.env.CRON_SECRET ?? "").length,
-        sentLen: sent.length,
-        match: Boolean(process.env.CRON_SECRET) && sent === process.env.CRON_SECRET,
-      },
-      { status: 403 },
-    );
+    return NextResponse.json({ error: "Not authorised" }, { status: 403 });
   }
   const result = await syncFromSheet();
   return NextResponse.json(result);

@@ -18,14 +18,11 @@ cd /Users/joel/storepulse || exit 1
 
 echo "===== radar pipeline $(date '+%Y-%m-%d %H:%M:%S') ====="
 
-# Step 0: pull the cert-transparency discovery feed (Sheet) into Postgres so the
-# newest finds appear and discovered_at stays fresh. Runs on prod via curl (prod
-# holds the Sheet creds); needs CRON_SECRET in .env.local + Vercel to authorise.
+# Step 1: pull the cert-transparency discovery feed (Sheet) into Postgres so the
+# newest finds appear and discovered_at stays fresh. Runs locally — the Mac has
+# the Sheet creds + DATABASE_URL — so no web app / CRON_SECRET / Vercel needed.
 echo "--- 1/5 sync discovery feed ---"
-CRON_SECRET=$(grep -E '^CRON_SECRET=' .env.local 2>/dev/null | cut -d= -f2- | tr -d '"')
-curl -s --max-time 120 -H "Authorization: Bearer ${CRON_SECRET}" \
-  https://terrain.tembocommerce.app/api/admin/sync-sheet \
-  -w "sync: HTTP %{http_code}\n" || echo "!! sync step failed (continuing)"
+node --env-file=.env.local scripts/sync-sheet.mjs || echo "!! sync step failed (continuing)"
 
 echo "--- 2/5 fingerprint catalogue ---"
 node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
