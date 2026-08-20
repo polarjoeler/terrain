@@ -54,11 +54,21 @@ const prettyApp = (s: string) =>
 const items = (rows: { label: string; n: number }[], denom: number): InsightItem[] =>
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
-// Published live SA stores — the market universe the insights describe.
-const LIVE = () =>
-  db()`published AND country = 'ZA' AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))`;
+// Published live stores for a market — the universe the insights describe.
+const LIVE = (country: string) =>
+  db()`published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))`;
 
-export async function computeInsights(): Promise<InsightsData> {
+/** Distinct markets with published live stores, most first — for the selector. */
+export async function availableCountries(): Promise<{ country: string; stores: number }[]> {
+  const rows = await db()<{ country: string; n: number }[]>`
+    SELECT country, COUNT(*)::int n FROM imported_stores
+    WHERE published AND country IS NOT NULL AND country <> ''
+      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+    GROUP BY country ORDER BY n DESC`;
+  return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
+}
+
+export async function computeInsights(country = "ZA"): Promise<InsightsData> {
   const sql = db();
 
   const [t] = await sql`
@@ -78,8 +88,8 @@ export async function computeInsights(): Promise<InsightsData> {
       COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known
     FROM (
       SELECT *,
-        (published AND country = 'ZA' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = 'ZA') AS za,
+        (published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
+        (published AND country = ${country}) AS za,
         -- "new this week" = added to Terrain in the last 7 days (created_at).
         -- NOT first_seen: that's the store's historical launch date (2006-2023),
         -- so it would always read 0. Matches getHomeStats so the pages agree.
@@ -96,7 +106,7 @@ export async function computeInsights(): Promise<InsightsData> {
   // first-listed provider (best-effort ordering from the checkout sync).
   const payRows = await sql`
     SELECT payments FROM imported_stores
-    WHERE ${LIVE()} AND payments IS NOT NULL AND payments <> ''`;
+    WHERE ${LIVE(country)} AND payments IS NOT NULL AND payments <> ''`;
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
@@ -122,12 +132,12 @@ export async function computeInsights(): Promise<InsightsData> {
   type Agg = { label: string; n: number };
   const [themes, categories, apps] = await Promise.all([
     sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE()} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
+        WHERE ${LIVE(country)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
     sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE()} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
+        WHERE ${LIVE(country)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
     sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
           SELECT trim(unnest(string_to_array(apps, ';'))) AS app FROM imported_stores
-          WHERE ${LIVE()} AND apps IS NOT NULL AND apps <> ''
+          WHERE ${LIVE(country)} AND apps IS NOT NULL AND apps <> ''
         ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`,
   ]);
 

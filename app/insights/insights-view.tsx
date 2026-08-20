@@ -13,6 +13,11 @@ const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "Mo
 const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
+const COUNTRY_NAME: Record<string, string> = {
+  ZA: "South African", NG: "Nigerian", KE: "Kenyan", EG: "Egyptian", MA: "Moroccan",
+  GH: "Ghanaian", TZ: "Tanzanian", UG: "Ugandan",
+};
+const marketName = (c: string) => COUNTRY_NAME[c] ?? c;
 
 const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
@@ -115,11 +120,13 @@ function DistroCard({
 }
 
 export function InsightsView({
-  data, history, baselineDate,
+  data, history, baselineDate, countries = [], country = "ZA",
 }: {
   data: InsightsData;
   history: InsightsData[];
   baselineDate?: string | null;
+  countries?: { country: string; stores: number }[];
+  country?: string;
 }) {
   const [platform, setPlatform] = useState("Shopify");
   const [period, setPeriod] = useState<Period>("Week");
@@ -187,7 +194,7 @@ export function InsightsView({
         <header className="mt-10">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Where the South African Shopify market is heading — payment stacks,
+            Where the {marketName(country)} Shopify market is heading — payment stacks,
             themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()} live
             stores we track.
           </p>
@@ -195,6 +202,22 @@ export function InsightsView({
 
         {/* filters */}
         <div className="mt-6 flex flex-wrap items-center gap-6 rounded-3xl border border-cream/12 bg-cream/[0.03] px-5 py-4">
+          {countries.length > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Market</span>
+              {countries.map((c) => (
+                <a
+                  key={c.country}
+                  href={`/insights?country=${c.country}`}
+                  className={`rounded-full px-3.5 py-1.5 text-sm transition ${
+                    country === c.country ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:border-cream/40"
+                  }`}
+                >
+                  {c.country} <span className="opacity-60">({c.stores.toLocaleString()})</span>
+                </a>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
             <button onClick={() => setPlatform("Shopify")} className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm ${platform === "Shopify" ? "bg-cream text-ink" : "border border-cream/15 text-cream/60"}`}>
