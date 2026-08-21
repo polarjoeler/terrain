@@ -54,12 +54,30 @@ const prettyApp = (s: string) =>
 const items = (rows: { label: string; n: number }[], denom: number): InsightItem[] =>
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
+// "Brand New Stores" = discovered (cert-transparency found) in this window.
+export const NEW_STORE_DAYS = 90;
+
+// A cohort filter fragment: undefined = all; "new" = recently discovered
+// (dynamic); anything else = a curated store_tags cohort (Top 100 etc.).
+const cohortFilter = (tag?: string) =>
+  !tag
+    ? db()``
+    : tag === "new"
+      ? db()`AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
+      : db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})`;
+
 // Published live stores for a market — the universe the insights describe.
-// An optional tag narrows to a curated cohort (e.g. the Top 100).
+// An optional cohort tag narrows it (Top 100, Brand New, …).
 const LIVE = (country: string, tag?: string) =>
   db()`published AND country = ${country}
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
-       ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}`;
+       ${cohortFilter(tag)}`;
+
+/** Count of stores in a dynamic/curated cohort for a market — for the selector. */
+export async function cohortCount(country: string, tag: string): Promise<number> {
+  const [r] = await db()`SELECT COUNT(*)::int n FROM imported_stores WHERE ${LIVE(country, tag)}`;
+  return Number(r?.n ?? 0);
+}
 
 /** Distinct markets with published live stores, most first — for the selector. */
 export async function availableCountries(): Promise<{ country: string; stores: number }[]> {
@@ -73,8 +91,8 @@ export async function availableCountries(): Promise<{ country: string; stores: n
 
 export async function computeInsights(country = "ZA", tag?: string): Promise<InsightsData> {
   const sql = db();
-  // Optional cohort filter (Top 100 etc.) applied inside the flag subquery.
-  const inTag = tag ? sql`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : sql``;
+  // Cohort filter (Top 100, Brand New, …) applied inside the flag subquery.
+  const inTag = cohortFilter(tag);
 
   const [t] = await sql`
     SELECT

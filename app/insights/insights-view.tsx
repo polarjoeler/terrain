@@ -202,9 +202,13 @@ export function InsightsView({
         <header className="mt-10">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            {tag ? <>The {marketAdjective(country)} <b className="text-cream">{tagLabel(tag)}</b> — </> : <>Where the {marketAdjective(country)} Shopify market is heading — </>}
+            {tag === "new"
+              ? <>What the newest {marketAdjective(country)} stores are choosing — </>
+              : tag
+                ? <>The {marketAdjective(country)} <b className="text-cream">{tagLabel(tag)}</b> — </>
+                : <>Where the {marketAdjective(country)} Shopify market is heading — </>}
             payment stacks, themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()}{" "}
-            {tag ? "stores in this cohort" : "live stores we track"}.
+            {tag === "new" ? "stores found in the last 90 days" : tag ? "stores in this cohort" : "live stores we track"}.
           </p>
         </header>
 
