@@ -32,6 +32,9 @@ export default async function Admin() {
             <Link href="/admin/stores" className="text-cream/60 hover:text-cream">
               Leads &amp; tags →
             </Link>
+            <Link href="/admin/integrations" className="text-cream/60 hover:text-cream">
+              Integrations →
+            </Link>
             <Link href="/admin/leads" className="text-cream/60 hover:text-cream">
               Edit leads →
             </Link>

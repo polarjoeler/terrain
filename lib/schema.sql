@@ -101,6 +101,19 @@ CREATE TABLE IF NOT EXISTS store_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_store_tags_tag ON store_tags(tag);
 
+-- Outreach-tool connections (Instantly, Smartlead, Apollo, …). The API key is
+-- stored ENCRYPTED (AES-256-GCM, key derived from AUTH_SECRET); config holds
+-- non-secret settings like the target campaign id.
+CREATE TABLE IF NOT EXISTS integrations (
+  owner      TEXT NOT NULL,
+  provider   TEXT NOT NULL,
+  secret     TEXT NOT NULL,
+  config     JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner, provider)
+);
+
 -- Manual lead corrections. Applied LAST by fetchLeads (after Sheet + imported),
 -- so a fix always wins regardless of source and survives re-enrichment. Any
 -- NULL column means "no override for this field". `hidden` removes a bad lead.

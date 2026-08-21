@@ -131,6 +131,23 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
   return r.map((x) => ({ domain: x.domain as string, name: (x.name as string) ?? null }));
 }
 
+/** Contactable leads (have an email) for outreach push, optionally filtered by
+ *  market + a curated cohort tag. Shaped for the integration adapters. */
+export async function outreachLeads(opts: { country?: string; tag?: string } = {}): Promise<
+  { email: string; company: string | null; website: string }[]
+> {
+  await ensure();
+  const { country, tag } = opts;
+  const rows = await db()<{ email: string; company: string | null; website: string }[]>`
+    SELECT email, name AS company, domain AS website FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND email IS NOT NULL AND email <> ''
+      ${country ? db()`AND country = ${country}` : db()``}
+      ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}
+    ORDER BY estimated_monthly_sales DESC NULLS LAST`;
+  return rows.map((r) => ({ email: r.email, company: r.company, website: r.website }));
+}
+
 /** Which of these domains are already in imported_stores (published or pending)?
  *  Powers the "new vs duplicate" check on screenshot/CSV import. */
 export async function existingDomains(domains: string[]): Promise<string[]> {
