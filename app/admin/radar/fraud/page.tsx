@@ -2,7 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { fraudClusters } from "@/lib/radar/fraud";
+import { lastRun } from "@/lib/radar/fraud-sweep";
 import { FraudClusterCard } from "./cluster";
+import { RunSweep } from "./run-sweep";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Radar — Market fraud" };
@@ -12,7 +14,10 @@ export default async function MarketFraud() {
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  const clusters = await fraudClusters().catch(() => []);
+  const [clusters, run] = await Promise.all([
+    fraudClusters().catch(() => []),
+    lastRun("fraud").catch(() => null),
+  ]);
   const totalClones = clusters.reduce((n, c) => n + c.clones.length, 0);
   const withEmail = clusters.filter((c) => c.victimEmail && !c.enrolled).length;
 
@@ -35,6 +40,7 @@ export default async function MarketFraud() {
             each one is a warm lead. Catalogue collisions found across every store we fingerprint,
             no enrolment needed.
           </p>
+          <RunSweep lastRun={run} />
         </header>
 
         {clusters.length === 0 ? (

@@ -142,11 +142,17 @@ async function main() {
     if (WRITE) {
       await sql`ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS source TEXT`;
       await sql`ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false`;
-      let n = 0;
+      await sql`CREATE TABLE IF NOT EXISTS radar_runs (id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, ran_at TIMESTAMPTZ NOT NULL DEFAULT now(), summary JSONB NOT NULL DEFAULT '{}')`;
+      const existing = new Set(
+        (await sql`SELECT brand_domain, suspect FROM radar_detections WHERE source = 'fraud'`)
+          .map((r) => `${r.brand_domain}|${r.suspect}`),
+      );
+      let n = 0, fresh = 0;
       for (const d of strong) {
         const verdict = d.score >= 75 ? "COPY" : d.score >= 50 ? "LIKELY" : "PARTIAL";
         const reasons = [`${d.shared} identical product images shared with ${d.victim}`,
           `part of a ${d.clusterSize}-store catalogue-collision cluster`];
+        if (!existing.has(`${d.victim}|${d.clone}`)) fresh++;
         await sql`
           INSERT INTO radar_detections (brand_domain, suspect, brand_name, suspect_name, verdict, score, reasons, source, last_seen_at)
           VALUES (${d.victim}, ${d.clone}, ${d.victimName ?? d.victim}, ${d.cloneName ?? d.clone}, ${verdict}, ${d.score}, ${sql.json(reasons)}, 'fraud', now())
@@ -155,7 +161,8 @@ async function main() {
             source = 'fraud', last_seen_at = now()`;
         n++;
       }
-      console.log(`\n✓ Wrote ${n.toLocaleString()} fraud detections (source='fraud') → radar_detections.`);
+      await sql`INSERT INTO radar_runs (kind, summary) VALUES ('fraud', ${sql.json({ scanned: rows.length, clusters: groups.length, relationships: detections.length, written: n, newDetections: fresh })})`;
+      console.log(`\n✓ Wrote ${n.toLocaleString()} fraud detections (${fresh} new) → radar_detections. Run recorded.`);
     } else {
       console.log(`\n(report only — re-run with --write to persist into radar_detections)`);
     }

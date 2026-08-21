@@ -77,7 +77,10 @@ export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
               <a href={`https://${cl.suspect}`} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-cream hover:underline">
                 {cl.suspect}
               </a>
-              <div className="text-[11px] text-cream/40">{cl.reasons[0] ?? "catalogue match"} · first seen {ago(cl.at)}</div>
+              <div className="text-[11px] text-cream/40">
+                {cl.reasons[0] ?? "catalogue match"} · detected {ago(cl.firstSeen)}
+                {cl.at.slice(0, 10) !== cl.firstSeen.slice(0, 10) && <> · confirmed {ago(cl.at)}</>}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-cyan/15 px-2.5 py-0.5 text-[11px] font-bold text-cyan">{cl.verdict} · {cl.score}</span>

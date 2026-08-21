@@ -12,7 +12,8 @@ export type FraudClone = {
   verdict: MatchReport["verdict"];
   score: number;
   reasons: string[];
-  at: string;
+  at: string;        // last confirmed
+  firstSeen: string; // first detected
 };
 
 export type FraudCluster = {
@@ -29,7 +30,7 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
   await ensureSchema();
   const rows = await db()<any[]>`
     SELECT d.brand_domain AS victim, d.brand_name AS d_name, d.suspect, d.suspect_name,
-           d.verdict, d.score, d.reasons, d.last_seen_at,
+           d.verdict, d.score, d.reasons, d.last_seen_at, d.first_seen_at,
            i.name AS i_name, i.email AS victim_email, i.estimated_monthly_sales AS est_sales,
            (rb.brand_domain IS NOT NULL) AS enrolled
     FROM radar_detections d
@@ -59,6 +60,7 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
       score: r.score,
       reasons: r.reasons ?? [],
       at: new Date(r.last_seen_at).toISOString(),
+      firstSeen: new Date(r.first_seen_at).toISOString(),
     });
   }
   // Biggest clusters first, then most-copied by value.

@@ -251,6 +251,16 @@ CREATE TABLE IF NOT EXISTS radar_detections (
 -- sweep never resurfaces it).
 ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS source    TEXT;
 ALTER TABLE radar_detections ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false;
+
+-- Record of each Radar sweep run (fraud | monitor) so the admin can see when it
+-- last ran and what changed (new detections since the prior run).
+CREATE TABLE IF NOT EXISTS radar_runs (
+  id       BIGSERIAL PRIMARY KEY,
+  kind     TEXT NOT NULL,          -- 'fraud' | 'monitor'
+  ran_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  summary  JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_radar_runs_kind ON radar_runs(kind, ran_at DESC);
 CREATE INDEX IF NOT EXISTS idx_radar_detections_score ON radar_detections(score DESC);
 
 -- Daily market-insights snapshots — one JSON blob per day, computed from
