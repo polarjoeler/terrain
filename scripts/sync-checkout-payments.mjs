@@ -24,25 +24,41 @@ async function main() {
   try { cache = JSON.parse(readFileSync(cachePath, "utf8")); }
   catch (e) { console.error(`Could not read ${cachePath}: ${e.message}`); process.exit(1); }
 
-  // domain -> "Gateway A;Gateway B" (verified, in checkout order)
+  // domain -> { payments, shipping, free } (checkout-verified)
   const verified = [];
   for (const [domain, rec] of Object.entries(cache)) {
     const gw = rec?.gateways;
-    if (Array.isArray(gw) && gw.length) verified.push([clean(domain), gw.join(";")]);
+    const ship = rec?.shipping;
+    const hasGw = Array.isArray(gw) && gw.length;
+    const hasShip = Array.isArray(ship) && ship.length;
+    const hasFree = typeof rec?.free_shipping === "boolean";
+    if (hasGw || hasShip || hasFree) {
+      verified.push([clean(domain), {
+        payments: hasGw ? gw.join(";") : null,
+        shipping: hasShip ? ship.join(";") : null,
+        free: hasFree ? rec.free_shipping : null,
+      }]);
+    }
   }
-  console.log(`${verified.length.toLocaleString()} domains have verified gateways in ${cachePath.split("/").pop()}.`);
+  console.log(`${verified.length.toLocaleString()} domains with verified checkout data in ${cachePath.split("/").pop()}.`);
 
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4 });
   try {
+    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`;
+    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`;
     let updated = 0;
     for (let i = 0; i < verified.length; i += 200) {
       const batch = verified.slice(i, i + 200);
-      const res = await Promise.all(batch.map(([domain, payments]) =>
-        sql`UPDATE imported_stores SET payments = ${payments} WHERE domain = ${domain} AND published`,
+      const res = await Promise.all(batch.map(([domain, v]) =>
+        sql`UPDATE imported_stores SET
+              payments           = COALESCE(${v.payments}, payments),
+              shipping_providers = COALESCE(${v.shipping}, shipping_providers),
+              free_shipping      = COALESCE(${v.free}, free_shipping)
+            WHERE domain = ${domain} AND published`,
       ));
       updated += res.reduce((n, r) => n + r.count, 0);
     }
-    console.log(`✓ Updated payments on ${updated.toLocaleString()} imported stores.`);
+    console.log(`✓ Updated checkout data (payments/shipping/free) on ${updated.toLocaleString()} imported stores.`);
   } finally {
     await sql.end();
   }

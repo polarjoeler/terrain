@@ -88,6 +88,10 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE;
+-- Checkout-verified shipping (from the browser probe): carrier/app providers
+-- (semicolon list) + whether any free-shipping option is offered.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN;
 CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
 -- Manual store tags / cohorts (Top 100, Top 1000, Partner Managed, …) curated by

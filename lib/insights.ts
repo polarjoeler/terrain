@@ -34,6 +34,8 @@ export type InsightsData = {
   themesKnown: number;
   categories: InsightItem[];
   categoriesKnown: number;
+  cities: InsightItem[];
+  citiesKnown: number;
   apps: InsightItem[];
   appsKnown: number;
   churn: {
@@ -108,6 +110,7 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
       COUNT(*) FILTER (WHERE za AND live_status = 'dead')::int             AS churn_dead,
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
+      COUNT(*) FILTER (WHERE live AND city IS NOT NULL AND city <> '')::int        AS cities_known,
       COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known
     FROM (
       SELECT *,
@@ -123,6 +126,7 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
   const storesTotal = Number(t.stores_total);
   const themesKnown = Number(t.themes_known);
   const categoriesKnown = Number(t.categories_known);
+  const citiesKnown = Number(t.cities_known);
   const appsKnown = Number(t.apps_known);
 
   // Per-store payments → provider share, type share (stores offering ≥1), and
@@ -153,11 +157,13 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
   for (const ty of PAY_TYPES) paymentsByType[ty] = { label: ty, count: typeStores[ty], pct: pct(typeStores[ty], verified) };
 
   type Agg = { label: string; n: number };
-  const [themes, categories, apps] = await Promise.all([
+  const [themes, categories, cities, apps] = await Promise.all([
     sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
         WHERE ${LIVE(country, tag)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
     sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
         WHERE ${LIVE(country, tag)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
+    sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM imported_stores
+        WHERE ${LIVE(country, tag)} AND city IS NOT NULL AND city <> '' GROUP BY city ORDER BY n DESC`,
     sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
           SELECT trim(unnest(string_to_array(apps, ';'))) AS app FROM imported_stores
           WHERE ${LIVE(country, tag)} AND apps IS NOT NULL AND apps <> ''
@@ -178,6 +184,8 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
     themesKnown,
     categories: items(categories, categoriesKnown),
     categoriesKnown,
+    cities: items(cities, citiesKnown),
+    citiesKnown,
     apps: items(apps.map((a) => ({ label: prettyApp(a.label), n: a.n })), appsKnown),
     appsKnown,
     churn: {

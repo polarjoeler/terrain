@@ -350,6 +350,7 @@ export function InsightsView({
           <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" />
           <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" />
           <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" />
+          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" />
         </div>
 
         {/* Store survival & churn — measured GOING FORWARD from our baseline, so
