@@ -38,6 +38,9 @@ export type InsightsData = {
   citiesKnown: number;
   apps: InsightItem[];
   appsKnown: number;
+  shippingByProvider: InsightItem[];
+  shippingKnown: number;      // stores with a verified shipping provider
+  freeShippingStores: number; // of those, how many offer free shipping
   churn: {
     total: number;
     checked: number;
@@ -111,6 +114,8 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
       COUNT(*) FILTER (WHERE live AND city IS NOT NULL AND city <> '')::int        AS cities_known,
+      COUNT(*) FILTER (WHERE live AND shipping_providers IS NOT NULL AND shipping_providers <> '')::int AS shipping_known,
+      COUNT(*) FILTER (WHERE live AND free_shipping)::int                          AS free_shipping_stores,
       COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known
     FROM (
       SELECT *,
@@ -156,6 +161,16 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
   const paymentsByType = {} as Record<PayType, InsightItem>;
   for (const ty of PAY_TYPES) paymentsByType[ty] = { label: ty, count: typeStores[ty], pct: pct(typeStores[ty], verified) };
 
+  // Shipping providers (checkout-verified carrier/app), semicolon-separated.
+  const shippingKnown = Number(t.shipping_known);
+  const shipRows = await sql`
+    SELECT shipping_providers FROM imported_stores
+    WHERE ${LIVE(country, tag)} AND shipping_providers IS NOT NULL AND shipping_providers <> ''`;
+  const shipCount = new Map<string, number>();
+  for (const r of shipRows)
+    for (const s of String(r.shipping_providers).split(";").map((x) => x.trim()).filter(Boolean))
+      shipCount.set(s, (shipCount.get(s) ?? 0) + 1);
+
   type Agg = { label: string; n: number };
   const [themes, categories, cities, apps] = await Promise.all([
     sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
@@ -188,6 +203,9 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
     citiesKnown,
     apps: items(apps.map((a) => ({ label: prettyApp(a.label), n: a.n })), appsKnown),
     appsKnown,
+    shippingByProvider: items([...shipCount.entries()].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n), shippingKnown),
+    shippingKnown,
+    freeShippingStores: Number(t.free_shipping_stores),
     churn: {
       total: Number(t.churn_total),
       checked: Number(t.churn_checked),
