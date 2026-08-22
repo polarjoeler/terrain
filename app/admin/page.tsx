@@ -35,6 +35,9 @@ export default async function Admin() {
             <Link href="/admin/integrations" className="text-cream/60 hover:text-cream">
               Integrations →
             </Link>
+            <Link href="/admin/churn" className="text-cream/60 hover:text-cream">
+              Churn →
+            </Link>
             <Link href="/admin/leads" className="text-cream/60 hover:text-cream">
               Edit leads →
             </Link>

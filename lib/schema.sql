@@ -92,6 +92,30 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE;
 -- (semicolon list) + whether any free-shipping option is offered.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN;
+
+-- Churn log — a snapshot of each store the moment it's confirmed dead/migrated,
+-- preserving what it was using (payments/shipping/theme/…) so we can report on
+-- who churned and what the churned cohort looked like.
+CREATE TABLE IF NOT EXISTS churn_log (
+  domain                  TEXT PRIMARY KEY,
+  name                    TEXT,
+  country                 TEXT,
+  status                  TEXT NOT NULL,       -- 'dead' | 'migrated'
+  migrated_to             TEXT,                -- detected platform when migrated
+  churned_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  first_seen              TEXT,
+  discovered_at           DATE,
+  category                TEXT,
+  theme                   TEXT,
+  city                    TEXT,
+  estimated_monthly_sales NUMERIC,
+  payments                TEXT,
+  shipping_providers      TEXT,
+  free_shipping           BOOLEAN,
+  plus                    BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS idx_churn_log_churned ON churn_log(churned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_churn_log_status  ON churn_log(status);
 CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
 -- Manual store tags / cohorts (Top 100, Top 1000, Partner Managed, …) curated by

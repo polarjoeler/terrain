@@ -167,6 +167,19 @@ async function main() {
             live_miss = ${miss},
             live_checked_at = now()
           WHERE domain = ${domain}`;
+        // Snapshot into the churn log the moment a store is confirmed gone —
+        // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
+        if (status === "dead" || status === "migrated") {
+          await sql`
+            INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
+              discovered_at, category, theme, city, estimated_monthly_sales, payments,
+              shipping_providers, free_shipping, plus)
+            SELECT domain, name, country, ${status}, ${res.platform}, first_seen,
+              discovered_at, category, theme, city, estimated_monthly_sales, payments,
+              shipping_providers, free_shipping, plus
+            FROM imported_stores WHERE domain = ${domain}
+            ON CONFLICT (domain) DO NOTHING`;
+        }
         return true;
       } catch (e) {
         if (attempt < 2) {
