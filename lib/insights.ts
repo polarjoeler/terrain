@@ -171,19 +171,20 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
     for (const s of String(r.shipping_providers).split(";").map((x) => x.trim()).filter(Boolean))
       shipCount.set(s, (shipCount.get(s) ?? 0) + 1);
 
+  // Sequential, NOT Promise.all: the db() pool is max:3, and firing several
+  // concurrent queries after a prior awaited query can deadlock the ones that
+  // queue beyond the pool (postgres.js). Sequential never exceeds the pool.
   type Agg = { label: string; n: number };
-  const [themes, categories, cities, apps] = await Promise.all([
-    sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`,
-    sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`,
-    sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND city IS NOT NULL AND city <> '' GROUP BY city ORDER BY n DESC`,
-    sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
+  const themes = await sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
+        WHERE ${LIVE(country, tag)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`;
+  const categories = await sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
+        WHERE ${LIVE(country, tag)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`;
+  const cities = await sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM imported_stores
+        WHERE ${LIVE(country, tag)} AND city IS NOT NULL AND city <> '' GROUP BY city ORDER BY n DESC`;
+  const apps = await sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
           SELECT trim(unnest(string_to_array(apps, ';'))) AS app FROM imported_stores
           WHERE ${LIVE(country, tag)} AND apps IS NOT NULL AND apps <> ''
-        ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`,
-  ]);
+        ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`;
 
   return {
     date: new Date().toISOString().slice(0, 10),

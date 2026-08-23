@@ -50,19 +50,21 @@ export async function churnReport(country?: string): Promise<ChurnReport> {
     FROM churn_log ${WHERE}`;
   const total = Number(c.total);
 
+  // Run these SEQUENTIALLY, not via Promise.all. The db() pool is small (max:3);
+  // firing 6 concurrent queries queues 3 of them, and postgres.js deadlocks those
+  // queued queries after a prior awaited query — the request then hangs forever.
+  // Sequential never exceeds the pool, and total latency is still ~1.5s.
   type Agg = { label: string; n: number };
-  const [platform, category, city, theme, payment, shipping] = await Promise.all([
-    sql<Agg[]>`SELECT migrated_to AS label, COUNT(*)::int n FROM churn_log WHERE status='migrated' AND migrated_to IS NOT NULL ${AND} GROUP BY migrated_to ORDER BY n DESC`,
-    sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM churn_log WHERE category IS NOT NULL ${AND} GROUP BY category ORDER BY n DESC`,
-    sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM churn_log WHERE city IS NOT NULL AND city <> '' ${AND} GROUP BY city ORDER BY n DESC`,
-    sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM churn_log WHERE theme IS NOT NULL AND theme <> '' ${AND} GROUP BY theme ORDER BY n DESC`,
-    sql<Agg[]>`SELECT p AS label, COUNT(*)::int n FROM (
+  const platform = await sql<Agg[]>`SELECT migrated_to AS label, COUNT(*)::int n FROM churn_log WHERE status='migrated' AND migrated_to IS NOT NULL ${AND} GROUP BY migrated_to ORDER BY n DESC`;
+  const category = await sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM churn_log WHERE category IS NOT NULL ${AND} GROUP BY category ORDER BY n DESC`;
+  const city = await sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM churn_log WHERE city IS NOT NULL AND city <> '' ${AND} GROUP BY city ORDER BY n DESC`;
+  const theme = await sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM churn_log WHERE theme IS NOT NULL AND theme <> '' ${AND} GROUP BY theme ORDER BY n DESC`;
+  const payment = await sql<Agg[]>`SELECT p AS label, COUNT(*)::int n FROM (
         SELECT trim(unnest(string_to_array(payments, ';'))) AS p FROM churn_log WHERE payments IS NOT NULL AND payments <> '' ${AND}
-      ) x WHERE p <> '' GROUP BY p ORDER BY n DESC`,
-    sql<Agg[]>`SELECT s AS label, COUNT(*)::int n FROM (
+      ) x WHERE p <> '' GROUP BY p ORDER BY n DESC`;
+  const shipping = await sql<Agg[]>`SELECT s AS label, COUNT(*)::int n FROM (
         SELECT trim(unnest(string_to_array(shipping_providers, ';'))) AS s FROM churn_log WHERE shipping_providers IS NOT NULL AND shipping_providers <> '' ${AND}
-      ) x WHERE s <> '' GROUP BY s ORDER BY n DESC`,
-  ]);
+      ) x WHERE s <> '' GROUP BY s ORDER BY n DESC`;
 
   const migrated = Number(c.migrated);
   const withPay = payment.reduce((n, r) => n + Number(r.n), 0);
