@@ -115,7 +115,8 @@ export function AdminImport({
     const failures: string[] = [];
     try {
       for (let i = 0; i < list.length; i++) {
-        setMsg(`Reading screenshot ${i + 1} of ${list.length}…`);
+        const kind = list[i].type === "application/pdf" ? "PDF" : "screenshot";
+        setMsg(`Reading ${kind} ${i + 1} of ${list.length}…`);
         try {
           const base64 = await toBase64(list[i]);
           const res = await fetch("/api/admin/import-image", {
@@ -142,7 +143,7 @@ export function AdminImport({
       const added = dataLines.length - startCount;
       const note = failures.length ? ` (${failures.length} failed)` : "";
       setMsg(
-        `Added ${added} row${added === 1 ? "" : "s"} from ${list.length} image${list.length === 1 ? "" : "s"}${note} — ${dataLines.length} total. Add more images or review and import below.`,
+        `Added ${added} row${added === 1 ? "" : "s"} from ${list.length} file${list.length === 1 ? "" : "s"}${note} — ${dataLines.length} total. Add more files or review and import below.`,
       );
     } finally {
       setBusy(false);
@@ -228,19 +229,21 @@ export function AdminImport({
           className="mt-4 block w-full text-sm text-cream/70 file:mr-4 file:rounded-full file:border-0 file:bg-cream file:px-4 file:py-2 file:text-sm file:font-medium file:text-ink hover:file:bg-paper"
         />
 
-        {/* Screenshot → CSV via Claude vision */}
+        {/* Screenshot / PDF → CSV via Claude vision */}
         <div className="mt-6 border-t border-cream/10 pt-6">
-          <h3 className="text-lg font-semibold">…or extract from a screenshot</h3>
+          <h3 className="text-lg font-semibold">…or extract from screenshots or a PDF</h3>
           <p className="mt-1 text-sm text-cream/50">
-            Select several images at once (⌘/Ctrl-click), or keep adding more —
-            every store table (StoreLeads grid, spreadsheet, listing) is read and
-            its rows <span className="text-cream/70">accumulate into one CSV</span> to
-            review before importing.
+            Select several images at once (⌘/Ctrl-click), drop in a{" "}
+            <span className="text-cream/70">multi-page PDF</span> (every page is read),
+            or keep adding more — every store table (StoreLeads grid, spreadsheet,
+            listing) is read and its rows{" "}
+            <span className="text-cream/70">accumulate into one CSV</span> to review
+            before importing.
           </p>
           <input
             ref={imgRef}
             type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
+            accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.pdf"
             multiple
             disabled={busy}
             onChange={(e) => e.target.files?.length && extractFromImages(e.target.files)}

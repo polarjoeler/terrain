@@ -7,9 +7,9 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { extractStoresCsv, type VisionMediaType } from "@/lib/vision-import";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300; // PDFs (many pages) can take longer than a single image
 
-const ALLOWED: VisionMediaType[] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const ALLOWED: VisionMediaType[] = ["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"];
 
 export async function POST(req: Request) {
   if (!isAdmin(await currentUser())) {
@@ -23,13 +23,18 @@ export async function POST(req: Request) {
   }
   const image = (body.image ?? "").replace(/^data:[^,]+,/, ""); // tolerate a data: URL
   const mediaType = body.mediaType as VisionMediaType;
-  if (!image) return NextResponse.json({ error: "No image" }, { status: 400 });
+  if (!image) return NextResponse.json({ error: "No file" }, { status: 400 });
   if (!ALLOWED.includes(mediaType)) {
-    return NextResponse.json({ error: "Unsupported image type (use PNG/JPEG/GIF/WebP)" }, { status: 400 });
+    return NextResponse.json({ error: "Unsupported file type (use PNG/JPEG/GIF/WebP or PDF)" }, { status: 400 });
   }
-  // ~7MB base64 ≈ 5MB image — Anthropic's per-image limit.
-  if (image.length > 7_500_000) {
-    return NextResponse.json({ error: "Image too large (max ~5MB)" }, { status: 400 });
+  // PDFs carry many pages, so allow a larger payload; ~45MB base64 ≈ 32MB PDF
+  // (Anthropic's document limit). Images stay at ~5MB.
+  const limit = mediaType === "application/pdf" ? 45_000_000 : 7_500_000;
+  if (image.length > limit) {
+    return NextResponse.json(
+      { error: mediaType === "application/pdf" ? "PDF too large (max ~32MB)" : "Image too large (max ~5MB)" },
+      { status: 400 },
+    );
   }
   try {
     const csv = await extractStoresCsv(image, mediaType);

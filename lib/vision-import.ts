@@ -1,15 +1,20 @@
-/** Turn a screenshot of a store table into import-ready CSV using Claude vision.
+/** Turn a screenshot OR a PDF of a store table into import-ready CSV using Claude
+ *  vision.
  *
- *  Admin uploads an image (e.g. a StoreLeads grid); we ask Claude to read every
- *  visible store row and return CSV in the columns importCsv() understands. The
- *  admin reviews/edits the CSV before it's committed — OCR is strong but not
- *  perfect, so a human confirm step is deliberate. Matches the app's existing
- *  raw-HTTP Anthropic pattern (scripts/ai-enrich.mjs); no SDK dependency. */
+ *  Admin uploads an image (e.g. a StoreLeads grid) or a multi-page PDF; we ask
+ *  Claude to read every visible store row and return CSV in the columns
+ *  importCsv() understands. A PDF is sent as a document block so Claude reads
+ *  ALL its pages in one request. The admin reviews/edits the CSV before it's
+ *  committed — OCR is strong but not perfect, so a human confirm step is
+ *  deliberate. Matches the app's existing raw-HTTP Anthropic pattern
+ *  (scripts/ai-enrich.mjs); no SDK dependency. */
 
 const VISION_MODEL = process.env.VISION_MODEL ?? "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-export type VisionMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+export type VisionImageType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+export type VisionMediaType = VisionImageType | "application/pdf";
+export const isPdf = (m: VisionMediaType): boolean => m === "application/pdf";
 
 const PROMPT = `You are extracting a table of e-commerce stores from a screenshot (e.g. a StoreLeads grid, a spreadsheet, or a directory listing).
 
@@ -43,18 +48,22 @@ export async function extractStoresCsv(base64: string, mediaType: VisionMediaTyp
     },
     body: JSON.stringify({
       model: VISION_MODEL,
-      max_tokens: 8000,
+      // A multi-page PDF can hold many more rows than a single screenshot.
+      max_tokens: isPdf(mediaType) ? 16000 : 8000,
       messages: [
         {
           role: "user",
           content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+            isPdf(mediaType)
+              ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
+              : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
             { type: "text", text: PROMPT },
           ],
         },
       ],
     }),
-    signal: AbortSignal.timeout(90_000),
+    // PDFs take longer to process than a single image.
+    signal: AbortSignal.timeout(isPdf(mediaType) ? 180_000 : 90_000),
   });
 
   if (!res.ok) {
@@ -71,7 +80,7 @@ export async function extractStoresCsv(base64: string, mediaType: VisionMediaTyp
   // Strip an accidental ```csv fence if the model added one.
   const csv = text.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
   if (!/^domain\b/i.test(csv)) {
-    throw new Error("Could not read a store table from that image — try a clearer screenshot.");
+    throw new Error(`Could not read a store table from that ${isPdf(mediaType) ? "PDF" : "image"} — try a clearer file.`);
   }
   return csv;
 }

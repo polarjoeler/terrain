@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
@@ -19,6 +19,23 @@ const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "
 const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
   tone === "mint" ? "bg-mint" : tone === "lilac" ? "bg-lilac" : tone === "cyan" ? "bg-cyan" : "bg-orange";
+
+/** Bar track whose fill grows from 0 on mount — the shared "alive" animation. */
+function AnimatedFill({ pct, tone }: { pct: number; tone: string }) {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setM(true)));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return (
+    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+      <div
+        className={`h-full rounded-full ${fill(tone)}`}
+        style={{ width: m ? `${Math.min(pct, 100)}%` : "0%", transition: "width .9s cubic-bezier(.2,.8,.2,1)" }}
+      />
+    </div>
+  );
+}
 
 /** Absolute change in store COUNT vs the comparison period (no % — a real number
  *  of stores). Shown on the distribution drill-ins so "change" is unambiguous. */
@@ -92,11 +109,9 @@ function DistroCard({
           const prev = bmap?.get(i.label);
           const cdel = prev != null ? i.count - prev : null;
           return (
-            <div key={i.label} className="flex items-center gap-3">
-              <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
-              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                <div className={`h-full rounded-full ${fill(tone)}`} style={{ width: `${Math.min(i.pct, 100)}%` }} />
-              </div>
+            <div key={i.label} className="-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05]" title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}>
+              <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
+              <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
               {bmap && <div className="w-16 shrink-0 text-right text-xs tabular-nums">{<CountDelta v={cdel} />}</div>}
@@ -415,11 +430,9 @@ function DrillList({
           const prev = bmap?.get(i.label);
           const cdel = prev != null ? i.count - prev : null;
           return (
-            <div key={i.label} className="flex items-center gap-3">
-              <div className="w-32 shrink-0 truncate text-sm text-cream/75" title={i.label}>{i.label}</div>
-              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                <div className={`h-full rounded-full ${fill(tone)}`} style={{ width: `${Math.min(i.pct, 100)}%` }} />
-              </div>
+            <div key={i.label} className="-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05]" title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}>
+              <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
+              <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
               {showBaseline && <div className="w-16 shrink-0 text-right text-xs tabular-nums"><CountDelta v={cdel} /></div>}

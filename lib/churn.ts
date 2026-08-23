@@ -21,7 +21,7 @@ const items = (rows: { label: string; n: number }[], denom: number): InsightItem
 
 export type ChurnedStore = {
   domain: string; name: string | null; status: string; migratedTo: string | null;
-  churnedAt: string; category: string | null; city: string | null;
+  churnedAt: string; category: string | null; city: string | null; theme: string | null;
   estMonthlySales: number | null; payments: string | null; shipping: string | null;
 };
 
@@ -70,7 +70,7 @@ export async function churnReport(country?: string): Promise<ChurnReport> {
 
   const recent = await sql<ChurnedStore[]>`
     SELECT domain, name, status, migrated_to AS "migratedTo", churned_at AS "churnedAt",
-           category, city, estimated_monthly_sales AS "estMonthlySales", payments,
+           category, city, theme, estimated_monthly_sales AS "estMonthlySales", payments,
            shipping_providers AS shipping
     FROM churn_log ${WHERE} ORDER BY churned_at DESC, estimated_monthly_sales DESC NULLS LAST LIMIT 60`;
 
