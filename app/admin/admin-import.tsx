@@ -101,55 +101,99 @@ export function AdminImport({
       fr.readAsDataURL(file);
     });
 
-  // One or more screenshots → Claude vision → merged, editable CSV preview.
+  // The host caps request bodies at ~4.5MB and base64 inflates ~33%, so keep each
+  // upload's base64 under this. A PDF over the cap is split into per-page uploads.
+  const UPLOAD_CAP = 4_400_000;
+
+  // POST one base64 payload to the extractor. Returns CSV lines, or an error string.
+  async function postExtract(base64: string, mediaType: string): Promise<{ lines?: string[]; error?: string }> {
+    const res = await fetch("/api/admin/import-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: base64, mediaType }),
+    });
+    // A platform-level rejection (413 too-large, 502/504 timeout) returns HTML, not
+    // JSON — read as text first so we surface the real status instead of a throw.
+    const raw = await res.text();
+    let j: { csv?: string; error?: string } = {};
+    try { j = JSON.parse(raw); } catch { /* non-JSON error page */ }
+    if (!res.ok) {
+      return {
+        error: j.error
+          ?? (res.status === 413 ? "too large for the server (max ~4.5MB request)"
+            : res.status === 504 || res.status === 502 ? "timed out — fewer pages per file"
+            : `server error ${res.status}`),
+      };
+    }
+    return { lines: String(j.csv ?? "").trim().split("\n") };
+  }
+
+  // Split a PDF into one base64-encoded single-page PDF per page, entirely in the
+  // browser (pdf-lib) — so a large multi-page PDF uploads as many small requests
+  // and never hits the body-size cap.
+  async function pdfToPageBase64s(file: File): Promise<string[]> {
+    const { PDFDocument } = await import("pdf-lib");
+    const src = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+    const pages: string[] = [];
+    for (let p = 0; p < src.getPageCount(); p++) {
+      const one = await PDFDocument.create();
+      const [copied] = await one.copyPages(src, [p]);
+      one.addPage(copied);
+      const bytes = await one.save();
+      let bin = "";
+      for (let k = 0; k < bytes.length; k += 0x8000) bin += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+      pages.push(btoa(bin));
+    }
+    return pages;
+  }
+
+  // One or more screenshots / PDFs → Claude vision → merged, editable CSV preview.
   // Uploads ACCUMULATE: select several at once, or add more in a later upload —
   // every extracted row piles into the same CSV (use Cancel to start over).
   async function extractFromImages(files: FileList) {
     const list = Array.from(files);
     setBusy(true);
-    // Seed from whatever is already in the preview so new images append to it.
+    // Seed from whatever is already in the preview so new files append to it.
     const existing = preview.trim() ? preview.trim().split("\n") : [];
     let header = existing[0] ?? "";
     const dataLines: string[] = existing.slice(1);
     const startCount = dataLines.length;
     const failures: string[] = [];
+    const absorb = (lines?: string[]) => {
+      if (!lines || !lines.length) return;
+      if (!header) header = lines[0];
+      dataLines.push(...lines.slice(1)); // drop each payload's header row
+    };
     try {
       for (let i = 0; i < list.length; i++) {
-        const kind = list[i].type === "application/pdf" ? "PDF" : "screenshot";
-        setMsg(`Reading ${kind} ${i + 1} of ${list.length}…`);
+        const isPdf = list[i].type === "application/pdf";
+        const kind = isPdf ? "PDF" : "screenshot";
         try {
           const base64 = await toBase64(list[i]);
-          // The host caps request bodies at ~4.5MB; base64 inflates ~33%, so bail
-          // early with a clear message instead of a mystery network failure.
-          if (base64.length > 4_400_000) {
+          if (base64.length <= UPLOAD_CAP) {
+            setMsg(`Reading ${kind} ${i + 1} of ${list.length}…`);
+            const r = await postExtract(base64, list[i].type);
+            if (r.error) { failures.push(`#${i + 1}: ${r.error}`); continue; }
+            absorb(r.lines);
+          } else if (isPdf) {
+            // Too big to send whole — split into single-page uploads.
+            setMsg(`Splitting large PDF ${i + 1}…`);
+            let pages: string[];
+            try { pages = await pdfToPageBase64s(list[i]); }
+            catch { failures.push(`#${i + 1}: couldn't read that PDF (corrupt or password-protected?)`); continue; }
+            for (let p = 0; p < pages.length; p++) {
+              setMsg(`Reading PDF ${i + 1}: page ${p + 1} of ${pages.length}…`);
+              if (pages[p].length > UPLOAD_CAP) { failures.push(`#${i + 1} p${p + 1}: single page too large`); continue; }
+              const r = await postExtract(pages[p], "application/pdf");
+              if (r.error) { failures.push(`#${i + 1} p${p + 1}: ${r.error}`); continue; }
+              absorb(r.lines);
+            }
+          } else {
             const mb = (list[i].size / 1_048_576).toFixed(1);
-            failures.push(`#${i + 1}: ${kind} too big to upload (${mb}MB — max ~3MB). Split it into fewer pages.`);
-            continue;
+            failures.push(`#${i + 1}: image too big (${mb}MB — max ~3MB)`);
           }
-          const res = await fetch("/api/admin/import-image", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ image: base64, mediaType: list[i].type }),
-          });
-          // A platform-level rejection (413 too-large, 504 timeout) returns HTML,
-          // not JSON — read as text first so we surface the real status.
-          const raw = await res.text();
-          let j: { csv?: string; rows?: number; error?: string } = {};
-          try { j = JSON.parse(raw); } catch { /* non-JSON error page */ }
-          if (!res.ok) {
-            const why = j.error
-              ?? (res.status === 413 ? "file too large for the server (max ~4.5MB request)"
-                : res.status === 504 || res.status === 502 ? "timed out — try a PDF with fewer pages"
-                : `server error ${res.status}`);
-            failures.push(`#${i + 1}: ${why}`);
-            continue;
-          }
-          const lines = String(j.csv ?? "").trim().split("\n");
-          if (!header) header = lines[0];
-          dataLines.push(...lines.slice(1)); // drop each file's header row
         } catch (e) {
-          const why = e instanceof Error ? e.message : "read error";
-          failures.push(`#${i + 1}: ${why}`);
+          failures.push(`#${i + 1}: ${e instanceof Error ? e.message : "read error"}`);
         }
       }
       if (!header) {
@@ -160,9 +204,9 @@ export function AdminImport({
       setPreview(nextCsv);
       checkDupes(nextCsv);
       const added = dataLines.length - startCount;
-      const note = failures.length ? ` (${failures.length} failed)` : "";
+      const note = failures.length ? ` — ${failures.length} failed: ${failures.slice(0, 3).join(" · ")}` : "";
       setMsg(
-        `Added ${added} row${added === 1 ? "" : "s"} from ${list.length} file${list.length === 1 ? "" : "s"}${note} — ${dataLines.length} total. Add more files or review and import below.`,
+        `Added ${added} row${added === 1 ? "" : "s"} from ${list.length} file${list.length === 1 ? "" : "s"}${note}${note ? "" : "."} ${dataLines.length} total. Add more files or review and import below.`,
       );
     } finally {
       setBusy(false);
@@ -253,9 +297,10 @@ export function AdminImport({
           <h3 className="text-lg font-semibold">…or extract from screenshots or a PDF</h3>
           <p className="mt-1 text-sm text-cream/50">
             Select several images at once (⌘/Ctrl-click), drop in a{" "}
-            <span className="text-cream/70">multi-page PDF</span> (every page is read),
-            or keep adding more — every store table (StoreLeads grid, spreadsheet,
-            listing) is read and its rows{" "}
+            <span className="text-cream/70">multi-page PDF</span> (every page is read —
+            large PDFs are split automatically, so size is no limit), or keep adding
+            more — every store table (StoreLeads grid, spreadsheet, listing) is read
+            and its rows{" "}
             <span className="text-cream/70">accumulate into one CSV</span> to review
             before importing.
           </p>
