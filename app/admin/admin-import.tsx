@@ -119,18 +119,37 @@ export function AdminImport({
         setMsg(`Reading ${kind} ${i + 1} of ${list.length}…`);
         try {
           const base64 = await toBase64(list[i]);
+          // The host caps request bodies at ~4.5MB; base64 inflates ~33%, so bail
+          // early with a clear message instead of a mystery network failure.
+          if (base64.length > 4_400_000) {
+            const mb = (list[i].size / 1_048_576).toFixed(1);
+            failures.push(`#${i + 1}: ${kind} too big to upload (${mb}MB — max ~3MB). Split it into fewer pages.`);
+            continue;
+          }
           const res = await fetch("/api/admin/import-image", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ image: base64, mediaType: list[i].type }),
           });
-          const j = await res.json();
-          if (!res.ok) { failures.push(`#${i + 1}: ${j.error ?? "failed"}`); continue; }
-          const lines = String(j.csv).trim().split("\n");
+          // A platform-level rejection (413 too-large, 504 timeout) returns HTML,
+          // not JSON — read as text first so we surface the real status.
+          const raw = await res.text();
+          let j: { csv?: string; rows?: number; error?: string } = {};
+          try { j = JSON.parse(raw); } catch { /* non-JSON error page */ }
+          if (!res.ok) {
+            const why = j.error
+              ?? (res.status === 413 ? "file too large for the server (max ~4.5MB request)"
+                : res.status === 504 || res.status === 502 ? "timed out — try a PDF with fewer pages"
+                : `server error ${res.status}`);
+            failures.push(`#${i + 1}: ${why}`);
+            continue;
+          }
+          const lines = String(j.csv ?? "").trim().split("\n");
           if (!header) header = lines[0];
           dataLines.push(...lines.slice(1)); // drop each file's header row
-        } catch {
-          failures.push(`#${i + 1}: read error`);
+        } catch (e) {
+          const why = e instanceof Error ? e.message : "read error";
+          failures.push(`#${i + 1}: ${why}`);
         }
       }
       if (!header) {
