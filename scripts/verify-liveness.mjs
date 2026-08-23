@@ -165,18 +165,24 @@ async function main() {
             live_status = ${status},
             live_platform = ${res.platform},
             live_miss = ${miss},
-            live_checked_at = now()
+            live_checked_at = now(),
+            -- Stamp the first time we CONFIRM this store live (never overwrite it).
+            -- This is the anchor that separates real churn from historic die-off.
+            first_verified_live_at = CASE WHEN ${status} = 'active'
+              THEN COALESCE(first_verified_live_at, now()) ELSE first_verified_live_at END
           WHERE domain = ${domain}`;
         // Snapshot into the churn log the moment a store is confirmed gone —
         // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
+        // `historic` = we never verified it live before it died (dead at first
+        // contact, e.g. a bulk-imported old site) → excluded from period churn.
         if (status === "dead" || status === "migrated") {
           await sql`
             INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
               discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus)
+              shipping_providers, free_shipping, plus, historic)
             SELECT domain, name, country, ${status}, ${res.platform}, first_seen,
               discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus
+              shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL)
             FROM imported_stores WHERE domain = ${domain}
             ON CONFLICT (domain) DO NOTHING`;
         }

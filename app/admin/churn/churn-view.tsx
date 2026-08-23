@@ -53,7 +53,7 @@ export function ChurnView({ report: r }: { report: ChurnReport }) {
   ];
 
   const tiles = [
-    { n: r.total, l: "total churned" },
+    { n: r.total, l: "real churn (tracked)" },
     { n: r.dead, l: "dead" },
     { n: r.migrated, l: "migrated off Shopify" },
     { n: r.last30, l: "in last 30 days" },
@@ -70,6 +70,22 @@ export function ChurnView({ report: r }: { report: ChurnReport }) {
           </div>
         ))}
       </div>
+      <p className="mt-3 text-xs text-cream/40">
+        &ldquo;Real churn&rdquo; = stores we confirmed <em>live</em>, that later died or migrated off
+        Shopify. Bulk-imported sites that were already dead when we first checked them are
+        <em> historic die-off</em> — counted separately in the panel below, never here.
+      </p>
+
+      {r.total === 0 && (
+        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6 text-cream/70">
+          <p className="text-sm">
+            No tracked churn yet — every store we&rsquo;re watching is still live. Real churn
+            accrues from here as stores we verified live drop off; the{" "}
+            <span className="text-cream">{r.historic.total.toLocaleString()}</span> already-dead
+            imported sites are in the legacy panel below.
+          </p>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-5 md:grid-cols-2">
         {cards.map((c) => (
@@ -141,6 +157,25 @@ export function ChurnView({ report: r }: { report: ChurnReport }) {
           </table>
         </div>
       </div>
+
+      {r.historic.total > 0 && (
+        <div className="mt-8 rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h3 className="text-lg font-semibold text-cream">Legacy die-off <span className="font-normal text-cream/45">· imported, not churn</span></h3>
+            <CountUp value={r.historic.total} className="font-display text-2xl text-cream/80" />
+          </div>
+          <p className="mt-1 max-w-2xl text-xs text-cream/45">
+            Old sites from the bulk import that were <em>already dead</em> the first time we checked
+            them — so they never churned under our tracking. Shown for data-quality and vintage
+            analysis only; excluded from every metric above. As liveness re-checks run, genuinely
+            new deaths land in &ldquo;real churn&rdquo; instead.
+          </p>
+          <div className="mt-4">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-cream/40">By vintage — the year each dead site was first seen</p>
+            <InteractiveBars data={r.historic.byVintage} tone="orange" initialLimit={12} />
+          </div>
+        </div>
+      )}
     </>
   );
 }

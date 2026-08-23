@@ -36,7 +36,9 @@ export default async function ChurnReport({ searchParams }: { searchParams: Prom
           <div>
             <h1 className="font-display text-4xl md:text-5xl">Churn report</h1>
             <p className="mt-2 max-w-xl text-cream/60">
-              Every store confirmed dead or migrated off Shopify, snapshotted with what it was using.
+              Real churn — stores we confirmed live that later died or migrated off Shopify,
+              snapshotted with what they were using. Already-dead imported sites are kept
+              separate as historic die-off.
             </p>
           </div>
           {countries.length > 1 && (

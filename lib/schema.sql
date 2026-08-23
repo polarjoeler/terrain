@@ -82,6 +82,10 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_status TEXT;      -- a
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_platform TEXT;    -- detected platform when migrated
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_checked_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL DEFAULT 0;
+-- First time a liveness check CONFIRMED this store live. A death only counts as
+-- real (forward) churn if this is set before it — otherwise the store was dead at
+-- first contact (e.g. a bulk-imported old site) and its death is HISTORIC, not churn.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS first_verified_live_at TIMESTAMPTZ;
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
@@ -112,10 +116,16 @@ CREATE TABLE IF NOT EXISTS churn_log (
   payments                TEXT,
   shipping_providers      TEXT,
   free_shipping           BOOLEAN,
-  plus                    BOOLEAN
+  plus                    BOOLEAN,
+  -- true = store was dead at first contact (never verified live under our tracking),
+  -- e.g. a bulk-imported old site. These are HISTORIC die-off, excluded from
+  -- period-churn metrics. false = real forward churn (we saw it live, then it died).
+  historic                BOOLEAN NOT NULL DEFAULT false
 );
+ALTER TABLE churn_log ADD COLUMN IF NOT EXISTS historic BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_churn_log_churned ON churn_log(churned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_churn_log_status  ON churn_log(status);
+CREATE INDEX IF NOT EXISTS idx_churn_log_historic ON churn_log(historic);
 CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
 -- Manual store tags / cohorts (Top 100, Top 1000, Partner Managed, …) curated by

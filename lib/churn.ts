@@ -34,12 +34,18 @@ export type ChurnReport = {
   byPayment: InsightItem[];    // what churned stores were using
   byShipping: InsightItem[];
   recent: ChurnedStore[];
+  // Historic die-off: stores that were dead at first contact (bulk-imported old
+  // sites we never verified live). NOT counted in any metric above.
+  historic: { total: number; byVintage: InsightItem[] };
 };
 
 export async function churnReport(country?: string): Promise<ChurnReport> {
   const sql = db();
-  const WHERE = country ? sql`WHERE country = ${country}` : sql``;
-  const AND = country ? sql`AND country = ${country}` : sql``;
+  // Every "real churn" query is scoped to historic = false — stores we actually
+  // verified live before they died. The one-time import's dead-on-arrival sites
+  // (historic = true) are reported separately and never inflate these numbers.
+  const WHERE = country ? sql`WHERE historic = false AND country = ${country}` : sql`WHERE historic = false`;
+  const AND = country ? sql`AND historic = false AND country = ${country}` : sql`AND historic = false`;
 
   const [c] = await sql`
     SELECT COUNT(*)::int total,
@@ -76,6 +82,16 @@ export async function churnReport(country?: string): Promise<ChurnReport> {
            shipping_providers AS shipping
     FROM churn_log ${WHERE} ORDER BY churned_at DESC, estimated_monthly_sales DESC NULLS LAST LIMIT 60`;
 
+  // Historic die-off (dead at first contact) — reported separately. Break it down
+  // by vintage (the site's first_seen year) so the legacy list-cleaning is legible.
+  const histWhere = country ? sql`WHERE historic = true AND country = ${country}` : sql`WHERE historic = true`;
+  const [h] = await sql`SELECT COUNT(*)::int total FROM churn_log ${histWhere}`;
+  const histTotal = Number(h.total);
+  const vintage = await sql<Agg[]>`
+    SELECT LEFT(first_seen, 4) AS label, COUNT(*)::int n
+    FROM churn_log ${histWhere} AND first_seen ~ '^[0-9]{4}'
+    GROUP BY 1 ORDER BY label DESC`;
+
   return {
     total, dead: Number(c.dead), migrated, last30: Number(c.last30), last90: Number(c.last90),
     byPlatform: items(platform, migrated),
@@ -85,5 +101,6 @@ export async function churnReport(country?: string): Promise<ChurnReport> {
     byPayment: items(payment, withPay),
     byShipping: items(shipping, withShip),
     recent: recent.map((r) => ({ ...r, churnedAt: new Date(r.churnedAt).toISOString(), estMonthlySales: r.estMonthlySales != null ? Number(r.estMonthlySales) : null })),
+    historic: { total: histTotal, byVintage: items(vintage, histTotal) },
   };
 }
