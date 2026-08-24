@@ -42,22 +42,28 @@ async function main() {
   }
   console.log(`${verified.length.toLocaleString()} domains with verified checkout data in ${cachePath.split("/").pop()}.`);
 
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4 });
+  const POOL = 8, CONCURRENCY = 6; // CONCURRENCY < POOL so queries never queue past
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: POOL });
   try {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`;
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`;
-    let updated = 0;
-    for (let i = 0; i < verified.length; i += 200) {
-      const batch = verified.slice(i, i + 200);
-      const res = await Promise.all(batch.map(([domain, v]) =>
-        sql`UPDATE imported_stores SET
+    // Bounded worker pool — NOT Promise.all over the whole batch. Firing hundreds
+    // of concurrent queries at a small pool makes postgres.js deadlock the ones
+    // that queue beyond `max` (the sync then hangs and the pipeline skips it).
+    // A few workers, each draining the list sequentially, never exceeds the pool.
+    let updated = 0, idx = 0;
+    async function worker() {
+      while (idx < verified.length) {
+        const [domain, v] = verified[idx++];
+        const r = await sql`UPDATE imported_stores SET
               payments           = COALESCE(${v.payments}, payments),
               shipping_providers = COALESCE(${v.shipping}, shipping_providers),
               free_shipping      = COALESCE(${v.free}, free_shipping)
-            WHERE domain = ${domain} AND published`,
-      ));
-      updated += res.reduce((n, r) => n + r.count, 0);
+            WHERE domain = ${domain} AND published`;
+        updated += r.count;
+      }
     }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     console.log(`✓ Updated checkout data (payments/shipping/free) on ${updated.toLocaleString()} imported stores.`);
   } finally {
     await sql.end();
