@@ -25,6 +25,10 @@ const DRY = process.argv.includes("--dry");
 const ALL = process.argv.includes("--all");
 const limArg = process.argv.indexOf("--limit");
 const LIMIT = ALL ? null : limArg > -1 ? Number(process.argv[limArg + 1]) : 200;
+// --country KE,NG restricts enrichment to those markets (new imports rank last by
+// sales, so a plain --limit run never reaches them). Comma-separated, case-insensitive.
+const cIdx = process.argv.indexOf("--country");
+const COUNTRIES = cIdx > -1 && process.argv[cIdx + 1] ? process.argv[cIdx + 1].toUpperCase().split(",") : null;
 const CONCURRENCY = 5;
 
 const TAXONOMY = [
@@ -182,6 +186,7 @@ async function main() {
         AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
         AND ai_enriched_at IS NULL
         AND (category IS NULL OR description IS NULL)
+        ${COUNTRIES ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
       ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT ? sql`LIMIT ${LIMIT}` : sql``}`;
 
