@@ -69,15 +69,19 @@ async function main() {
     //    highest-value live stores that still lack a provider.
     // Curated cohorts (Top 100, Top 1000) jump the queue — payment companies
     // care most about verified data there, so probe those first, then by value.
+    // New markets (KE/NG) jump the queue ahead of the null-sales ZA long tail —
+    // freshly imported, they have no sales estimate yet so would otherwise rank
+    // last and never get probed. We want gateway coverage in the new markets fast.
     const queue = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
-        (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000
+        (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000,
+        (UPPER(country) IN ('KE', 'NG')) AS new_market
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
         ${PLUS ? sql`AND plus = true` : sql`AND (payments IS NULL OR payments = '')`}
-      ORDER BY t100 DESC, t1000 DESC, estimated_monthly_sales DESC NULLS LAST
+      ORDER BY t100 DESC, t1000 DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     mkdirSync(dirname(OUT), { recursive: true });
