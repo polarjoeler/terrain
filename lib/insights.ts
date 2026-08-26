@@ -121,10 +121,11 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
       SELECT *,
         (published AND country = ${country} ${inTag} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
         (published AND country = ${country} ${inTag}) AS za,
-        -- "new this week" = added to Terrain in the last 7 days (created_at).
-        -- NOT first_seen: that's the store's historical launch date (2006-2023),
-        -- so it would always read 0. Matches getHomeStats so the pages agree.
-        (created_at >= now() - interval '7 days') AS fresh
+        -- "new this week" = genuinely DISCOVERED by our engine in the last 7 days.
+        -- Use discovered_at (set only by the CT discovery feed), NOT created_at:
+        -- created_at also fires on bulk imports, so a backfill of old stores would
+        -- spike this misleadingly. Imports have discovered_at NULL → excluded.
+        (discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7) AS fresh
       FROM imported_stores
     ) s`;
 
@@ -226,7 +227,7 @@ export async function getHomeStats(country = "ZA"): Promise<import("./sheets").F
   const [t] = await sql`
     SELECT
       COUNT(*) FILTER (WHERE live)::int                                        AS stores,
-      COUNT(*) FILTER (WHERE live AND created_at >= now() - interval '7 days')::int AS new_week,
+      COUNT(*) FILTER (WHERE live AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7)::int AS new_week,
       COUNT(*) FILTER (WHERE live AND email IS NOT NULL AND email <> '')::int  AS with_email,
       COUNT(*) FILTER (WHERE live AND plus)::int                              AS plus
     FROM (
