@@ -118,11 +118,14 @@ export async function providerInsights(provider: string, country?: string): Prom
     WHERE ${LIVE} ${AND_C} AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7`;
   const newStores7 = Number(nd.n7);
 
-  // Denominator for vintage MARKET SHARE: all verified stores by first_seen year.
+  // Denominators for MARKET SHARE: all verified stores, by first_seen year and by country.
   const allByYear = new Map<string, number>();
+  const verifiedByCountry = new Map<string, number>();
   for (const r of rows) {
     const yr = (r.first_seen && /^\d{4}/.test(r.first_seen)) ? r.first_seen.slice(0, 4) : "unknown";
     allByYear.set(yr, (allByYear.get(yr) ?? 0) + 1);
+    const c = (r.country || "??").toUpperCase();
+    verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
   }
   // Competitors grouped by payment type (PSP / BNPL / APM).
   const coOccurrenceByType: Record<PayType, InsightItem[]> = { PSP: [], BNPL: [], APM: [] };
@@ -142,7 +145,11 @@ export async function providerInsights(provider: string, country?: string): Prom
   return {
     provider,
     total, verifiedBase,
-    byCountry: items(byCountry, total),
+    // pct = MARKET SHARE in that country (provider stores ÷ verified stores there),
+    // count = provider store count. Sorted by share so the strongest market leads.
+    byCountry: [...byCountry.entries()]
+      .map(([label, count]) => ({ label, count, pct: pct(count, verifiedByCountry.get(label) ?? count) }))
+      .sort((a, b) => b.pct - a.pct || b.count - a.count),
     newLast7, newLast30, newStores7, shareOfNew7: pct(newLast7, newStores7),
     exclusive, exclusivePct: pct(exclusive, total),
     topSpot, topSpotPct: pct(topSpot, total),

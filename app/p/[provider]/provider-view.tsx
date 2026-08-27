@@ -136,7 +136,7 @@ export function ProviderView({
         <header className="mt-8">
           <h1 className="font-display text-4xl md:text-5xl">How {d.provider} is doing across the market</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Checkout-verified positioning across the {marketLabel(d.byCountry[0]?.label ?? "ZA")} Shopify market — where {d.provider}{" "}
+            Checkout-verified positioning {country ? `in the ${marketLabel(country)} Shopify market` : "across every market we track"} — where {d.provider}{" "}
             leads, where it's the only option, who it's up against, and the stores choosing it.
           </p>
         </header>
@@ -200,8 +200,23 @@ export function ProviderView({
 
         {/* breakdowns */}
         <div className="mt-6 grid gap-5 md:grid-cols-2">
+          <Card title="Market share by market" subtitle={`Of each market's checkout-verified stores, the % using ${d.provider}`}>
+            {d.byCountry.length ? (
+              <div className="space-y-2.5">
+                {d.byCountry.map((c) => (
+                  <div key={c.label} className="flex items-center gap-3">
+                    <div className="w-28 shrink-0 truncate text-sm text-cream/75">{marketLabel(c.label)}</div>
+                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                      <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
+                    </div>
+                    <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
+                    <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-cream/40">No market data.</p>}
+          </Card>
           <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % now using ${d.provider} (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} /></Card>
-          <Card title="Markets" subtitle="Where these stores are"><InteractiveBars data={d.byCountry.map((c) => ({ ...c, label: marketLabel(c.label) }))} tone="mint" /></Card>
           <Card title="Store size" subtitle="Estimated monthly sales"><InteractiveBars data={d.sizeBands} tone="cyan" /></Card>
         </div>
 
