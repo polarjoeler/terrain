@@ -52,16 +52,24 @@ async function main() {
     const rows = await sql`
       SELECT domain, raw->>'technologies' tech, raw->>'features' feat, apps
       FROM imported_stores WHERE published AND payments IS NULL`;
-    let guessed = 0;
-    for (let i = 0; i < rows.length; i += 500) {
-      const batch = rows.slice(i, i + 500);
-      await Promise.all(batch.map((r) => {
-        const found = detectProviders(`${r.tech || ""} ${r.feat || ""} ${r.apps || ""}`);
-        if (!found.length) return null;
-        guessed++;
-        return sql`UPDATE imported_stores SET payments = ${found.join(";")} WHERE domain = ${r.domain}`;
-      }));
+    // Compute guesses (CPU only), then apply UPDATEs with a BOUNDED worker pool.
+    // NOT Promise.all over 500 rows: that queues ~494 queries past the max:6 pool
+    // and postgres.js deadlocks the queued ones — the script hangs, the pipeline
+    // swallows it (|| continuing), and the probe queue never regenerates.
+    const updates = [];
+    for (const r of rows) {
+      const found = detectProviders(`${r.tech || ""} ${r.feat || ""} ${r.apps || ""}`);
+      if (found.length) updates.push([r.domain, found.join(";")]);
     }
+    let guessed = 0, gi = 0;
+    async function guessWorker() {
+      while (gi < updates.length) {
+        const [domain, payments] = updates[gi++];
+        await sql`UPDATE imported_stores SET payments = ${payments} WHERE domain = ${domain}`;
+        guessed++;
+      }
+    }
+    await Promise.all(Array.from({ length: 4 }, guessWorker)); // 4 workers < max:6
     console.log(`Free parse: tagged ${guessed.toLocaleString()} stores with a payment guess.`);
 
     // 2. The value-ranked queue. --plus = every live Shopify Plus store (probe
