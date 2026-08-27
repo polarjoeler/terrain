@@ -1,11 +1,12 @@
 /** Pure, client-safe banding helpers for the leads Explorer — revenue bands and
  *  Lead Fit Score colours. No DB imports, so client components can use them. */
 
-export const REVENUE_BANDS = ["$2M–10M", "$500K–2M", "$100K–500K", "$10K–100K", "<$10K"] as const;
+export const REVENUE_BANDS = ["$10M+", "$2M–10M", "$500K–2M", "$100K–500K", "$10K–100K", "<$10K"] as const;
 export type RevenueBand = (typeof REVENUE_BANDS)[number] | "—";
 
 export function revenueBand(n: number | null): RevenueBand {
   if (n == null) return "—";
+  if (n >= 1e7) return "$10M+";
   if (n >= 2e6) return "$2M–10M";
   if (n >= 5e5) return "$500K–2M";
   if (n >= 1e5) return "$100K–500K";
@@ -16,6 +17,7 @@ export function revenueBand(n: number | null): RevenueBand {
 /** Tailwind tone for a revenue band chip (matches the app palette). */
 export function bandTone(band: RevenueBand): string {
   switch (band) {
+    case "$10M+": return "bg-lilac/25 text-lilac border-lilac/40";
     case "$2M–10M": return "bg-lilac/20 text-lilac border-lilac/30";
     case "$500K–2M": return "bg-cyan/15 text-cyan border-cyan/30";
     case "$100K–500K": return "bg-mint/15 text-mint border-mint/30";
