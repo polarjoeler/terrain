@@ -24,6 +24,9 @@ export type InsightsData = {
   date: string;
   storesTotal: number;
   newThisWeek: number;
+  // Organic stores discovered within each trailing window (excludes imports) —
+  // powers the daily/weekly "increase" on the stores-tracked tile.
+  discoveredByPeriod: { day: number; week: number; month: number; quarter: number; year: number };
   plusTotal: number;
   plusNewThisWeek: number;
   paymentsVerifiedStores: number;
@@ -116,7 +119,14 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
       COUNT(*) FILTER (WHERE live AND city IS NOT NULL AND city <> '')::int        AS cities_known,
       COUNT(*) FILTER (WHERE live AND shipping_providers IS NOT NULL AND shipping_providers <> '')::int AS shipping_known,
       COUNT(*) FILTER (WHERE live AND free_shipping)::int                          AS free_shipping_stores,
-      COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known
+      COUNT(*) FILTER (WHERE live AND apps IS NOT NULL AND apps <> '')::int        AS apps_known,
+      -- Organic growth per period — discovered_at based, so bulk IMPORTS (which have
+      -- discovered_at NULL) never inflate the daily/weekly "increase" on the tiles.
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 1)::int    AS disc_day,
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 7)::int    AS disc_week,
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 30)::int   AS disc_month,
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 91)::int   AS disc_quarter,
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 365)::int  AS disc_year
     FROM (
       SELECT *,
         (published AND country = ${country} ${inTag} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
@@ -191,6 +201,10 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
     newThisWeek: Number(t.new_week),
+    discoveredByPeriod: {
+      day: Number(t.disc_day), week: Number(t.disc_week), month: Number(t.disc_month),
+      quarter: Number(t.disc_quarter), year: Number(t.disc_year),
+    },
     plusTotal: Number(t.plus_total),
     plusNewThisWeek: Number(t.plus_new_week),
     paymentsVerifiedStores: verified,

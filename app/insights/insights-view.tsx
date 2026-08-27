@@ -11,6 +11,8 @@ import type { InsightsData, InsightItem } from "@/lib/insights";
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
 const PERIOD_DAYS: Record<Period, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365 };
+const PERIOD_KEY: Record<Period, "day" | "week" | "month" | "quarter" | "year"> =
+  { Day: "day", Week: "week", Month: "month", Quarter: "quarter", Year: "year" };
 const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
 const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
@@ -195,7 +197,10 @@ export function InsightsView({
   const fwdSurvival = trackedBase > 0 ? Math.round((100 * data.churn.active) / trackedBase) : null;
 
   const tiles = [
-    { n: data.storesTotal.toLocaleString(), label: "stores tracked", ...metric("storesTotal"), tone: "outline" },
+    // Increase = organically DISCOVERED in the selected period (excludes bulk
+    // imports, which have no discovered_at). Live, so it shows without waiting for
+    // snapshot history — unlike the old snapshot delta, which counted imports.
+    { n: data.storesTotal.toLocaleString(), label: "stores tracked", abs: data.discoveredByPeriod[PERIOD_KEY[period]], pct: null, tone: "outline" },
     { n: `+${data.newThisWeek}`, label: "new this week", abs: null, pct: null, tone: "mint" },
     { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", ...metric("plusTotal"), tone: "lilac" },
     { n: data.paymentsVerifiedStores.toLocaleString(), label: "with payment data", abs: null, pct: null, tone: "outline" },
