@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
+import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { ProviderInsights, ProviderTrendPoint } from "@/lib/provider-insights";
+
+const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
+const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
 
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
@@ -111,10 +115,32 @@ export function ProviderView({
           </div>
         </div>
 
+        {/* competitors — segmented by payment type */}
+        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <h3 className="text-lg font-semibold text-cream">Who they compete with</h3>
+          <p className="mt-1 text-xs text-cream/45">
+            Gateways appearing alongside {d.provider} at checkout, grouped by type. {d.provider} is a{" "}
+            <span className="text-cream/80">{d.providerType}</span> — same-type gateways are direct competition; other types coexist.
+          </p>
+          <div className="mt-5 grid gap-6 md:grid-cols-3">
+            {PAY_TYPES.map((t) => (
+              <div key={t}>
+                <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
+                  {t === d.providerType && <span className="rounded-full bg-orange/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-orange">direct</span>}
+                  <span className="text-[11px] text-cream/40">{TYPE_LABEL[t]}</span>
+                </div>
+                {d.coOccurrenceByType[t].length
+                  ? <InteractiveBars data={d.coOccurrenceByType[t]} tone={TYPE_TONE[t]} initialLimit={6} />
+                  : <p className="text-sm text-cream/35">None seen alongside.</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* breakdowns */}
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <Card title="Competing gateways" subtitle={`Who else appears at ${d.provider}'s checkouts`}><InteractiveBars data={d.coOccurrence} tone="orange" /></Card>
-          <Card title="Store vintage" subtitle="What era of store chooses you (first seen)"><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} /></Card>
+          <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % now using ${d.provider} (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} /></Card>
           <Card title="Markets" subtitle="Where these stores are"><InteractiveBars data={d.byCountry.map((c) => ({ ...c, label: marketLabel(c.label) }))} tone="mint" /></Card>
           <Card title="Store size" subtitle="Estimated monthly sales"><InteractiveBars data={d.sizeBands} tone="cyan" /></Card>
         </div>

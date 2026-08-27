@@ -11,6 +11,7 @@
 
 import postgres from "postgres";
 import type { InsightItem } from "./insights";
+import { classify, PAY_TYPES, type PayType } from "./payments-taxonomy";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -47,8 +48,9 @@ export type ProviderInsights = {
   avgRank: number | null;
   avgStackSize: number | null;               // avg # of gateways at their checkouts
   // competition & profile
-  coOccurrence: InsightItem[];               // other gateways appearing alongside
-  vintage: InsightItem[];                    // first_seen year — what era of store they win
+  providerType: PayType;                     // PSP | BNPL | APM — what this gateway is
+  coOccurrenceByType: Record<PayType, InsightItem[]>; // competitors alongside, grouped by type
+  vintage: InsightItem[];                    // first_seen year; pct = MARKET SHARE in that year
   sizeBands: InsightItem[];                  // est monthly sales bands
   topStores: ProviderStore[];                // biggest wins (by sales)
 };
@@ -116,6 +118,18 @@ export async function providerInsights(provider: string, country?: string): Prom
     WHERE ${LIVE} ${AND_C} AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7`;
   const newStores7 = Number(nd.n7);
 
+  // Denominator for vintage MARKET SHARE: all verified stores by first_seen year.
+  const allByYear = new Map<string, number>();
+  for (const r of rows) {
+    const yr = (r.first_seen && /^\d{4}/.test(r.first_seen)) ? r.first_seen.slice(0, 4) : "unknown";
+    allByYear.set(yr, (allByYear.get(yr) ?? 0) + 1);
+  }
+  // Competitors grouped by payment type (PSP / BNPL / APM).
+  const coOccurrenceByType: Record<PayType, InsightItem[]> = { PSP: [], BNPL: [], APM: [] };
+  for (const [label, count] of coOcc.entries())
+    coOccurrenceByType[classify(label)].push({ label, count, pct: pct(count, total) });
+  for (const t of PAY_TYPES) coOccurrenceByType[t].sort((a, b) => b.count - a.count);
+
   const topStores: ProviderStore[] = mine
     .sort((a, b) => (Number(b.r.estimated_monthly_sales) || 0) - (Number(a.r.estimated_monthly_sales) || 0))
     .slice(0, 25)
@@ -136,8 +150,10 @@ export async function providerInsights(provider: string, country?: string): Prom
       .sort((a, b) => Number(a.label.slice(1)) - Number(b.label.slice(1))),
     avgRank: total ? Math.round((rankSum / total) * 10) / 10 : null,
     avgStackSize: total ? Math.round((stackSum / total) * 10) / 10 : null,
-    coOccurrence: items(coOcc, total),
-    vintage: [...vintage.entries()].map(([label, count]) => ({ label, count, pct: pct(count, total) }))
+    providerType: classify(provider),
+    coOccurrenceByType,
+    // pct = MARKET SHARE — of all verified stores from that year, how many use us.
+    vintage: [...vintage.entries()].map(([label, count]) => ({ label, count, pct: pct(count, allByYear.get(label) ?? count) }))
       .sort((a, b) => b.label.localeCompare(a.label)),
     sizeBands: items(sizeBands, total),
     topStores,
