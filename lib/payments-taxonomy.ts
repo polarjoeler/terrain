@@ -5,13 +5,13 @@ export type PayType = "PSP" | "BNPL" | "APM";
 
 const TYPE: Record<string, PayType> = {
   PayFast: "PSP", Yoco: "PSP", "Peach Payments": "PSP", PayGate: "PSP",
-  Ozow: "PSP", Stripe: "PSP", Adyen: "PSP", Paystack: "PSP",
+  Stripe: "PSP", Adyen: "PSP", Paystack: "PSP",
   Flutterwave: "PSP", PayPal: "PSP", PayU: "PSP", Stitch: "PSP", iKhokha: "PSP",
   Payflex: "BNPL", Mobicred: "BNPL", Float: "BNPL", Klarna: "BNPL",
   Afterpay: "BNPL", Affirm: "BNPL", Zip: "BNPL",
   PayJustNow: "BNPL", "Happy Pay": "BNPL", RCS: "BNPL",
   "Shop Pay": "APM", "Apple Pay": "APM", "Google Pay": "APM", "Amazon Pay": "APM",
-  SnapScan: "APM", Zapper: "APM", "Capitec Pay": "APM", "M-Pesa": "APM",
+  Ozow: "APM", SnapScan: "APM", Zapper: "APM", "Capitec Pay": "APM", "M-Pesa": "APM",
   "Bank Deposit": "APM", "Cash on Delivery": "APM", "Credit Card": "APM",
   Visa: "APM", Mastercard: "APM", Amex: "APM",
   "Absa Pay": "APM", "Instant EFT": "APM",

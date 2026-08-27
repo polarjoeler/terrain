@@ -160,7 +160,7 @@ export async function providerInsights(provider: string, country?: string): Prom
   };
 }
 
-export type ProviderTrendPoint = { date: string; total: number; topSpot: number; exclusive: number; newLast7: number };
+export type ProviderTrendPoint = { date: string; total: number; verifiedBase: number; share: number; topSpot: number; exclusive: number; newLast7: number };
 
 /** Snapshot the current metrics for every provider — run weekly so the trend lines
  *  on the provider dashboards accrue. Idempotent per (provider, date). */
@@ -193,11 +193,27 @@ export async function providerHistory(provider: string, country = "ALL"): Promis
     SELECT date, data FROM provider_snapshots
     WHERE lower(provider) = ${provider.toLowerCase()} AND country = ${country}
     ORDER BY date ASC`.catch(() => []);
-  return rows.map((r) => ({
-    date: new Date(r.date).toISOString().slice(0, 10),
-    total: Number(r.data.total ?? 0), topSpot: Number(r.data.topSpot ?? 0),
-    exclusive: Number(r.data.exclusive ?? 0), newLast7: Number(r.data.newLast7 ?? 0),
-  }));
+  return rows.map((r) => {
+    const total = Number(r.data.total ?? 0), verifiedBase = Number(r.data.verifiedBase ?? 0);
+    return {
+      date: new Date(r.date).toISOString().slice(0, 10),
+      total, verifiedBase,
+      share: r.data.share != null ? Number(r.data.share) : (verifiedBase ? Math.round((10000 * total) / verifiedBase) / 100 : 0),
+      topSpot: Number(r.data.topSpot ?? 0), exclusive: Number(r.data.exclusive ?? 0), newLast7: Number(r.data.newLast7 ?? 0),
+    };
+  });
+}
+
+/** Countries where this provider appears at checkout — for the page's country filter. */
+export async function providerCountries(provider: string): Promise<string[]> {
+  const sql = db();
+  const rows = await sql<{ c: string }[]>`
+    SELECT UPPER(country) c, COUNT(*)::int n FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND country IS NOT NULL AND country <> ''
+      AND payments ILIKE ${"%" + provider + "%"}
+    GROUP BY 1 HAVING COUNT(*) >= 1 ORDER BY n DESC`;
+  return rows.map((r) => r.c);
 }
 
 /** Providers we have enough data on to build a page for (verified on ≥ `min` stores). */

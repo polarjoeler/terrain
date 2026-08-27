@@ -12,30 +12,90 @@ const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
 
-function Sparkline({ data }: { data: number[] }) {
-  if (data.length < 2) return null;
-  const w = 240, h = 44, max = Math.max(...data, 1), min = Math.min(...data);
-  const span = Math.max(max - min, 1), step = w / (data.length - 1);
-  const pts = data.map((v, i) => `${i * step},${h - ((v - min) / span) * (h - 8) - 4}`).join(" ");
+type Range = "Day" | "Week" | "Month" | "Quarter" | "Year" | "All";
+const RANGES: Range[] = ["Day", "Week", "Month", "Quarter", "Year", "All"];
+const RANGE_DAYS: Record<Range, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365, All: Infinity };
+
+/** Holistic market-share view — share % over time, filterable by range. */
+function MarketShareChart({ history, currentShare, provider, scope }: { history: ProviderTrendPoint[]; currentShare: number; provider: string; scope: string }) {
+  const [range, setRange] = useState<Range>("All");
+  const pts = (() => {
+    const days = RANGE_DAYS[range];
+    if (days === Infinity) return history;
+    const cut = Date.now() - days * 864e5;
+    return history.filter((h) => new Date(h.date + "T00:00:00Z").getTime() >= cut);
+  })();
+
+  const w = 720, h = 200, padL = 34, padB = 22, padT = 12;
+  const maxY = Math.max(1, ...pts.map((p) => p.share)) * 1.15;
+  const x = (i: number) => padL + (pts.length <= 1 ? 0 : (i / (pts.length - 1)) * (w - padL - 8));
+  const y = (v: number) => padT + (1 - v / maxY) * (h - padT - padB);
+
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-11 w-full">
-      <polyline points={pts} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
+    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
+          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider} · {scope}</p>
+          <div className="mt-3 flex items-baseline gap-2">
+            <CountUp value={Math.round(currentShare)} className="font-display text-5xl leading-none text-cream" />
+            <span className="font-display text-2xl text-cream/60">%</span>
+            <span className="ml-1 text-xs text-cream/40">today</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {RANGES.map((r) => (
+            <button key={r} onClick={() => setRange(r)}
+              className={`rounded-full px-3 py-1 text-xs transition ${range === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
+              {r === "All" ? "All time" : r}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {pts.length >= 2 ? (
+        <svg viewBox={`0 0 ${w} ${h}`} className="mt-5 w-full">
+          {[0, 0.5, 1].map((f) => (
+            <g key={f}>
+              <line x1={padL} x2={w} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--color-cream)" strokeOpacity="0.08" />
+              <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
+            </g>
+          ))}
+          <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
+          <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
+          {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r="3" fill="var(--color-cyan)"><title>{p.date}: {p.share}% ({p.total} of {p.verifiedBase})</title></circle>)}
+          <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
+          <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
+        </svg>
+      ) : (
+        <div className="mt-5 grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-center text-sm text-cream/45">
+          Trend line builds as daily snapshots accrue — the first point is recorded.<br />Come back over the next few weeks to watch it move.
+        </div>
+      )}
+    </div>
   );
 }
 
 export function ProviderView({
-  data: d, history, shareToken, isAdmin,
+  data: d, history, shareToken, isAdmin, countries, country,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
   shareToken: string;
   isAdmin: boolean;
+  countries: string[];
+  country: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const linkFor = (c: string) => {
+    const qs = new URLSearchParams();
+    if (shareToken) qs.set("t", shareToken);
+    if (c) qs.set("country", c);
+    return `/p/${d.provider.toLowerCase()}?${qs.toString()}`;
+  };
   const copyLink = () => {
-    const url = `${window.location.origin}/p/${d.provider.toLowerCase()}?t=${shareToken}`;
-    navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    navigator.clipboard?.writeText(`${window.location.origin}${linkFor(country)}`)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
 
   const tiles = [
@@ -54,6 +114,16 @@ export function ProviderView({
             <span className="text-sm text-cream/45">market insights</span>
           </div>
           <div className="flex items-center gap-3">
+            {countries.length > 0 && (
+              <select
+                value={country}
+                onChange={(e) => { window.location.href = linkFor(e.target.value); }}
+                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+              >
+                <option value="" className="text-ink">All markets</option>
+                {countries.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+              </select>
+            )}
             <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">Live data</span>
             {isAdmin && (
               <button onClick={copyLink} className="rounded-full border border-cyan/40 px-3 py-1 text-xs text-cyan transition hover:bg-cyan/10">
@@ -82,36 +152,26 @@ export function ProviderView({
           ))}
         </div>
 
-        {/* trend + headline */}
-        <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
-            <h3 className="text-lg font-semibold text-cream">Adoption over time</h3>
-            {history.length >= 2 ? (
-              <>
-                <div className="mt-4"><Sparkline data={history.map((h) => h.total)} /></div>
-                <p className="mt-2 text-sm text-cream/50">
-                  {history[0].total} → {history[history.length - 1].total} stores since {history[0].date}.
-                </p>
-              </>
-            ) : (
-              <div className="mt-4 grid h-24 place-items-center rounded-2xl border border-dashed border-cream/12 text-sm text-cream/40">
-                Trend builds weekly — first snapshot recorded. Check back next week.
-              </div>
-            )}
-          </div>
-          <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
-            <h3 className="text-lg font-semibold text-cream">Position in the checkout stack</h3>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-2xl border border-cream/10 p-3">
+        {/* market share over time — the holistic view */}
+        <div className="mt-6">
+          <MarketShareChart history={history} currentShare={d.verifiedBase ? Math.round((10000 * d.total) / d.verifiedBase) / 100 : 0} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
+        </div>
+
+        {/* position in the checkout stack */}
+        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <h3 className="text-lg font-semibold text-cream">Position in the checkout stack</h3>
+          <div className="mt-4 grid gap-5 md:grid-cols-[auto_1fr] md:items-center">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-2xl border border-cream/10 px-6 py-3">
                 <div className="font-display text-2xl text-cream">#{d.avgRank ?? "—"}</div>
                 <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">avg rank</div>
               </div>
-              <div className="rounded-2xl border border-cream/10 p-3">
+              <div className="rounded-2xl border border-cream/10 px-6 py-3">
                 <div className="font-display text-2xl text-cream">{d.avgStackSize ?? "—"}</div>
                 <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">avg gateways / checkout</div>
               </div>
             </div>
-            <div className="mt-4"><InteractiveBars data={d.rankDist} tone="cyan" initialLimit={6} /></div>
+            <InteractiveBars data={d.rankDist} tone="cyan" initialLimit={8} />
           </div>
         </div>
 

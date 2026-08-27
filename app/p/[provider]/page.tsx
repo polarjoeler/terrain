@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { providerInsights, providerHistory, availableProviders } from "@/lib/provider-insights";
+import { providerInsights, providerHistory, availableProviders, providerCountries } from "@/lib/provider-insights";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { ProviderView } from "./provider-view";
 
@@ -16,10 +16,10 @@ export default async function ProviderPage({
   params, searchParams,
 }: {
   params: Promise<{ provider: string }>;
-  searchParams: Promise<{ t?: string }>;
+  searchParams: Promise<{ t?: string; country?: string }>;
 }) {
   const { provider } = await params;
-  const { t } = await searchParams;
+  const { t, country: countryParam } = await searchParams;
 
   // Resolve the canonical gateway name (proper casing) from the data.
   const providers = await availableProviders(1).catch(() => []);
@@ -30,9 +30,17 @@ export default async function ProviderPage({
   const admin = isAdmin(await currentUser());
   if (!admin && !verifyProviderToken(canonical, t)) notFound();
 
-  const [data, history] = await Promise.all([providerInsights(canonical), providerHistory(canonical)]);
+  // Country filter (from the dropdown). Validate against the countries we actually have.
+  const countries = await providerCountries(canonical).catch((): string[] => []);
+  const country = countryParam && countries.includes(countryParam.toUpperCase()) ? countryParam.toUpperCase() : undefined;
+
+  const [data, history] = await Promise.all([
+    providerInsights(canonical, country),
+    providerHistory(canonical, country ?? "ALL"),
+  ]);
   // Admins see the shareable link; a token viewer already has theirs.
   const shareToken = admin ? signProviderToken(canonical) : (t ?? "");
 
-  return <ProviderView data={data} history={history} shareToken={shareToken} isAdmin={admin} />;
+  return <ProviderView data={data} history={history} shareToken={shareToken} isAdmin={admin}
+    countries={countries} country={country ?? ""} />;
 }
