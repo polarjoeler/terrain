@@ -126,6 +126,19 @@ ALTER TABLE churn_log ADD COLUMN IF NOT EXISTS historic BOOLEAN NOT NULL DEFAULT
 CREATE INDEX IF NOT EXISTS idx_churn_log_churned ON churn_log(churned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_churn_log_status  ON churn_log(status);
 CREATE INDEX IF NOT EXISTS idx_churn_log_historic ON churn_log(historic);
+
+-- Per-provider weekly snapshots — powers the "performance over time" trend lines on
+-- the shareable provider dashboards (adoption, top-spot, exclusivity). Forward-
+-- accruing: one row per (provider, country, date), the metrics frozen at that date.
+CREATE TABLE IF NOT EXISTS provider_snapshots (
+  provider   TEXT NOT NULL,
+  country    TEXT NOT NULL DEFAULT 'ALL',
+  date       DATE NOT NULL DEFAULT CURRENT_DATE,
+  data       JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (provider, country, date)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_snapshots ON provider_snapshots(provider, country, date DESC);
 CREATE INDEX IF NOT EXISTS idx_imported_discovered ON imported_stores(discovered_at DESC NULLS LAST);
 
 -- Manual store tags / cohorts (Top 100, Top 1000, Partner Managed, …) curated by

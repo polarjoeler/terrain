@@ -67,4 +67,9 @@ node --env-file=.env.local scripts/verify-liveness.mjs --limit 600 --min-age-day
 echo "--- insights snapshot ---"
 curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://terrain.tembocommerce.app/insights || echo "!! insights snapshot failed (continuing)"
 
+# Per-provider snapshot → provider_snapshots (adoption/top-spot/exclusive), so the
+# shareable provider dashboards' trend lines accrue. Idempotent per (provider, day).
+echo "--- provider snapshots ---"
+node --env-file=.env.local scripts/snapshot-providers.mjs || echo "!! provider snapshot failed (continuing)"
+
 echo "===== pipeline done $(date '+%H:%M:%S') ====="
