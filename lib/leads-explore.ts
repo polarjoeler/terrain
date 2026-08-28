@@ -36,6 +36,24 @@ export type ExploreLead = {
   score: number;         // 0–100 Lead Fit Score
 };
 
+// Apps are stored as raw Shopify app-store URLs (some concatenated). Extract the
+// slug of each PUBLIC app — which drops custom/private apps (they have no app-store
+// URL) — and render a clean name. Aliases tidy the most common ones.
+const APP_ALIAS: Record<string, string> = {
+  inbox: "Shopify Inbox", "product-reviews": "Shopify Reviews", geolocation: "Shopify Geolocation",
+  judgeme: "Judge.me", "klaviyo-email-marketing": "Klaviyo", "customer-privacy-banner": "Privacy Banner",
+  "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
+  omnisend: "Omnisend", mailchimp: "Mailchimp",
+};
+const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]); // app-store links, not installed apps
+function cleanApps(raw: string | null): string | null {
+  if (!raw) return null;
+  const slugs = [...raw.matchAll(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)].map((m) => m[1].toLowerCase()).filter((s) => !APP_SKIP.has(s));
+  if (!slugs.length) return null; // only custom/private apps → nothing public to show
+  const names = [...new Set(slugs)].map((s) => APP_ALIAS[s] ?? s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "));
+  return names.join(";");
+}
+
 // The imported estimated_monthly_sales is in each store's LOCAL currency, so we
 // normalise to USD before banding/scoring — otherwise ZAR/NGN/KES are compared
 // as if they were dollars. Rough static rates (fine for banding, not accounting).
@@ -87,7 +105,7 @@ export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
     const social = (r.instagram_followers ?? 0) + (r.facebook_followers ?? 0);
     return {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
-      theme: r.theme, platform: r.platform, payments: r.payments, shippingProviders: r.shipping_providers, apps: r.apps,
+      theme: r.theme, platform: r.platform, payments: r.payments, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
       productCount: r.product_count, aovUsd: aov,
       estMonthlySales: sales, plus: r.plus, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
