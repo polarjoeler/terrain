@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { marketLabel, marketFlag } from "@/lib/markets";
+import { marketLabel } from "@/lib/markets";
 import { revenueBand, bandTone, scoreColor, REVENUE_BANDS, type RevenueBand } from "@/lib/revenue";
 import type { ExploreLead } from "@/lib/leads-explore";
 
@@ -42,7 +42,7 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
               className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-sm transition ${selected.has(v) ? "bg-cyan/15 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
               <span className="flex items-center gap-1.5 truncate">
                 <span className={`h-3 w-3 shrink-0 rounded border ${selected.has(v) ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                <span className="truncate">{title === "Country" ? `${marketFlag(v)} ${marketLabel(v)}` : v}</span>
+                <span className="truncate">{title === "Country" ? marketLabel(v) : v}</span>
               </span>
               <span className="ml-2 shrink-0 text-xs tabular-nums text-cream/35">{n.toLocaleString()}</span>
             </button>
@@ -63,6 +63,9 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
   const [country, setCountry] = useState<Set<string>>(new Set());
   const [category, setCategory] = useState<Set<string>>(new Set());
   const [band, setBand] = useState<Set<string>>(new Set());
+  const [theme, setTheme] = useState<Set<string>>(new Set());
+  const [city, setCity] = useState<Set<string>>(new Set());
+  const [payment, setPayment] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
   const [sort, setSort] = useState<SortKey>("score");
@@ -80,6 +83,12 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
     if (skip !== "country" && country.size && !country.has((l.country ?? "??").toUpperCase())) return false;
     if (skip !== "category" && category.size && !category.has(l.category ?? "—")) return false;
     if (skip !== "band" && band.size && !band.has(revenueBand(l.estMonthlySales))) return false;
+    if (skip !== "theme" && theme.size && !theme.has(l.theme ?? "—")) return false;
+    if (skip !== "city" && city.size && !city.has(l.city ?? "—")) return false;
+    if (skip !== "payment" && payment.size) {
+      const toks = (l.payments ?? "").split(";").map((t) => t.trim());
+      if (![...payment].some((p) => toks.includes(p))) return false;
+    }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
     return true;
@@ -92,22 +101,32 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, category, band, plusOnly, emailOnly, sort]);
+  }, [leads, q, country, category, band, theme, city, payment, plusOnly, emailOnly, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
     for (const l of leads) if (passes(l, skip)) { const k = key(l); m.set(k, (m.get(k) ?? 0) + 1); }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   };
-  const countryFacet = useMemo(() => countBy("country", (l) => (l.country ?? "??").toUpperCase()), [leads, q, category, band, plusOnly, emailOnly]);
-  const categoryFacet = useMemo(() => countBy("category", (l) => l.category ?? "—"), [leads, q, country, band, plusOnly, emailOnly]);
-  const bandFacet = useMemo(() => {
+  // All facet counts recompute together whenever any filter changes.
+  const facets = useMemo(() => {
     const order = new Map(REVENUE_BANDS.map((b, i) => [b as string, i]));
-    return countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9));
-  }, [leads, q, country, category, plusOnly, emailOnly]);
+    const paymentCounts = new Map<string, number>();
+    for (const l of leads) if (passes(l, "payment"))
+      for (const t of (l.payments ?? "").split(";").map((x) => x.trim()).filter(Boolean)) paymentCounts.set(t, (paymentCounts.get(t) ?? 0) + 1);
+    return {
+      country: countBy("country", (l) => (l.country ?? "??").toUpperCase()),
+      category: countBy("category", (l) => l.category ?? "—").filter(([c]) => c !== "—"),
+      band: countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9)),
+      theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => t !== "—"),
+      city: countBy("city", (l) => l.city ?? "—").filter(([c]) => c !== "—"),
+      payment: [...paymentCounts.entries()].sort((a, b) => b[1] - a[1]),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, q, country, category, band, theme, city, payment, plusOnly, emailOnly]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setPlusOnly(false); setEmailOnly(false); };
-  const activeCount = country.size + category.size + band.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setPlusOnly(false); setEmailOnly(false); };
+  const activeCount = country.size + category.size + band.size + theme.size + city.size + payment.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "est_monthly_sales", "revenue_band", "lead_score", "plus", "email", "instagram", "facebook", "tiktok"];
@@ -133,9 +152,12 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
         </div>
-        <Facet title="Country" values={countryFacet} selected={country} onToggle={toggle(setCountry)} />
-        <Facet title="Revenue" values={bandFacet} selected={band} onToggle={toggle(setBand)} />
-        <Facet title="Category" values={categoryFacet} selected={category} onToggle={toggle(setCategory)} />
+        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
+        <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
+        <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
+        <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
+        <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
       </aside>
 
       {/* main */}
@@ -175,7 +197,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-cream/60">{l.category ?? "—"}</td>
-                    <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? `${marketFlag(l.country)} ${marketLabel(l.country)}` : "—"}</td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? marketLabel(l.country) : "—"}</td>
                     <td className="px-4 py-2.5"><span className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{b}</span> <span className="ml-1 text-xs text-cream/30">{usd(l.estMonthlySales)}</span></td>
                     <td className="px-4 py-2.5"><ScoreRing score={l.score} /></td>
                     <td className="px-4 py-2.5">

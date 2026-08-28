@@ -20,6 +20,8 @@ export type ExploreLead = {
   category: string | null;
   country: string | null;
   city: string | null;
+  theme: string | null;
+  payments: string | null;   // semicolon-separated verified gateways
   estMonthlySales: number | null;
   plus: boolean;
   email: string | null;
@@ -58,11 +60,12 @@ function scoreLead(sales: number, email: boolean, plus: boolean, social: number,
 export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
   const rows = await db()<{
     domain: string; name: string | null; category: string | null; country: string | null; city: string | null;
+    theme: string | null; payments: string | null;
     estimated_monthly_sales: string | null; currency: string | null; plus: boolean; email: string | null;
     instagram: string | null; facebook: string | null; tiktok: string | null;
     instagram_followers: number | null; facebook_followers: number | null; discovered_at: Date | null;
   }[]>`
-    SELECT domain, name, category, country, city, estimated_monthly_sales, currency, plus, email,
+    SELECT domain, name, category, country, city, theme, payments, estimated_monthly_sales, currency, plus, email,
            instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
@@ -74,6 +77,7 @@ export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
     const social = (r.instagram_followers ?? 0) + (r.facebook_followers ?? 0);
     return {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
+      theme: r.theme, payments: r.payments,
       estMonthlySales: sales, plus: r.plus, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at),
