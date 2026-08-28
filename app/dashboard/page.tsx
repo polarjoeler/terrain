@@ -1,20 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
-import { currentUser, isAdmin } from "@/lib/auth";
+import { currentUser } from "@/lib/auth";
 import { sampleLeads, type Lead } from "@/lib/leads";
 import { summarise } from "@/lib/sheets";
 import { publishedLeads } from "@/lib/imported";
 import { getHomeStats, availableCountries } from "@/lib/insights";
 import { MarketPicker } from "./market-picker";
 import { FreshnessStamp } from "@/app/components/freshness";
-import {
-  exportQuota,
-  getSubscriber,
-  hasAccess,
-  trialDaysLeft,
-} from "@/lib/subscriptions";
-import { LeadsTable } from "./leads-table";
+import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
+import { exploreLeads } from "@/lib/leads-explore";
+import { Explorer } from "@/app/admin/explore/explorer";
 
 // Per-user paywall — never cache this page across requests.
 export const dynamic = "force-dynamic";
@@ -65,6 +61,10 @@ export default async function Dashboard({
     const s = summarise(data);
     stats = { storesTracked: s.storesTracked, newThisWeek: s.newThisWeek, plusFlagged: s.plusFlagged, withEmail: s.withEmail };
   }
+
+  // The browse experience is the Explorer (faceted, logo-rich). Full data for now
+  // — pre-launch; swap to own-sourced fields as they're re-generated before launch.
+  const browse = await exploreLeads().catch(() => []);
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -159,19 +159,18 @@ export default async function Dashboard({
           </div>
         </div>
 
-        <LeadsTable
-          leads={data}
-          canExport={subscriber?.plan === "pro" && hasAccess(subscriber)}
-          exportRemaining={exportQuota(subscriber).remaining}
-          isAdmin={isAdmin(email)}
-        />
-
-        <p className="mt-6 text-center text-xs text-cream/40">
-          {live
-            ? "Live data from the discovery pipeline · refreshed every 10 minutes"
-            : "Showing bundled sample data — live feed unavailable"}
-        </p>
+        <div className="mt-10 flex items-baseline justify-between">
+          <h2 className="font-display text-2xl">Browse stores</h2>
+          <span className="text-xs text-cream/40">
+            {live ? `Live · refreshed every 10 minutes` : "Sample data — live feed unavailable"}
+          </span>
+        </div>
       </div>
+
+      {/* Faceted, logo-rich Explorer — the browse experience, full-bleed for room. */}
+      {browse.length > 0
+        ? <div className="mt-4"><Explorer leads={browse} /></div>
+        : <p className="mx-auto max-w-6xl py-10 text-center text-cream/40">No stores to browse yet.</p>}
     </div>
   );
 }
