@@ -71,6 +71,9 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
   const [theme, setTheme] = useState<Set<string>>(new Set());
   const [city, setCity] = useState<Set<string>>(new Set());
   const [payment, setPayment] = useState<Set<string>>(new Set());
+  const [shipping, setShipping] = useState<Set<string>>(new Set());
+  const [app, setApp] = useState<Set<string>>(new Set());
+  const [platform, setPlatform] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
   const [sort, setSort] = useState<SortKey>("score");
@@ -90,9 +93,18 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
     if (skip !== "band" && band.size && !band.has(revenueBand(l.estMonthlySales))) return false;
     if (skip !== "theme" && theme.size && !theme.has(l.theme ?? "—")) return false;
     if (skip !== "city" && city.size && !city.has(l.city ?? "—")) return false;
+    if (skip !== "platform" && platform.size && !platform.has(l.platform ?? "—")) return false;
     if (skip !== "payment" && payment.size) {
       const toks = (l.payments ?? "").split(";").map((t) => t.trim());
       if (![...payment].some((p) => toks.includes(p))) return false;
+    }
+    if (skip !== "shipping" && shipping.size) {
+      const toks = (l.shippingProviders ?? "").split(";").map((t) => t.trim());
+      if (![...shipping].some((p) => toks.includes(p))) return false;
+    }
+    if (skip !== "app" && app.size) {
+      const toks = (l.apps ?? "").split(";").map((t) => t.trim());
+      if (![...app].some((p) => toks.includes(p))) return false;
     }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
@@ -106,7 +118,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, category, band, theme, city, payment, plusOnly, emailOnly, sort]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -116,22 +128,29 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
   // All facet counts recompute together whenever any filter changes.
   const facets = useMemo(() => {
     const order = new Map(REVENUE_BANDS.map((b, i) => [b as string, i]));
-    const paymentCounts = new Map<string, number>();
-    for (const l of leads) if (passes(l, "payment"))
-      for (const t of (l.payments ?? "").split(";").map((x) => x.trim()).filter(Boolean)) paymentCounts.set(t, (paymentCounts.get(t) ?? 0) + 1);
+    // Multi-value facets (a store has several gateways/carriers/apps) count each token.
+    const multiCount = (skip: string, field: (l: ExploreLead) => string | null): [string, number][] => {
+      const m = new Map<string, number>();
+      for (const l of leads) if (passes(l, skip))
+        for (const t of (field(l) ?? "").split(";").map((x) => x.trim()).filter(Boolean)) m.set(t, (m.get(t) ?? 0) + 1);
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    };
     return {
       country: countBy("country", (l) => (l.country ?? "??").toUpperCase()),
+      platform: countBy("platform", (l) => l.platform ?? "—").filter(([p]) => p !== "—"),
       category: countBy("category", (l) => l.category ?? "—").filter(([c]) => c !== "—"),
       band: countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9)),
       theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => isCleanTheme(t)),
       city: countBy("city", (l) => l.city ?? "—").filter(([c]) => c !== "—"),
-      payment: [...paymentCounts.entries()].sort((a, b) => b[1] - a[1]),
+      payment: multiCount("payment", (l) => l.payments),
+      shipping: multiCount("shipping", (l) => l.shippingProviders),
+      apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, category, band, theme, city, payment, plusOnly, emailOnly]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setPlusOnly(false); setEmailOnly(false); };
-  const activeCount = country.size + category.size + band.size + theme.size + city.size + payment.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); };
+  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "est_monthly_sales", "revenue_band", "lead_score", "plus", "email", "instagram", "facebook", "tiktok"];
@@ -157,11 +176,14 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
         </div>
+        {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} />}
         <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
+        <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} />
+        <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />
         <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
       </aside>
 

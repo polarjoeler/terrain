@@ -96,6 +96,9 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE;
 -- (semicolon list) + whether any free-shipping option is offered.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN;
+-- Ecommerce platform (Shopify today; WooCommerce/others as we expand). Defaults
+-- to Shopify on backfill; new non-Shopify imports/discovery set it explicitly.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS platform TEXT;
 
 -- Churn log — a snapshot of each store the moment it's confirmed dead/migrated,
 -- preserving what it was using (payments/shipping/theme/…) so we can report on
