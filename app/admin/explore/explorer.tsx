@@ -11,6 +11,11 @@ type SortKey = "score" | "sales" | "name";
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
 
+// A real Shopify theme name is short and word-like (Dawn, Debut, Focal, Shrine PRO).
+// The imported `theme` field is polluted with release notes / version strings for
+// some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
+const isCleanTheme = (t: string) => /^[A-Za-z][A-Za-z &'-]{1,24}$/.test(t.trim());
+
 function ScoreRing({ score }: { score: number }) {
   const c = scoreColor(score);
   const r = 13, circ = 2 * Math.PI * r;
@@ -118,7 +123,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
       country: countBy("country", (l) => (l.country ?? "??").toUpperCase()),
       category: countBy("category", (l) => l.category ?? "—").filter(([c]) => c !== "—"),
       band: countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9)),
-      theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => t !== "—"),
+      theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => isCleanTheme(t)),
       city: countBy("city", (l) => l.city ?? "—").filter(([c]) => c !== "—"),
       payment: [...paymentCounts.entries()].sort((a, b) => b[1] - a[1]),
     };
