@@ -220,6 +220,7 @@ export type FeedStats = {
   southAfrica: number;
   newThisWeek: number;
   withEmailPct: number;
+  withEmail?: number;   // absolute count (getHomeStats sets it; digest paths omit)
   plusFlagged: number;
   updatedAt: string | null;
   live: boolean;

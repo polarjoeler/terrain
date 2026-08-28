@@ -33,6 +33,7 @@ export type ExploreLead = {
   instagram: string | null;
   facebook: string | null;
   tiktok: string | null;
+  discoveredAt: string | null;   // ISO date we first tracked the store — powers the recency filter
   score: number;         // 0–100 Lead Fit Score
 };
 
@@ -79,10 +80,15 @@ function scoreLead(sales: number, email: boolean, plus: boolean, social: number,
   return Math.max(1, Math.min(100, score));
 }
 
-// Cap the initial payload — the client ships every lead for instant faceting, so
-// loading all ~13k (3.8MB) made the page slow. The top ~5k by value are the real
-// outreach targets (most below that have no sales signal — median is ~500 local).
-export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
+// Load the whole live set so every lead is browsable + enrichment shows on all of
+// them — not just the top slice. The client ships every row for instant faceting;
+// ~13k rows (~3.8MB) parses/facets fine, and only `shown` (60) render at a time.
+// The 20k ceiling is a guardrail against unbounded growth, not the working size.
+export async function exploreLeads(limit = 20000): Promise<ExploreLead[]> {
+  return loadExploreLeads(limit);
+}
+
+async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
   const rows = await db()<{
     domain: string; name: string | null; category: string | null; country: string | null; city: string | null;
     theme: string | null; platform: string | null; payments: string | null; shipping_providers: string | null; apps: string | null;
@@ -109,7 +115,82 @@ export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
       productCount: r.product_count, aovUsd: aov,
       estMonthlySales: sales, plus: r.plus, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
+      discoveredAt: r.discovered_at ? new Date(r.discovered_at).toISOString().slice(0, 10) : null,
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at, r.product_count ?? 0, aov ?? 0),
     };
   });
+}
+
+/** Total live, published leads — so the UI can show the real count even when the
+ *  explorer only loads the top slice for speed. */
+export async function exploreLeadCount(): Promise<number> {
+  const [r] = await db()<{ n: number }[]>`
+    SELECT COUNT(*)::int n FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  return Number(r.n);
+}
+
+// The browse dataset is identical for every viewer and changes slowly (enrichment
+// trickles in), yet marshaling ~13k wide rows on the request path is ~2.8s and, under
+// concurrent DB load from the enrichment jobs, blew past the statement timeout and
+// broke the dashboard. So we PRECOMPUTE it into a single jsonb snapshot row: the
+// request path reads one row (~0.2s — one 7MB value parsed once, not 13k×22 fields),
+// and never runs the heavy query live. A warm in-process cache sits in front so we
+// don't even re-read the blob each request; an in-flight guard collapses stampedes.
+type Browse = { leads: ExploreLead[]; count: number };
+const BROWSE_TTL_MS = 5 * 60 * 1000;
+let _browse: { at: number; data: Browse } | null = null;
+let _browseInflight: Promise<Browse> | null = null;
+
+async function ensureSnapshotTable() {
+  await db()`CREATE TABLE IF NOT EXISTS browse_snapshot (
+    id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    data jsonb NOT NULL,
+    computed_at timestamptz NOT NULL DEFAULT now()
+  )`;
+}
+
+/** Recompute the browse snapshot and persist it. Run OFF the request path — from the
+ *  pipeline after enrichment — so live reads never touch the heavy query. */
+export async function refreshBrowseSnapshot(): Promise<number> {
+  const [leads, count] = await Promise.all([loadExploreLeads(), exploreLeadCount()]);
+  const data: Browse = { leads, count };
+  await ensureSnapshotTable();
+  // Pass the payload as a text param cast to jsonb — avoids sql.json()'s narrow
+  // JSONValue typing while storing identical jsonb.
+  await db()`INSERT INTO browse_snapshot (id, data, computed_at)
+             VALUES (1, ${JSON.stringify(data)}::jsonb, now())
+             ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`;
+  _browse = { at: Date.now(), data };   // warm this instance too
+  return leads.length;
+}
+
+async function readSnapshot(): Promise<Browse | null> {
+  try {
+    await ensureSnapshotTable();
+    const [row] = await db()<{ data: Browse }[]>`SELECT data FROM browse_snapshot WHERE id = 1`;
+    return row?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function exploreBrowse(): Promise<Browse> {
+  if (_browse && Date.now() - _browse.at < BROWSE_TTL_MS) return _browse.data;
+  if (!_browseInflight) {
+    _browseInflight = (async () => {
+      // Prefer the precomputed snapshot (one light row read).
+      let data = await readSnapshot();
+      // Cold start with no snapshot yet: compute + persist once (the pipeline keeps
+      // it fresh thereafter). Under heavy enrichment load this is the only path that
+      // can be slow — and only until the first snapshot lands.
+      if (!data || !data.leads?.length) data = await (async () => {
+        await refreshBrowseSnapshot();
+        return _browse!.data;
+      })();
+      _browse = { at: Date.now(), data };
+      return data;
+    })().finally(() => { _browseInflight = null; });
+  }
+  return _browseInflight;
 }

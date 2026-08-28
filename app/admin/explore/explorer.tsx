@@ -8,6 +8,18 @@ import type { ExploreLead } from "@/lib/leads-explore";
 const PAGE = 60;
 type SortKey = "score" | "sales" | "name";
 
+// Recency = how recently WE first tracked the store (discoveredAt), so "new this
+// week/month/year" means newly-discovered leads. Windows are nested, so it's a
+// single-select control, not multi-toggle.
+type RecencyKey = "" | "7d" | "30d" | "365d";
+const RECENCY_OPTS: { key: RecencyKey; label: string; days: number }[] = [
+  { key: "7d", label: "New this week", days: 7 },
+  { key: "30d", label: "New this month", days: 30 },
+  { key: "365d", label: "New this year", days: 365 },
+];
+const withinDays = (iso: string | null, days: number) =>
+  iso != null && (Date.now() - new Date(iso).getTime()) <= days * 864e5;
+
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
 
@@ -15,6 +27,33 @@ const usd = (n: number | null) =>
 // The imported `theme` field is polluted with release notes / version strings for
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
 const isCleanTheme = (t: string) => /^[A-Za-z][A-Za-z &'-]{1,24}$/.test(t.trim());
+
+// Store logo. Favicons are built for LIGHT backgrounds, so on our dark table the
+// dark/transparent ones muddy into the UI — we sit them on a white tile with a
+// little padding so every logo reads cleanly. Google's service returns a generic
+// globe (as a 200) for domains it doesn't know, which we can't detect, but its
+// hard failures fall back to a colored monogram so we never show a broken image.
+const MONO_TINTS = ["bg-mint/25 text-mint", "bg-lilac/25 text-lilac", "bg-orange/25 text-orange", "bg-cyan/25 text-cyan"];
+function Logo({ domain, name }: { domain: string; name: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const label = (name || domain).replace(/^www\./, "");
+  const initial = (label.match(/[A-Za-z0-9]/)?.[0] ?? "•").toUpperCase();
+  const tint = MONO_TINTS[[...domain].reduce((a, c) => a + c.charCodeAt(0), 0) % MONO_TINTS.length];
+  if (failed) {
+    return <div className={`grid h-6 w-6 shrink-0 place-items-center rounded text-[11px] font-bold ${tint}`}>{initial}</div>;
+  }
+  return (
+    <img
+      src={`https://www.google.com/s2/favicons?sz=64&domain=${domain}`}
+      alt=""
+      width={24}
+      height={24}
+      className="h-6 w-6 shrink-0 rounded bg-white object-contain p-0.5 ring-1 ring-black/5"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 function ScoreRing({ score }: { score: number }) {
   const c = scoreColor(score);
@@ -63,7 +102,7 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
   );
 }
 
-export function Explorer({ leads }: { leads: ExploreLead[] }) {
+export function Explorer({ leads, total }: { leads: ExploreLead[]; total?: number }) {
   const [q, setQ] = useState("");
   const [country, setCountry] = useState<Set<string>>(new Set());
   const [category, setCategory] = useState<Set<string>>(new Set());
@@ -76,6 +115,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
   const [platform, setPlatform] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
+  const [recency, setRecency] = useState<RecencyKey>("");
   const [sort, setSort] = useState<SortKey>("score");
   const [shown, setShown] = useState(PAGE);
 
@@ -108,6 +148,10 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
     }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
+    if (skip !== "recency" && recency) {
+      const days = RECENCY_OPTS.find((o) => o.key === recency)?.days ?? 0;
+      if (!withinDays(l.discoveredAt, days)) return false;
+    }
     return true;
   };
 
@@ -118,7 +162,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, sort]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, recency, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -147,10 +191,18 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, recency]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); };
-  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setRecency(""); };
+  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
+
+  // Counts for the recency control — computed with recency skipped so each window
+  // shows its own total regardless of the current selection.
+  const recencyCounts = useMemo(() => {
+    const base = leads.filter((l) => passes(l, "recency"));
+    return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly]);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "platform", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
@@ -176,6 +228,26 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
         </div>
+
+        {/* Recently discovered — single-select (windows are nested). */}
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
+          <div className="mt-2 space-y-1">
+            {RECENCY_OPTS.map((o) => {
+              const on = recency === o.key;
+              return (
+                <button key={o.key} onClick={() => setRecency(on ? "" : o.key)}
+                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
+                    {o.label}
+                  </span>
+                  <span className="text-xs text-cream/40">{(recencyCounts[o.key] ?? 0).toLocaleString()}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} />}
         <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
@@ -197,7 +269,12 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
             <option value="sales" className="text-ink">Sort: Revenue</option>
             <option value="name" className="text-ink">Sort: Name</option>
           </select>
-          <span className="text-sm text-cream/50"><b className="text-cream">{filtered.length.toLocaleString()}</b> of {leads.length.toLocaleString()} leads</span>
+          <span className="text-sm text-cream/50">
+            <b className="text-cream">{filtered.length.toLocaleString()}</b> of {(total ?? leads.length).toLocaleString()} leads
+            {total != null && total > leads.length && (
+              <span className="text-cream/35"> · top {leads.length.toLocaleString()} by value loaded</span>
+            )}
+          </span>
           <button onClick={exportCsv} className="ml-auto rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105">Export {filtered.length.toLocaleString()} → CSV</button>
         </div>
 
@@ -216,7 +293,7 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
                   <tr key={l.domain} className="border-t border-cream/[0.07] transition hover:bg-cream/[0.03]">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
-                        <img src={`https://www.google.com/s2/favicons?sz=64&domain=${l.domain}`} alt="" width={24} height={24} className="h-6 w-6 shrink-0 rounded bg-cream/10 object-contain" loading="lazy" />
+                        <Logo domain={l.domain} name={l.name} />
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 font-medium text-cream">{l.name ?? l.domain}{l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}</div>
                           <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>

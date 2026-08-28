@@ -1,15 +1,15 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
-import { sampleLeads, type Lead } from "@/lib/leads";
+import { sampleLeads } from "@/lib/leads";
 import { summarise } from "@/lib/sheets";
-import { publishedLeads } from "@/lib/imported";
 import { getHomeStats, availableCountries } from "@/lib/insights";
 import { MarketPicker } from "./market-picker";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
-import { exploreLeads } from "@/lib/leads-explore";
+import { exploreBrowse } from "@/lib/leads-explore";
 import { Explorer } from "@/app/admin/explore/explorer";
 
 // Per-user paywall — never cache this page across requests.
@@ -33,38 +33,31 @@ export default async function Dashboard({
   const sp = await searchParams;
   const country = sp.country && markets.some((m) => m.country === sp.country) ? sp.country : "ZA";
 
-  // Store universe now comes from Postgres (imported_stores) — the same source
-  // as /insights and the homepage, so the counts agree (~8,781 live SA stores).
-  // Tile numbers come from getHomeStats() so "new this week" matches those pages
-  // (created_at basis, not the historical first_seen). Fall back to bundled
-  // samples only if the DB is unreachable, so the dashboard never breaks.
-  let data: Lead[];
+  // Tile numbers all come from the single getHomeStats() aggregate (one indexed
+  // COUNT query) — same source as /insights and the homepage, so the counts agree.
+  // Previously we also loaded EVERY lead just to count emails; getHomeStats already
+  // computes that count, so we dropped the full-table load (it was the tiles' main
+  // latency). Fall back to bundled samples only if the DB is unreachable.
   let live: boolean;
   let updatedAt: string | null;
   let stats: { storesTracked: number; newThisWeek: number; plusFlagged: number; withEmail: number };
   try {
-    const [leads, home] = await Promise.all([publishedLeads(country), getHomeStats(country)]);
-    if (!leads.length) throw new Error("no leads");
-    data = leads;
+    const home = await getHomeStats(country);
+    if (!home.live) throw new Error("no live stores");
     live = true;
     updatedAt = home.updatedAt;
     stats = {
       storesTracked: home.storesTracked,
       newThisWeek: home.newThisWeek,
       plusFlagged: home.plusFlagged,
-      withEmail: leads.filter((l) => l.email).length,
+      withEmail: home.withEmail ?? 0,
     };
   } catch {
-    data = sampleLeads;
     live = false;
     updatedAt = null;
-    const s = summarise(data);
+    const s = summarise(sampleLeads);
     stats = { storesTracked: s.storesTracked, newThisWeek: s.newThisWeek, plusFlagged: s.plusFlagged, withEmail: s.withEmail };
   }
-
-  // The browse experience is the Explorer (faceted, logo-rich). Full data for now
-  // — pre-launch; swap to own-sourced fields as they're re-generated before launch.
-  const browse = await exploreLeads().catch(() => []);
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -159,18 +152,45 @@ export default async function Dashboard({
           </div>
         </div>
 
-        <div className="mt-10 flex items-baseline justify-between">
+        {/* Browse — kept inside the same max-w container so the heading and the
+            Explorer below line up with the hero + tiles. */}
+        <div className="mt-10 mb-3 flex items-baseline justify-between px-1">
           <h2 className="font-display text-2xl">Browse stores</h2>
           <span className="text-xs text-cream/40">
-            {live ? `Live · refreshed every 10 minutes` : "Sample data — live feed unavailable"}
+            {live ? "Live · refreshed every 10 minutes" : "Sample data — live feed unavailable"}
           </span>
         </div>
+        {/* Streamed so the shell + tiles paint instantly — the full live set is a
+            heavy load (~13k rich rows), and we don't want it blocking first paint. */}
+        <Suspense fallback={<BrowseSkeleton />}>
+          <BrowseSection />
+        </Suspense>
       </div>
+    </div>
+  );
+}
 
-      {/* Faceted, logo-rich Explorer — the browse experience, full-bleed for room. */}
-      {browse.length > 0
-        ? <div className="mt-4"><Explorer leads={browse} /></div>
-        : <p className="mx-auto max-w-6xl py-10 text-center text-cream/40">No stores to browse yet.</p>}
+// Loads the ENTIRE live set (not a top-N slice) so every lead — and its
+// enrichment — is browsable. Runs inside Suspense, off the page's critical path.
+async function BrowseSection() {
+  const { leads, count } = await exploreBrowse().catch(() => ({ leads: [], count: 0 }));
+  if (!leads.length) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
+  return <Explorer leads={leads} total={count} />;
+}
+
+function BrowseSkeleton() {
+  return (
+    <div className="animate-pulse">
+      <div className="flex gap-4">
+        <div className="hidden h-96 w-48 shrink-0 rounded-2xl bg-cream/[0.04] md:block" />
+        <div className="flex-1 space-y-2">
+          <div className="h-10 rounded-xl bg-cream/[0.05]" />
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-12 rounded-lg bg-cream/[0.03]" />
+          ))}
+        </div>
+      </div>
+      <p className="mt-4 text-center text-xs text-cream/30">Loading all live stores…</p>
     </div>
   );
 }

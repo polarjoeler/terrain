@@ -259,6 +259,7 @@ export async function getHomeStats(country = "ZA"): Promise<import("./sheets").F
     southAfrica: stores, // the tracked universe is South Africa
     newThisWeek: Number(t.new_week),
     withEmailPct: pct(Number(t.with_email), stores),
+    withEmail: Number(t.with_email),
     plusFlagged: Number(t.plus),
     updatedAt: (f?.d as string) || null,
     live: stores > 0,

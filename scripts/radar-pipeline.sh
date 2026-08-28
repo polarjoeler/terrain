@@ -82,4 +82,12 @@ node --env-file=.env.local scripts/logistics-scan.mjs --limit 3000 || echo "!! l
 echo "--- provider snapshots ---"
 node --env-file=.env.local scripts/snapshot-providers.mjs || echo "!! provider snapshot failed (continuing)"
 
+# Browse snapshot — precompute the dashboard Explorer's full dataset into a single
+# jsonb row so the request path reads ONE row instead of marshaling ~13k wide rows
+# (which timed out under this pass's concurrent DB load). Runs LAST, after enrichment,
+# so today's catalog/contacts/launch-date fills show up in the browse view.
+echo "--- browse snapshot refresh ---"
+node --env-file=.env.local --experimental-strip-types scripts/refresh-browse-snapshot.mjs \
+  || echo "!! browse snapshot refresh failed (continuing)"
+
 echo "===== pipeline done $(date '+%H:%M:%S') ====="
