@@ -67,6 +67,11 @@ node --env-file=.env.local scripts/verify-liveness.mjs --limit 600 --min-age-day
 echo "--- insights snapshot ---"
 curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://terrain.tembocommerce.app/insights || echo "!! insights snapshot failed (continuing)"
 
+# Catalog enrichment — capture product_count + AOV from public /products.json
+# (footprint-free). Powers the revenue estimator + Lead Fit Score. Resumable.
+echo "--- catalog enrich (product_count + AOV) ---"
+node --env-file=.env.local scripts/catalog-enrich.mjs --limit 3000 || echo "!! catalog-enrich failed (continuing)"
+
 # Per-provider snapshot → provider_snapshots (adoption/top-spot/exclusive), so the
 # shareable provider dashboards' trend lines accrue. Idempotent per (provider, day).
 echo "--- provider snapshots ---"

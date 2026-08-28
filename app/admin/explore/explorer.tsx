@@ -153,9 +153,9 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
   const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (q ? 1 : 0);
 
   const exportCsv = () => {
-    const head = ["domain", "name", "category", "country", "city", "est_monthly_sales", "revenue_band", "lead_score", "plus", "email", "instagram", "facebook", "tiktok"];
+    const head = ["domain", "name", "category", "country", "city", "platform", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
     const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const rows = filtered.map((l) => [l.domain, l.name, l.category, l.country, l.city, l.estMonthlySales, revenueBand(l.estMonthlySales), l.score, l.plus, l.email, l.instagram, l.facebook, l.tiktok].map(esc).join(","));
+    const rows = filtered.map((l) => [l.domain, l.name, l.category, l.country, l.city, l.platform, l.theme, l.productCount, l.aovUsd, l.estMonthlySales, revenueBand(l.estMonthlySales), l.score, l.plus, l.email, l.payments, l.shippingProviders, l.apps, l.instagram, l.facebook, l.tiktok].map(esc).join(","));
     const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `terrain-leads-${filtered.length}.csv`; a.click();
   };
@@ -202,11 +202,11 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-2xl border border-cream/10">
-          <table className="w-full min-w-[860px] text-left text-sm">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="border-b border-cream/10 text-xs uppercase tracking-wide text-cream/40">
               <tr>
                 <th className="px-4 py-3">Store</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
-                <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
+                <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Catalog</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
               </tr>
             </thead>
             <tbody>
@@ -226,6 +226,10 @@ export function Explorer({ leads }: { leads: ExploreLead[] }) {
                     <td className="px-4 py-2.5 text-cream/60">{l.category ?? "—"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? marketLabel(l.country) : "—"}</td>
                     <td className="px-4 py-2.5"><span className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{b}</span> <span className="ml-1 text-xs text-cream/30">{usd(l.estMonthlySales)}</span></td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-xs text-cream/50">
+                      {l.productCount != null ? `${l.productCount >= 250 ? "250+" : l.productCount} products` : <span className="text-cream/25">—</span>}
+                      {l.aovUsd != null && <span className="text-cream/30"> · ${Math.round(l.aovUsd)} AOV</span>}
+                    </td>
                     <td className="px-4 py-2.5"><ScoreRing score={l.score} /></td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2 text-xs">
