@@ -40,15 +40,19 @@ echo "--- 5/6 domain & email intel ---"
 node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-watch step failed (continuing)"
 
 # Step 6: payment coverage — refresh the value-ranked queue, browser-probe the
-# top N highest-value stores that still lack a verified gateway (ground truth,
-# skips already-probed), then sync the results into imported_stores.payments.
-# Capped per run: each probe leaves an abandoned checkout in the merchant's admin.
+# top N highest-value stores that still lack a verified gateway, then sync the
+# results into imported_stores.payments + shipping_providers. The probe is now pure
+# HTTP (no browser) — it parses the enabled gateways from the server-rendered
+# checkout HTML and shipping providers (incl. TUNL international) from
+# /cart/shipping_rates.json — so it's ~10-50x cheaper and far faster, letting us
+# probe many more per run. Still capped: a probe creates a cart/checkout record in
+# the merchant's admin (but enters no email, so no abandoned-cart recovery fires).
 echo "--- 6/7 payments (queue + checkout probe + sync) ---"
 node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
   ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
-      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 150 --concurrency 6 ) \
+      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 600 --concurrency 12 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
 else
