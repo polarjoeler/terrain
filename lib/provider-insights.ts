@@ -69,14 +69,17 @@ export async function providerInsights(provider: string, country?: string): Prom
   // Every live store that has ANY verified payment data (the honest denominator),
   // pulled with the fields we need — provider membership is decided in JS off the
   // ordered token list so rank/exclusive/top-spot are exact.
+  // Customer-facing surface → read only OWN-SOURCED fields (launched_at, est_revenue_usd),
+  // never the vendor first_seen / estimated_monthly_sales. These fill as our crawls run.
   const rows = await sql<{
     domain: string; name: string | null; country: string | null;
-    payments: string; first_seen: string | null; discovered_at: Date | null;
-    estimated_monthly_sales: string | null;
+    payments: string; launched_at: Date | null; discovered_at: Date | null;
+    est_revenue_usd: string | null;
   }[]>`
-    SELECT domain, name, country, payments, first_seen, discovered_at, estimated_monthly_sales
+    SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd
     FROM imported_stores
     WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''`;
+  const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
 
   const verifiedBase = rows.length;
   const mine = rows
@@ -102,10 +105,10 @@ export async function providerInsights(provider: string, country?: string): Prom
     if (gateways.length === 1) exclusive++;
     if (rank === 1) topSpot++;
     for (const g of gateways) if (norm(g) !== p) coOcc.set(g, (coOcc.get(g) ?? 0) + 1);
-    const yr = (r.first_seen && /^\d{4}/.test(r.first_seen)) ? r.first_seen.slice(0, 4) : "unknown";
+    const yr = yearOf(r.launched_at);
     vintage.set(yr, (vintage.get(yr) ?? 0) + 1);
-    sizeBands.set(salesBand(r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null),
-      (sizeBands.get(salesBand(r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null)) ?? 0) + 1);
+    const rev = r.est_revenue_usd != null ? Number(r.est_revenue_usd) : null;
+    sizeBands.set(salesBand(rev), (sizeBands.get(salesBand(rev)) ?? 0) + 1);
   }
 
   // Adoption among NEW (discovered) stores — organic, excludes imports.
@@ -122,8 +125,7 @@ export async function providerInsights(provider: string, country?: string): Prom
   const allByYear = new Map<string, number>();
   const verifiedByCountry = new Map<string, number>();
   for (const r of rows) {
-    const yr = (r.first_seen && /^\d{4}/.test(r.first_seen)) ? r.first_seen.slice(0, 4) : "unknown";
-    allByYear.set(yr, (allByYear.get(yr) ?? 0) + 1);
+    allByYear.set(yearOf(r.launched_at), (allByYear.get(yearOf(r.launched_at)) ?? 0) + 1);
     const c = (r.country || "??").toUpperCase();
     verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
   }
@@ -134,12 +136,12 @@ export async function providerInsights(provider: string, country?: string): Prom
   for (const t of PAY_TYPES) coOccurrenceByType[t].sort((a, b) => b.count - a.count);
 
   const topStores: ProviderStore[] = mine
-    .sort((a, b) => (Number(b.r.estimated_monthly_sales) || 0) - (Number(a.r.estimated_monthly_sales) || 0))
+    .sort((a, b) => (Number(b.r.est_revenue_usd) || 0) - (Number(a.r.est_revenue_usd) || 0))
     .slice(0, 25)
     .map(({ r, gateways, rank }) => ({
       domain: r.domain, name: r.name, country: r.country, rank, gateways,
-      sales: r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null,
-      firstSeen: r.first_seen,
+      sales: r.est_revenue_usd != null ? Number(r.est_revenue_usd) : null,
+      firstSeen: r.launched_at ? new Date(r.launched_at).toISOString().slice(0, 10) : null,
     }));
 
   return {
