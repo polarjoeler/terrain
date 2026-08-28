@@ -52,7 +52,10 @@ function scoreLead(sales: number, email: boolean, plus: boolean, social: number,
   return Math.max(1, Math.min(100, score));
 }
 
-export async function exploreLeads(limit = 25000): Promise<ExploreLead[]> {
+// Cap the initial payload — the client ships every lead for instant faceting, so
+// loading all ~13k (3.8MB) made the page slow. The top ~5k by value are the real
+// outreach targets (most below that have no sales signal — median is ~500 local).
+export async function exploreLeads(limit = 5000): Promise<ExploreLead[]> {
   const rows = await db()<{
     domain: string; name: string | null; category: string | null; country: string | null; city: string | null;
     estimated_monthly_sales: string | null; currency: string | null; plus: boolean; email: string | null;
