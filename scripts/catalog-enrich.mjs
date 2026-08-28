@@ -63,7 +63,7 @@ async function main() {
           await sql`UPDATE imported_stores SET product_count = ${r.count},
                     avg_product_price = COALESCE(${r.avg}, avg_product_price),
                     launched_at = COALESCE(${r.launched}, launched_at),
-                    launched_source = CASE WHEN ${r.launched} IS NOT NULL AND launched_at IS NULL THEN 'earliest_product' ELSE launched_source END,
+                    launched_source = CASE WHEN ${r.launched}::text IS NOT NULL AND launched_at IS NULL THEN 'earliest_product' ELSE launched_source END,
                     catalog_checked_at = now()
                     WHERE domain = ${domain}`;
           ok++;
