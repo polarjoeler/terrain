@@ -72,6 +72,11 @@ curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://te
 echo "--- catalog enrich (product_count + AOV) ---"
 node --env-file=.env.local scripts/catalog-enrich.mjs --limit 3000 || echo "!! catalog-enrich failed (continuing)"
 
+# Homepage fingerprint scan — detect shipping/logistics apps (Shiprazor, TUNL, Bob
+# Go…) that don't appear as a checkout carrier, and capture clean theme names.
+echo "--- logistics/theme fingerprint scan ---"
+node --env-file=.env.local scripts/logistics-scan.mjs --limit 3000 || echo "!! logistics-scan failed (continuing)"
+
 # Per-provider snapshot → provider_snapshots (adoption/top-spot/exclusive), so the
 # shareable provider dashboards' trend lines accrue. Idempotent per (provider, day).
 echo "--- provider snapshots ---"
