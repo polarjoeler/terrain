@@ -44,13 +44,27 @@ async function scan(domain) {
     });
     if (res.status === 429 || res.status >= 500) return { retriable: true };
     if (!res.ok) return { retriable: false };
-    const html = (await res.text()).toLowerCase();
+    const raw = await res.text();
+    const html = raw.toLowerCase();
     const hits = [];
     for (const [name, needles] of Object.entries(FINGERPRINTS))
       if (needles.some((n) => html.includes(n))) hits.push(name);
-    const tm = THEME_RE.exec(html);
+    const tm = THEME_RE.exec(raw);               // raw preserves theme-name casing
     const theme = tm ? tm[1].trim().slice(0, 60) : null;
-    return { logistics: hits.join(";") || null, theme, retriable: false };
+
+    // Own-sourced contact from the store's OWN page. Collect candidates, drop junk
+    // (image sprites, trackers, template placeholders like xxx@xxx), prefer a real
+    // business inbox (info@/sales@/support@…) over the first random match.
+    const JUNK = /(@2x|\.png|\.jpg|\.gif|\.svg|\.webp|sentry|wixpress|example\.|@sentry|@email\b|domain\.com|placeholder|myshopify|\.wixpress|godaddy|x{3,}|@x+\.)/i;
+    const cands = [...new Set([...raw.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0].toLowerCase()))]
+      .filter((e) => !JUNK.test(e) && !/\.\./.test(e) && e.length < 80);
+    const BIZ = /^(info|sales|hello|contact|support|admin|orders|shop|help|enquiries|hi|care|customercare|customerservice)@/;
+    let email = cands.find((e) => BIZ.test(e)) || cands[0] || null;
+    let phone = (/(?:tel:|href="tel:)\s*([+0-9][+0-9()\s.\-]{6,20})/.exec(raw) || [])[1] || null;
+    if (phone) phone = phone.replace(/[^\d+]/g, "").slice(0, 20);
+    if (phone && phone.replace(/\D/g, "").length < 8) phone = null;
+
+    return { logistics: hits.join(";") || null, theme, email, phone, retriable: false };
   } catch (e) {
     return { retriable: e.name === "TimeoutError" };
   }
@@ -80,6 +94,8 @@ async function main() {
         await sql`UPDATE imported_stores SET
                     logistics_apps = ${r.logistics},
                     theme = COALESCE(${cleanTheme}, theme),
+                    contact_email = COALESCE(${r.email}, contact_email),
+                    contact_phone = COALESCE(${r.phone}, contact_phone),
                     logistics_checked_at = now()
                   WHERE domain = ${domain}`;
         if (r.logistics) found++;

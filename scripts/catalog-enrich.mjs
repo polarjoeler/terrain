@@ -32,7 +32,11 @@ async function fetchCatalog(domain) {
     const prices = [];
     for (const p of j.products) for (const v of p.variants ?? []) { const pr = parseFloat(v.price); if (pr > 0) prices.push(pr); }
     const avg = prices.length ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100 : null;
-    return { count: j.products.length, avg, note: null };   // 250 = full page (lower bound)
+    // Own-sourced launch date: the earliest product's publish date ≈ when the store
+    // went live. Independent of any vendor's "first_seen".
+    const dates = j.products.map((p) => p.published_at || p.created_at).filter(Boolean).sort();
+    const launched = dates.length ? String(dates[0]).slice(0, 10) : null;
+    return { count: j.products.length, avg, launched, note: null };   // 250 = full page (lower bound)
   } catch (e) {
     return { note: e.name === "TimeoutError" ? "timeout" : "error", retriable: e.name === "TimeoutError" };
   }
@@ -57,7 +61,10 @@ async function main() {
         const r = await fetchCatalog(domain);
         if (r.note == null) {
           await sql`UPDATE imported_stores SET product_count = ${r.count},
-                    avg_product_price = COALESCE(${r.avg}, avg_product_price), catalog_checked_at = now()
+                    avg_product_price = COALESCE(${r.avg}, avg_product_price),
+                    launched_at = COALESCE(${r.launched}, launched_at),
+                    launched_source = CASE WHEN ${r.launched} IS NOT NULL AND launched_at IS NULL THEN 'earliest_product' ELSE launched_source END,
+                    catalog_checked_at = now()
                     WHERE domain = ${domain}`;
           ok++;
         } else if (!r.retriable) {

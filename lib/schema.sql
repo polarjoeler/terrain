@@ -99,6 +99,16 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN;
 -- Ecommerce platform (Shopify today; WooCommerce/others as we expand). Defaults
 -- to Shopify on backfill; new non-Shopify imports/discovery set it explicitly.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS platform TEXT;
+-- Own-sourced (never set by imports) — the fields safe to show customers, so the
+-- sellable surfaces stay clean across future vendor imports.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS launched_at DATE;            -- our launch date (earliest product / CT / WHOIS)
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS launched_source TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS est_revenue_usd NUMERIC;     -- our revenue estimate
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_email TEXT;          -- scraped from the store's own site
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS logistics_apps TEXT;         -- our homepage fingerprint scan
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS catalog_checked_at TIMESTAMPTZ;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS logistics_checked_at TIMESTAMPTZ;
 
 -- Churn log — a snapshot of each store the moment it's confirmed dead/migrated,
 -- preserving what it was using (payments/shipping/theme/…) so we can report on
