@@ -81,7 +81,7 @@ async function main() {
           const reordered = added.length === 0 && removed.length === 0; // same set, new order
           await sql`INSERT INTO payment_changes
             (domain, old_payments, new_payments, added, removed, old_primary, new_primary, reordered)
-            VALUES (${domain}, ${oldP}, ${v.payments}, ${added}, ${removed}, ${o[0] ?? null}, ${n[0] ?? null}, ${reordered})`;
+            VALUES (${domain}, ${oldP}, ${v.payments}, ${added}::text[], ${removed}::text[], ${o[0] ?? null}, ${n[0] ?? null}, ${reordered})`;
           changed++;
         }
         // Overwrite payments with the fresh read (so a re-probe reflects the CURRENT
@@ -90,7 +90,7 @@ async function main() {
               payments           = COALESCE(${v.payments}, payments),
               shipping_providers = COALESCE(${v.shipping}, shipping_providers),
               free_shipping      = COALESCE(${v.free}, free_shipping),
-              payments_checked_at = CASE WHEN ${v.payments} IS NOT NULL THEN now() ELSE payments_checked_at END
+              payments_checked_at = CASE WHEN ${v.payments}::text IS NOT NULL THEN now() ELSE payments_checked_at END
             WHERE domain = ${domain} AND published`;
         updated += r.count;
       }
