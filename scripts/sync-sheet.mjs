@@ -67,6 +67,22 @@ async function readEnriched() {
 }
 
 const str = (v) => { const s = (v ?? "").toString().trim(); return s.length ? s : null; };
+
+// The VPS labels each store by TLD/country; fall back to the domain's ccTLD when the
+// country column is blank or "?". Covers Africa + Japan + Middle East targets.
+const CCTLD_CC = {
+  za: "ZA", ke: "KE", ng: "NG", jp: "JP", ae: "AE", sa: "SA", il: "IL", tr: "TR",
+  eg: "EG", ma: "MA", mu: "MU", tz: "TZ", bw: "BW", ug: "UG", gh: "GH", qa: "QA",
+  kw: "KW", bh: "BH", om: "OM", jo: "JO", lb: "LB",
+};
+function detectCountry(domain, countryCol) {
+  const c = (countryCol ?? "").toString().trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(c)) return c;                       // already a 2-letter code
+  if (c.includes("SOUTH AFRICA")) return "ZA";
+  const d = (domain ?? "").toString().toLowerCase();
+  for (const [tld, cc] of Object.entries(CCTLD_CC)) if (d.endsWith("." + tld)) return cc;
+  return null;
+}
 const num = (v) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) ? n : null; };
 const date = (v) => { const s = str(v); return s && s.length >= 8 ? s.slice(0, 10) : null; };
 
@@ -84,36 +100,45 @@ async function main() {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE`;
 
     const rows = await readEnriched();
-    const zaRows = rows.filter((r) => r[COL.domain] && isZa(r[COL.domain], r[COL.country]));
-    console.log(`sheet rows: ${rows.length}, ZA: ${zaRows.length}`);
+    // Land ALL discovered markets, not just ZA — the VPS writes ZA/KE/NG/MA/EG/JP…
+    // into the Sheet and the old ZA-only filter stranded everything else. Country
+    // comes from the Sheet's column, falling back to the domain's ccTLD.
+    const withDomain = rows.filter((r) => r[COL.domain]);
+    console.log(`sheet rows: ${rows.length}, landing: ${withDomain.length} (all markets)`);
 
     const existing = new Set(
       (await sql`SELECT domain FROM imported_stores`).map((r) => r.domain),
     );
 
-    const records = zaRows.map((r) => ({
-      domain: r[COL.domain].trim().toLowerCase(),
-      name: str(r[COL.name]) ?? r[COL.domain],
-      country: "ZA",
-      email: str(r[COL.email]),
-      theme: str(r[COL.theme]),
-      plus: Boolean(str(r[COL.plus])),
-      payments: str(r[COL.payments]),
-      product_count: num(r[COL.productCount]),
-      price_min: num(r[COL.priceMin]),
-      price_max: num(r[COL.priceMax]),
-      currency: str(r[COL.currency]),
-      first_seen: date(r[COL.firstSeen]),
-      first_product_at: date(r[COL.firstProductAt]),
-      discovered_at: date(r[COL.firstSeen]),
-      published: true,
-      source: "discovery",
-    }));
+    const records = withDomain.map((r) => {
+      const fpa = date(r[COL.firstProductAt]); // earliest product publish ≈ launch date
+      return {
+        domain: r[COL.domain].trim().toLowerCase(),
+        name: str(r[COL.name]) ?? r[COL.domain],
+        country: detectCountry(r[COL.domain], r[COL.country]),
+        email: str(r[COL.email]),
+        theme: str(r[COL.theme]),
+        plus: Boolean(str(r[COL.plus])),
+        payments: str(r[COL.payments]),
+        product_count: num(r[COL.productCount]),
+        price_min: num(r[COL.priceMin]),
+        price_max: num(r[COL.priceMax]),
+        currency: str(r[COL.currency]),
+        first_seen: date(r[COL.firstSeen]),
+        first_product_at: fpa,
+        discovered_at: date(r[COL.firstSeen]),
+        launched_at: fpa,                                    // own-sourced launch date
+        launched_source: fpa ? "earliest_product" : null,
+        published: true,
+        source: "discovery",
+      };
+    });
 
     const cols = [
       "domain", "name", "country", "email", "theme", "plus", "payments",
       "product_count", "price_min", "price_max", "currency", "first_seen",
-      "first_product_at", "discovered_at", "published", "source",
+      "first_product_at", "discovered_at", "launched_at", "launched_source",
+      "published", "source",
     ];
     let updated = 0, inserted = 0;
     for (let i = 0; i < records.length; i += 400) {
@@ -122,10 +147,12 @@ async function main() {
         INSERT INTO imported_stores ${sql(batch, ...cols)}
         ON CONFLICT (domain) DO UPDATE SET
           discovered_at    = COALESCE(EXCLUDED.discovered_at, imported_stores.discovered_at),
-          first_product_at = COALESCE(EXCLUDED.first_product_at, imported_stores.first_product_at)`;
+          first_product_at = COALESCE(EXCLUDED.first_product_at, imported_stores.first_product_at),
+          launched_at      = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
+          launched_source  = COALESCE(imported_stores.launched_source, EXCLUDED.launched_source)`;
       for (const r of batch) (existing.has(r.domain) ? updated++ : inserted++);
     }
-    console.log(`sync done: ${updated} updated, ${inserted} inserted`);
+    console.log(`sync done: ${updated} updated, ${inserted} inserted (all markets)`);
   } finally {
     await sql.end();
   }
