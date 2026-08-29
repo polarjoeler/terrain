@@ -47,24 +47,57 @@ async function main() {
   try {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`;
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`;
+    // When we last verified checkout — lets the queue re-surface stale stores for a
+    // re-probe (so provider switches get caught), instead of probe-once-forever.
+    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`;
+    // Event log of payment-provider shifts — the raw material for monitoring stores
+    // that switch/add/drop a gateway or reorder their checkout (a live sales signal).
+    // Populated here by diffing each re-probe against what we last had.
+    await sql`CREATE TABLE IF NOT EXISTS payment_changes (
+      id BIGSERIAL PRIMARY KEY, domain TEXT NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      old_payments TEXT, new_payments TEXT, added TEXT[], removed TEXT[],
+      old_primary TEXT, new_primary TEXT, reordered BOOLEAN NOT NULL DEFAULT false)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_payment_changes_at ON payment_changes (changed_at DESC)`;
+
+    const toks = (s) => (s ? s.split(";").map((t) => t.trim()).filter(Boolean) : []);
+
     // Bounded worker pool — NOT Promise.all over the whole batch. Firing hundreds
     // of concurrent queries at a small pool makes postgres.js deadlock the ones
     // that queue beyond `max` (the sync then hangs and the pipeline skips it).
     // A few workers, each draining the list sequentially, never exceeds the pool.
-    let updated = 0, idx = 0;
+    let updated = 0, changed = 0, idx = 0;
     async function worker() {
       while (idx < verified.length) {
         const [domain, v] = verified[idx++];
+        // Read what we currently have so we can detect a real shift (not first capture).
+        const [cur] = await sql`SELECT payments FROM imported_stores WHERE domain = ${domain} AND published`;
+        const oldP = cur?.payments ?? null;
+        // Log a change only when we have a NEW verified set that differs from a
+        // non-empty prior one — i.e. an actual switch/add/drop/reorder, not a first read.
+        if (v.payments && oldP && v.payments !== oldP) {
+          const o = toks(oldP), n = toks(v.payments);
+          const added = n.filter((t) => !o.includes(t));
+          const removed = o.filter((t) => !n.includes(t));
+          const reordered = added.length === 0 && removed.length === 0; // same set, new order
+          await sql`INSERT INTO payment_changes
+            (domain, old_payments, new_payments, added, removed, old_primary, new_primary, reordered)
+            VALUES (${domain}, ${oldP}, ${v.payments}, ${added}, ${removed}, ${o[0] ?? null}, ${n[0] ?? null}, ${reordered})`;
+          changed++;
+        }
+        // Overwrite payments with the fresh read (so a re-probe reflects the CURRENT
+        // gateways); shipping/free still COALESCE (a null read shouldn't wipe them).
         const r = await sql`UPDATE imported_stores SET
               payments           = COALESCE(${v.payments}, payments),
               shipping_providers = COALESCE(${v.shipping}, shipping_providers),
-              free_shipping      = COALESCE(${v.free}, free_shipping)
+              free_shipping      = COALESCE(${v.free}, free_shipping),
+              payments_checked_at = CASE WHEN ${v.payments} IS NOT NULL THEN now() ELSE payments_checked_at END
             WHERE domain = ${domain} AND published`;
         updated += r.count;
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-    console.log(`✓ Updated checkout data (payments/shipping/free) on ${updated.toLocaleString()} imported stores.`);
+    console.log(`✓ Updated checkout data on ${updated.toLocaleString()} stores.`);
+    if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);
   } finally {
     await sql.end();
   }

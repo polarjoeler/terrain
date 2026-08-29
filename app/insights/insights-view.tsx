@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
+import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
 import { marketLabel, marketAdjective } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
 import type { InsightsData, InsightItem } from "@/lib/insights";
@@ -135,6 +136,7 @@ function DistroCard({
 
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
+  momentum = [], shifts = [],
 }: {
   data: InsightsData;
   history: InsightsData[];
@@ -143,6 +145,8 @@ export function InsightsView({
   country?: string;
   cohorts?: { tag: string; count: number }[];
   tag?: string;
+  momentum?: ProviderMomentum[];
+  shifts?: PaymentShift[];
 }) {
   // Navigate preserving both country + cohort in the URL.
   const go = (next: { country?: string; tag?: string }) => {
@@ -364,6 +368,57 @@ export function InsightsView({
             </Card>
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)">
               <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} />
+            </Card>
+          </div>
+
+          {/* Provider momentum + live switch feed — the "internal shifts" view. Fills
+              from daily snapshots (share/rank movement) and the 60-day re-probe cycle
+              (per-store switches), so it deepens over time. */}
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Card
+              title="Provider momentum"
+              subtitle={momentum[0]?.days ? `Share & checkout-rank movement over ${momentum[0].days} day${momentum[0].days === 1 ? "" : "s"}` : "Tracking — movement appears as daily history builds"}
+            >
+              {momentum.length ? (
+                <ul className="space-y-1.5">
+                  {momentum.slice(0, 8).map((m) => (
+                    <li key={m.provider} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="truncate text-cream/80">{m.provider}</span>
+                      <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
+                        <span className="text-cream/45">{m.share}%</span>
+                        <span className={m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/30"}>
+                          {m.shareDelta > 0 ? "+" : ""}{m.shareDelta}pt
+                        </span>
+                        <span className="text-cream/35" title="avg checkout rank (1 = primary)">#{m.rank}</span>
+                        {/* rank going DOWN = moved up the checkout → mint */}
+                        <span className={m.rankDelta < 0 ? "text-mint" : m.rankDelta > 0 ? "text-orange" : "text-cream/30"}>
+                          {m.rankDelta < 0 ? "▲" : m.rankDelta > 0 ? "▼" : "–"}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-cream/40">No snapshot history yet — this fills in daily.</p>
+              )}
+            </Card>
+            <Card title="Recent provider switches" subtitle="Stores that changed their checkout (caught on re-probe)">
+              {shifts.length ? (
+                <ul className="space-y-1.5">
+                  {shifts.slice(0, 10).map((s, i) => (
+                    <li key={i} className="truncate text-sm">
+                      <span className="font-mono text-xs text-cream/70">{s.domain}</span>{" "}
+                      {s.added.length > 0 && <span className="text-mint">+{s.added.join(", ")}</span>}
+                      {s.removed.length > 0 && <span className="text-orange"> −{s.removed.join(", ")}</span>}
+                      {s.reordered && s.added.length === 0 && s.removed.length === 0 && <span className="text-cream/40">reordered</span>}
+                      {s.newPrimary && s.oldPrimary !== s.newPrimary && <span className="text-cream/50"> · primary→{s.newPrimary}</span>}
+                      <span className="ml-1 text-cream/30">{s.changedAt}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-cream/40">No switches logged yet — detected as stores are re-probed on the 60-day cycle.</p>
+              )}
             </Card>
           </div>
 

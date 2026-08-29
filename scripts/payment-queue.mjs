@@ -82,14 +82,17 @@ async function main() {
     // last and never get probed. We want gateway coverage in the new markets fast.
     const queue = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status,
+        (payments IS NULL OR payments = '') AS needs_initial,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000,
         (UPPER(country) IN ('KE', 'NG')) AS new_market
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
-        ${PLUS ? sql`AND plus = true` : sql`AND (payments IS NULL OR payments = '')`}
-      ORDER BY t100 DESC, t1000 DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
+        ${PLUS ? sql`AND plus = true`
+               : sql`AND (payments IS NULL OR payments = ''
+                         OR payments_checked_at < now() - interval '60 days')`}
+      ORDER BY needs_initial DESC, t100 DESC, t1000 DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     mkdirSync(dirname(OUT), { recursive: true });

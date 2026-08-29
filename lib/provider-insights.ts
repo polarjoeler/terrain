@@ -236,3 +236,74 @@ export async function availableProviders(min = 5): Promise<{ provider: string; s
     ) x WHERE trim(g) <> '' GROUP BY 1 HAVING COUNT(*) >= ${min} ORDER BY n DESC`;
   return rows.map((r) => ({ provider: r.provider, stores: Number(r.n) }));
 }
+
+export type ProviderMomentum = {
+  provider: string;
+  share: number;        // latest share %
+  shareDelta: number;   // share-point change over the window (+/-)
+  rank: number;         // latest avg checkout rank (1 = usually primary)
+  rankDelta: number;    // change in avg rank (negative = moved UP the checkout)
+  total: number;        // latest merchant count
+  totalDelta: number;   // merchant-count change
+  days: number;         // span of history compared
+};
+
+/** Per-provider movement in share + checkout ranking, from the daily
+ *  provider_snapshots series — "who's gaining/losing merchants and moving up or
+ *  down the checkout". Compares the latest snapshot to the earliest within `days`. */
+export async function providerMomentum(country = "ALL", days = 30): Promise<ProviderMomentum[]> {
+  const sql = db();
+  const rows = await sql<{ provider: string; date: Date; data: Record<string, number> }[]>`
+    SELECT provider, date, data FROM provider_snapshots
+    WHERE country = ${country} AND date >= CURRENT_DATE - ${days}::int
+    ORDER BY provider, date ASC`.catch(() => []);
+  const byProv = new Map<string, { date: Date; data: Record<string, number> }[]>();
+  for (const r of rows) {
+    if (!byProv.has(r.provider)) byProv.set(r.provider, []);
+    byProv.get(r.provider)!.push(r);
+  }
+  const out: ProviderMomentum[] = [];
+  for (const [provider, series] of byProv) {
+    if (!series.length) continue;
+    const first = series[0], last = series[series.length - 1];
+    const num = (o: Record<string, number>, k: string) => Number(o[k] ?? 0);
+    const span = Math.max(0, Math.round((new Date(last.date).getTime() - new Date(first.date).getTime()) / 864e5));
+    out.push({
+      provider,
+      share: num(last.data, "share"),
+      shareDelta: Math.round((num(last.data, "share") - num(first.data, "share")) * 100) / 100,
+      rank: num(last.data, "avgRank"),
+      rankDelta: Math.round((num(last.data, "avgRank") - num(first.data, "avgRank")) * 100) / 100,
+      total: num(last.data, "total"),
+      totalDelta: num(last.data, "total") - num(first.data, "total"),
+      days: span,
+    });
+  }
+  // Biggest movers first (by absolute merchant change, then share change).
+  return out.sort((a, b) => Math.abs(b.totalDelta) - Math.abs(a.totalDelta) || Math.abs(b.shareDelta) - Math.abs(a.shareDelta));
+}
+
+export type PaymentShift = {
+  domain: string; changedAt: string;
+  added: string[]; removed: string[];
+  oldPrimary: string | null; newPrimary: string | null;
+  reordered: boolean;
+};
+
+/** Recent per-store payment-provider shifts (switches/adds/drops/reorders) from the
+ *  payment_changes log — a live feed of stores changing their checkout. */
+export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
+  const sql = db();
+  const rows = await sql<{
+    domain: string; changed_at: Date; added: string[] | null; removed: string[] | null;
+    old_primary: string | null; new_primary: string | null; reordered: boolean;
+  }[]>`
+    SELECT domain, changed_at, added, removed, old_primary, new_primary, reordered
+    FROM payment_changes ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
+  return rows.map((r) => ({
+    domain: r.domain,
+    changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
+    added: r.added ?? [], removed: r.removed ?? [],
+    oldPrimary: r.old_primary, newPrimary: r.new_primary, reordered: r.reordered,
+  }));
+}

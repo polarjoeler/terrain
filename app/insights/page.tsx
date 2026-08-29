@@ -7,6 +7,7 @@ import {
   cohortCount,
 } from "@/lib/insights";
 import { tagCounts } from "@/lib/tags";
+import { providerMomentum, recentPaymentShifts } from "@/lib/provider-insights";
 import { InsightsView } from "./insights-view";
 
 export const metadata = { title: "Terrain — Market Insights" };
@@ -32,7 +33,12 @@ export default async function Insights({
   // Only accept a cohort that actually has stores.
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
 
-  const [data, baselineDate] = await Promise.all([computeInsights(country, tag), getBaselineDate()]);
+  const [data, baselineDate, momentum, shifts] = await Promise.all([
+    computeInsights(country, tag),
+    getBaselineDate(),
+    providerMomentum("ALL", 30).catch(() => []),
+    recentPaymentShifts(40).catch(() => []),
+  ]);
   // Daily snapshots / trends are for the full ZA market only — not per-country
   // or per-cohort (the snapshot table is single-series).
   let history = [data];
@@ -51,6 +57,8 @@ export default async function Insights({
       country={country}
       cohorts={cohorts}
       tag={tag ?? ""}
+      momentum={momentum}
+      shifts={shifts}
     />
   );
 }
