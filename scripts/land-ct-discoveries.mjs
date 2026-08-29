@@ -29,7 +29,7 @@ async function main() {
     return;
   }
 
-  // domain -> earliest seen_at
+  // domain -> { at: earliest seen date, country }
   const seen = new Map();
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -38,7 +38,9 @@ async function main() {
       const d = String(r.domain || "").trim().toLowerCase();
       if (!d) continue;
       const at = (r.seen_at || "").slice(0, 10) || today();
-      if (!seen.has(d) || at < seen.get(d)) seen.set(d, at);
+      const country = (r.country || "ZA").toUpperCase();  // older records had no country → ZA
+      const prev = seen.get(d);
+      if (!prev || at < prev.at) seen.set(d, { at, country });
     } catch {
       /* skip malformed line */
     }
@@ -55,10 +57,10 @@ async function main() {
     );
     const fresh = [...seen.keys()].filter((d) => !existing.has(d));
 
-    const records = [...seen.entries()].map(([domain, at]) => ({
+    const records = [...seen.entries()].map(([domain, { at, country }]) => ({
       domain,
       name: domain,
-      country: "ZA",
+      country,
       discovered_at: at,
       published: true,
       source: "ct_tail",
