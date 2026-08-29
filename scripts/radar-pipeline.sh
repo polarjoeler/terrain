@@ -18,6 +18,24 @@ cd /Users/joel/storepulse || exit 1
 
 echo "===== radar pipeline $(date '+%Y-%m-%d %H:%M:%S') ====="
 
+# ---------------------------------------------------------------- watchdog ---
+# A hung step (a browser context that never returned) once blocked launchd's
+# single-instance slot for 6+ DAYS, silently halting all enrichment. Cap the whole
+# run: if it exceeds MAX_RUNTIME, kill the entire process group so launchd's next
+# tick (every 4h) starts fresh instead of skipping. macOS has no `timeout`; this
+# is the portable equivalent. The trap cancels it on a normal finish.
+MAX_RUNTIME=${MAX_RUNTIME:-5400}   # 90 min — comfortably longer than a healthy run
+(
+  sleep "$MAX_RUNTIME"
+  echo "!! pipeline exceeded ${MAX_RUNTIME}s at $(date '+%H:%M:%S') — killing run so it can't block the schedule"
+  pkill -P $$ 2>/dev/null       # direct children (node/python steps + their trees)
+  kill -TERM -$$ 2>/dev/null    # whole process group
+  sleep 10
+  kill -KILL -$$ 2>/dev/null
+) &
+WATCHDOG_PID=$!
+trap 'kill "$WATCHDOG_PID" 2>/dev/null' EXIT
+
 # Step 1: pull the cert-transparency discovery feed (Sheet) into Postgres so the
 # newest finds appear and discovered_at stays fresh. Runs locally — the Mac has
 # the Sheet creds + DATABASE_URL — so no web app / CRON_SECRET / Vercel needed.

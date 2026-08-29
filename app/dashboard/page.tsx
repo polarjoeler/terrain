@@ -151,10 +151,13 @@ export default async function Dashboard({
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Browse — kept inside the same max-w container so the heading and the
-            Explorer below line up with the hero + tiles. */}
-        <div className="mt-10 mb-3 flex items-baseline justify-between px-1">
+      {/* Browse gets a WIDER centered container than the hero — the leads table has
+          a filter rail + many columns and looked cramped/cut-off inside max-w-6xl.
+          Both are centered, so the page stays balanced. */}
+      <div className="mx-auto mt-10 max-w-[1600px]">
+        <div className="mb-3 flex items-baseline justify-between px-1">
           <h2 className="font-display text-2xl">Browse stores</h2>
           <span className="text-xs text-cream/40">
             {live ? "Live · refreshed every 10 minutes" : "Sample data — live feed unavailable"}
