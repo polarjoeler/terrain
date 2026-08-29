@@ -42,6 +42,13 @@ trap 'kill "$WATCHDOG_PID" 2>/dev/null' EXIT
 echo "--- 1/5 sync discovery feed ---"
 node --env-file=.env.local scripts/sync-sheet.mjs || echo "!! sync step failed (continuing)"
 
+# Land discoveries from the direct CT log tailer (ct_tail.py, crt.sh-independent).
+# It runs continuously and appends confirmed Shopify .za domains to a feed file;
+# this lands the new ones and prints the overlap vs what we already had — our
+# live recall read against an independent signal.
+echo "--- 1b land CT-tail discoveries (crt.sh-independent) ---"
+node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed (continuing)"
+
 echo "--- 2/5 fingerprint catalogue ---"
 node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
 
