@@ -73,15 +73,27 @@ node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-wat
 # probe many more per run. Still capped: a probe creates a cart/checkout record in
 # the merchant's admin (but enters no email, so no abandoned-cart recovery fires).
 echo "--- 6/7 payments (queue + checkout probe + sync) ---"
-node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
-PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
-if [ -x "$PROBE_PY" ]; then
-  ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
-      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 2000 --concurrency 12 ) \
-    || echo "!! checkout probe failed (continuing)"
-  node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
+# Share a lock with the dedicated hourly payments-probe job (scripts/payments-probe.sh)
+# so the two never write checkout_cache.json at once. If the hourly job is mid-run,
+# skip here — it already covers payments far more often than this 4h cycle.
+PROBE_LOCK="$HOME/shopify-radar/.probe.lock"
+if [ -d "$PROBE_LOCK" ] && [ $(( $(date +%s) - $(stat -f %m "$PROBE_LOCK" 2>/dev/null || echo 0) )) -gt 5400 ]; then rmdir "$PROBE_LOCK" 2>/dev/null; fi
+if mkdir "$PROBE_LOCK" 2>/dev/null; then
+  (
+    trap 'rmdir "$PROBE_LOCK" 2>/dev/null' EXIT
+    node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
+    PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
+    if [ -x "$PROBE_PY" ]; then
+      ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
+          --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 2000 --concurrency 12 ) \
+        || echo "!! checkout probe failed (continuing)"
+      node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
+    else
+      echo "checkout probe env ($PROBE_PY) not found — skipping payments"
+    fi
+  )
 else
-  echo "checkout probe env ($PROBE_PY) not found — skipping payments"
+  echo "payments: probe lock held by the hourly job — skipping this cycle"
 fi
 
 # Step 7: liveness re-check — re-verify a batch of stores (value-ranked, skips
