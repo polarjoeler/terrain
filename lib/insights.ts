@@ -97,7 +97,40 @@ export async function availableCountries(): Promise<{ country: string; stores: n
   return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
 }
 
+// The insights page fires ~a dozen aggregate queries; it's identical for every
+// viewer of a given (country, tag) and only shifts as enrichment trickles in, so
+// we cache each result in-process with a short TTL. First hit for a key computes;
+// everyone else within the window is instant. An in-flight guard collapses a
+// stampede on a cold/expired key. (Module scope persists in a warm server
+// instance; a cold start recomputes once.)
+type CachedInsights = { at: number; data: InsightsData };
+const INSIGHTS_TTL_MS = 10 * 60 * 1000;
+const _insightsCache = new Map<string, CachedInsights>();
+const _insightsInflight = new Map<string, Promise<InsightsData>>();
+
 export async function computeInsights(country = "ZA", tag?: string): Promise<InsightsData> {
+  const key = `${country}|${tag ?? ""}`;
+  const hit = _insightsCache.get(key);
+  if (hit && Date.now() - hit.at < INSIGHTS_TTL_MS) return hit.data;
+  let inflight = _insightsInflight.get(key);
+  if (!inflight) {
+    inflight = computeInsightsUncached(country, tag)
+      .then((data) => {
+        _insightsCache.set(key, { at: Date.now(), data });
+        _insightsInflight.delete(key);
+        return data;
+      })
+      .catch((e) => {
+        _insightsInflight.delete(key);
+        if (hit) return hit.data; // serve stale rather than error the page
+        throw e;
+      });
+    _insightsInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+async function computeInsightsUncached(country = "ZA", tag?: string): Promise<InsightsData> {
   const sql = db();
   // Cohort filter (Top 100, Brand New, …) applied inside the flag subquery.
   const inTag = cohortFilter(tag);
