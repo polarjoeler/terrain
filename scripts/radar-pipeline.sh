@@ -77,7 +77,7 @@ node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
   ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
-      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 600 --concurrency 12 ) \
+      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 2000 --concurrency 12 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
 else
