@@ -7,6 +7,7 @@
 
 import postgres from "postgres";
 import { classify, cleanPayments, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { VISIBLE_MARKETS } from "./markets";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -89,9 +90,11 @@ export async function cohortCount(country: string, tag: string): Promise<number>
 
 /** Distinct markets with published live stores, most first — for the selector. */
 export async function availableCountries(): Promise<{ country: string; stores: number }[]> {
+  // Only the visible markets — the DB holds stores globally, but the pickers (and thus
+  // insights + the dashboard) offer just these until we launch more.
   const rows = await db()<{ country: string; n: number }[]>`
     SELECT country, COUNT(*)::int n FROM imported_stores
-    WHERE published AND country IS NOT NULL AND country <> ''
+    WHERE published AND country = ANY(${[...VISIBLE_MARKETS]})
       AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
     GROUP BY country ORDER BY n DESC`;
   return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));

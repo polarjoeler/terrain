@@ -4,6 +4,11 @@
 
 import postgres from "postgres";
 
+// Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — kept in sync).
+// Inlined here rather than imported so the standalone snapshot-refresh script (Node
+// --experimental-strip-types) doesn't choke on a relative .ts import.
+const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
+
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
   if (!_sql) {
@@ -102,6 +107,7 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
            instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND country = ANY(${[...VISIBLE_MARKETS]})
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
 
@@ -126,7 +132,8 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
 export async function exploreLeadCount(): Promise<number> {
   const [r] = await db()<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND country = ANY(${[...VISIBLE_MARKETS]})`;
   return Number(r.n);
 }
 

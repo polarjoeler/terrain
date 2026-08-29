@@ -1,6 +1,11 @@
 /** Country/market presentation — flag emoji, display name, and adjective — for
  *  the market selectors on the dashboard and insights. Shared so both agree. */
 
+// Markets shown in customer-facing surfaces (dashboard, insights, pickers). We store
+// stores GLOBALLY (CT tailer is global), but only surface these until we launch more.
+// Every customer query filters to this set; everything else stays in the DB, hidden.
+export const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
+
 export const MARKETS: Record<string, { name: string; emoji: string; adjective: string }> = {
   ZA: { name: "South Africa", emoji: "🇿🇦", adjective: "South African" },
   NG: { name: "Nigeria", emoji: "🇳🇬", adjective: "Nigerian" },

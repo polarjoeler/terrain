@@ -20,6 +20,14 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// TLDs that are ccTLDs but used generically → don't infer a country.
+const GENERIC = new Set(["io", "co", "me", "tv", "cc", "ai", "gg", "sh", "to", "ly", "fm", "us",
+  "com", "net", "org", "shop", "store", "xyz", "app", "dev", "biz", "info", "online", "site"]);
+function countryFromDomain(d) {
+  const tld = String(d).toLowerCase().split(".").pop();
+  return tld && tld.length === 2 && !GENERIC.has(tld) ? tld.toUpperCase() : null;
+}
+
 async function main() {
   let text = "";
   try {
@@ -38,7 +46,8 @@ async function main() {
       const d = String(r.domain || "").trim().toLowerCase();
       if (!d) continue;
       const at = (r.seen_at || "").slice(0, 10) || today();
-      const country = (r.country || "ZA").toUpperCase();  // older records had no country → ZA
+      // Prefer the recorded country; else derive from the ccTLD; else null (generic TLD).
+      const country = (r.country ? String(r.country).toUpperCase() : null) || countryFromDomain(d);
       const prev = seen.get(d);
       if (!prev || at < prev.at) seen.set(d, { at, country });
     } catch {
