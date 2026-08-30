@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import { revenueBand, bandTone, scoreColor, REVENUE_BANDS, type RevenueBand } from "@/lib/revenue";
 import type { ExploreLead } from "@/lib/leads-explore";
+import { LeadDrawer } from "./lead-drawer";
 
 const PAGE = 60;
 type SortKey = "score" | "sales" | "name";
@@ -125,6 +126,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
   const [recency, setRecency] = useState<RecencyKey>("");
   const [sort, setSort] = useState<SortKey>("score");
   const [shown, setShown] = useState(PAGE);
+  const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
 
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (v: string) =>
     set((prev) => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n; });
@@ -300,9 +302,14 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
                   <tr key={l.domain} className="border-t border-cream/[0.07] transition hover:bg-cream/[0.03]">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
-                        <Logo domain={l.domain} name={l.name} />
+                        <button type="button" onClick={() => setSelected(l.domain)} className="shrink-0" title="View all data">
+                          <Logo domain={l.domain} name={l.name} />
+                        </button>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 font-medium text-cream">{l.name ?? l.domain}{l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}</div>
+                          <div className="flex items-center gap-1.5 font-medium text-cream">
+                            <button type="button" onClick={() => setSelected(l.domain)} className="truncate text-left hover:text-mint hover:underline" title="View all known data">{l.name ?? l.domain}</button>
+                            {l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
+                          </div>
                           <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>
                         </div>
                       </div>
@@ -338,6 +345,8 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
           </div>
         )}
       </main>
+
+      <LeadDrawer domain={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }
