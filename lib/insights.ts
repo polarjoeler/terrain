@@ -295,17 +295,19 @@ export async function getHomeStats(country = "ZA"): Promise<import("./sheets").F
 
 async function getHomeStatsUncached(country = "ZA"): Promise<import("./sheets").FeedStats> {
   const sql = db();
+  // Restrict to the country's live rows in the WHERE (uses the published/country
+  // indexes and scans only those rows' needed columns) — NOT a `SELECT *` subquery
+  // over the whole table, which under write-load went pathological (a single run
+  // once hogged the DB for 23 min). Same numbers, a fraction of the work.
   const [t] = await sql`
     SELECT
-      COUNT(*) FILTER (WHERE live)::int                                        AS stores,
-      COUNT(*) FILTER (WHERE live AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7)::int AS new_week,
-      COUNT(*) FILTER (WHERE live AND email IS NOT NULL AND email <> '')::int  AS with_email,
-      COUNT(*) FILTER (WHERE live AND plus)::int                              AS plus
-    FROM (
-      SELECT *,
-        (published AND country = ${country} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live
-      FROM imported_stores
-    ) s`;
+      COUNT(*)::int                                                                       AS stores,
+      COUNT(*) FILTER (WHERE discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7)::int AS new_week,
+      COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int                       AS with_email,
+      COUNT(*) FILTER (WHERE plus)::int                                                    AS plus
+    FROM imported_stores
+    WHERE published AND country = ${country}
+      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   // Freshness = the discovery pipeline's last run (updates every pipeline pass),
   // not the imported first_seen dates (historical) or created_at (frozen at import).
   const [f] = await sql`SELECT MAX(enriched_at)::date AS d FROM store_fingerprints`;
