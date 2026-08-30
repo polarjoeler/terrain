@@ -102,15 +102,22 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
   );
 }
 
-export function Explorer({ leads, total }: { leads: ExploreLead[]; total?: number }) {
-  const [q, setQ] = useState("");
-  const [country, setCountry] = useState<Set<string>>(new Set());
-  const [category, setCategory] = useState<Set<string>>(new Set());
-  const [band, setBand] = useState<Set<string>>(new Set());
-  const [theme, setTheme] = useState<Set<string>>(new Set());
-  const [city, setCity] = useState<Set<string>>(new Set());
-  const [payment, setPayment] = useState<Set<string>>(new Set());
-  const [shipping, setShipping] = useState<Set<string>>(new Set());
+// Drill-through: insights data points link here with a facet pre-applied
+// (e.g. /dashboard?payment=Paystack), and these seed the Explorer's filters.
+export type ExploreInitial = {
+  q?: string; country?: string[]; category?: string[]; band?: string[];
+  theme?: string[]; city?: string[]; payment?: string[]; shipping?: string[];
+};
+
+export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; total?: number; initial?: ExploreInitial }) {
+  const [q, setQ] = useState(initial?.q ?? "");
+  const [country, setCountry] = useState<Set<string>>(new Set(initial?.country));
+  const [category, setCategory] = useState<Set<string>>(new Set(initial?.category));
+  const [band, setBand] = useState<Set<string>>(new Set(initial?.band));
+  const [theme, setTheme] = useState<Set<string>>(new Set(initial?.theme));
+  const [city, setCity] = useState<Set<string>>(new Set(initial?.city));
+  const [payment, setPayment] = useState<Set<string>>(new Set(initial?.payment));
+  const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
   const [app, setApp] = useState<Set<string>>(new Set());
   const [platform, setPlatform] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);

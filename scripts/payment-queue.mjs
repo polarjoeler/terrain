@@ -91,7 +91,7 @@ async function main() {
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
         ${PLUS ? sql`AND plus = true`
                : sql`AND (payments IS NULL OR payments = ''
-                         OR payments_checked_at < now() - interval '60 days')`}
+                         OR payments_checked_at < now() - interval '30 days')`}
       ORDER BY needs_initial DESC, t100 DESC, t1000 DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 

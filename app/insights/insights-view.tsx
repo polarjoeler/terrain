@@ -92,14 +92,25 @@ function TrendLine({ data }: { data: number[] }) {
 
 /** A distribution (providers / themes / apps / categories) with % + absolute
  *  counts, drill-in to see every item, and per-item change vs the chosen period. */
+// Drill-through link: an insights data point → the dashboard Explorer, pre-filtered
+// (e.g. click "Paystack" → /dashboard?payment=Paystack&country=ZA → the actual stores).
+function drillHref(param: string, label: string, country?: string): string {
+  const p = new URLSearchParams();
+  p.set(param, label);
+  if (country) p.set("country", country);
+  return `/dashboard?${p.toString()}`;
+}
+
 function DistroCard({
-  title, subtitle, data, baseline, tone = "orange",
+  title, subtitle, data, baseline, tone = "orange", drillParam, country,
 }: {
   title: string;
   subtitle: string;
   data: InsightItem[];
   baseline: InsightItem[] | null;
   tone?: string;
+  drillParam?: string;
+  country?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
@@ -111,14 +122,17 @@ function DistroCard({
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
           const cdel = prev != null ? i.count - prev : null;
+          const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
+          const RowTag = (drillParam ? Link : "div") as React.ElementType;
+          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
           return (
-            <div key={i.label} className="-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05]" title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}>
+            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
               {bmap && <div className="w-16 shrink-0 text-right text-xs tabular-nums">{<CountDelta v={cdel} />}</div>}
-            </div>
+            </RowTag>
           );
         })}
       </div>
@@ -348,7 +362,7 @@ export function InsightsView({
                         {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
                       </span>
                     </div>
-                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} />
+                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} />
                   </div>
                 ) : null,
               )}
@@ -367,7 +381,7 @@ export function InsightsView({
               </p>
             </Card>
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)">
-              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} />
+              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} />
             </Card>
           </div>
 
@@ -422,16 +436,18 @@ export function InsightsView({
             </Card>
           </div>
 
-          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" />
-          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" />
+          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} />
+          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} />
           <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" />
-          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" />
+          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} />
           <DistroCard
             title="Shipping providers"
             subtitle={`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`}
             data={data.shippingByProvider}
             baseline={base?.shippingByProvider ?? null}
             tone="cyan"
+            drillParam="shipping"
+            country={country}
           />
         </div>
 
@@ -473,12 +489,14 @@ export function InsightsView({
 
 /** Compact drill-in list (used inside the payments cards). */
 function DrillList({
-  data, baseline, tone, showBaseline,
+  data, baseline, tone, showBaseline, drillParam, country,
 }: {
   data: InsightItem[];
   baseline: InsightItem[] | null;
   tone: string;
   showBaseline: boolean;
+  drillParam?: string;
+  country?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
@@ -489,14 +507,17 @@ function DrillList({
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
           const cdel = prev != null ? i.count - prev : null;
+          const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
+          const RowTag = (drillParam ? Link : "div") as React.ElementType;
+          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
           return (
-            <div key={i.label} className="-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05]" title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}>
+            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
               {showBaseline && <div className="w-16 shrink-0 text-right text-xs tabular-nums"><CountDelta v={cdel} /></div>}
-            </div>
+            </RowTag>
           );
         })}
       </div>

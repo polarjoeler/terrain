@@ -18,7 +18,10 @@ export const dynamic = "force-dynamic";
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams: Promise<{ country?: string }>;
+  searchParams: Promise<{
+    country?: string; q?: string; payment?: string; shipping?: string;
+    theme?: string; city?: string; category?: string; band?: string;
+  }>;
 }) {
   const email = await currentUser();
   if (!email) redirect("/login");
@@ -32,6 +35,16 @@ export default async function Dashboard({
   const markets = await availableCountries().catch(() => [] as { country: string; stores: number }[]);
   const sp = await searchParams;
   const country = sp.country && markets.some((m) => m.country === sp.country) ? sp.country : "ZA";
+
+  // Drill-through: insights links land here with a facet pre-applied
+  // (e.g. /dashboard?payment=Paystack) — seed the Explorer's filters from them.
+  const csv = (v?: string) => (v ? v.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
+  const drill = {
+    q: sp.q,
+    country: sp.country ? [sp.country] : undefined,
+    payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
+    city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
+  };
 
   // Tile numbers all come from the single getHomeStats() aggregate (one indexed
   // COUNT query) — same source as /insights and the homepage, so the counts agree.
@@ -166,7 +179,7 @@ export default async function Dashboard({
         {/* Streamed so the shell + tiles paint instantly — the full live set is a
             heavy load (~13k rich rows), and we don't want it blocking first paint. */}
         <Suspense fallback={<BrowseSkeleton />}>
-          <BrowseSection />
+          <BrowseSection initial={drill} />
         </Suspense>
       </div>
     </div>
@@ -175,10 +188,10 @@ export default async function Dashboard({
 
 // Loads the ENTIRE live set (not a top-N slice) so every lead — and its
 // enrichment — is browsable. Runs inside Suspense, off the page's critical path.
-async function BrowseSection() {
+async function BrowseSection({ initial }: { initial?: import("@/app/admin/explore/explorer").ExploreInitial }) {
   const { leads, count } = await exploreBrowse().catch(() => ({ leads: [], count: 0 }));
   if (!leads.length) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
-  return <Explorer leads={leads} total={count} />;
+  return <Explorer leads={leads} total={count} initial={initial} />;
 }
 
 function BrowseSkeleton() {
