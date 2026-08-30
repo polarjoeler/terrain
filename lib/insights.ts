@@ -272,7 +272,28 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
 /** Homepage headline numbers, computed from the SAME live universe as /insights
  *  (Postgres imported_stores) so the two public pages never disagree. Replaces
  *  the old Google-Sheet feed, which only saw ~200-700 discovery-engine stores. */
+// Dashboard tile stats — one aggregate query, identical for every viewer of a
+// market and slow-moving, so cache per-country with a short TTL (with an in-flight
+// guard). Keeps the tiles from timing out when the enrichment jobs load the DB.
+type CachedStats = { at: number; data: import("./sheets").FeedStats };
+const STATS_TTL_MS = 5 * 60 * 1000;
+const _statsCache = new Map<string, CachedStats>();
+const _statsInflight = new Map<string, Promise<import("./sheets").FeedStats>>();
+
 export async function getHomeStats(country = "ZA"): Promise<import("./sheets").FeedStats> {
+  const hit = _statsCache.get(country);
+  if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+  let inflight = _statsInflight.get(country);
+  if (!inflight) {
+    inflight = getHomeStatsUncached(country)
+      .then((data) => { _statsCache.set(country, { at: Date.now(), data }); _statsInflight.delete(country); return data; })
+      .catch((e) => { _statsInflight.delete(country); if (hit) return hit.data; throw e; });
+    _statsInflight.set(country, inflight);
+  }
+  return inflight;
+}
+
+async function getHomeStatsUncached(country = "ZA"): Promise<import("./sheets").FeedStats> {
   const sql = db();
   const [t] = await sql`
     SELECT
