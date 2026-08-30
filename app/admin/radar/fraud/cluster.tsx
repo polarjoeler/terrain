@@ -14,6 +14,7 @@ const ago = (iso: string) => {
   if (d < 30) return `${Math.floor(d)}d ago`;
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
+const isRecent = (iso: string) => (Date.now() - new Date(iso).getTime()) / 864e5 < 7;
 
 export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
   const [clones, setClones] = useState(cluster.clones);
@@ -44,6 +45,14 @@ export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="font-display text-xl text-cream">{cluster.victimName || cluster.victim}</h2>
+            {cluster.victimPlus && (
+              <span className="rounded-full bg-lilac/25 px-2.5 py-0.5 text-[10px] font-bold uppercase text-lilac">⚡ Plus</span>
+            )}
+            {cluster.newCount > 0 && (
+              <span className="rounded-full bg-orange px-2.5 py-0.5 text-[10px] font-bold uppercase text-cream">
+                {cluster.newCount} new
+              </span>
+            )}
             {cluster.enrolled ? (
               <span className="rounded-full bg-mint/20 px-2.5 py-0.5 text-[10px] font-bold uppercase text-mint">Customer</span>
             ) : (
@@ -54,6 +63,7 @@ export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
             {cluster.victim}
           </a>
           {usd(cluster.estSales) && <span className="ml-2 text-xs text-cream/40">· {usd(cluster.estSales)}</span>}
+          <span className="ml-2 text-xs text-cream/40">· latest {ago(cluster.latestAt)}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="shrink-0 rounded-full bg-orange/15 px-3 py-1 text-xs font-bold text-orange">
@@ -74,9 +84,14 @@ export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
         {clones.map((cl) => (
           <li key={cl.suspect} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cream/10 px-4 py-2.5">
             <div className="min-w-0">
-              <a href={`https://${cl.suspect}`} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-cream hover:underline">
-                {cl.suspect}
-              </a>
+              <span className="flex items-center gap-2">
+                <a href={`https://${cl.suspect}`} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-cream hover:underline">
+                  {cl.suspect}
+                </a>
+                {isRecent(cl.firstSeen) && (
+                  <span className="rounded bg-orange/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-orange">New</span>
+                )}
+              </span>
               <div className="text-[11px] text-cream/40">
                 {cl.reasons[0] ?? "catalogue match"} · detected {ago(cl.firstSeen)}
                 {cl.at.slice(0, 10) !== cl.firstSeen.slice(0, 10) && <> · confirmed {ago(cl.at)}</>}
