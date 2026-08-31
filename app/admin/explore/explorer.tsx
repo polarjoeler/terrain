@@ -299,18 +299,17 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
               {filtered.slice(0, shown).map((l) => {
                 const b = revenueBand(l.estMonthlySales);
                 return (
-                  <tr key={l.domain} className="border-t border-cream/[0.07] transition hover:bg-cream/[0.03]">
+                  <tr key={l.domain} onClick={() => setSelected(l.domain)} className="cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05]" title="View all known data">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
-                        <button type="button" onClick={() => setSelected(l.domain)} className="shrink-0" title="View all data">
-                          <Logo domain={l.domain} name={l.name} />
-                        </button>
+                        <div className="shrink-0"><Logo domain={l.domain} name={l.name} /></div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 font-medium text-cream">
-                            <button type="button" onClick={() => setSelected(l.domain)} className="truncate text-left hover:text-mint hover:underline" title="View all known data">{l.name ?? l.domain}</button>
+                            <span className="truncate">{l.name ?? l.domain}</span>
                             {l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
                           </div>
-                          <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>
+                          {/* External site link — stop the row's drawer-open when clicked. */}
+                          <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>
                         </div>
                       </div>
                     </td>
@@ -323,7 +322,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
                     </td>
                     <td className="px-4 py-2.5"><ScoreRing score={l.score} /></td>
                     <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2 text-xs">
+                      <div className="flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
                         {l.email ? <a href={`mailto:${l.email}`} className="text-cyan hover:underline">✉ {l.email.length > 22 ? l.email.slice(0, 22) + "…" : l.email}</a> : <span className="text-cream/25">no email</span>}
                         {l.instagram && <a href={`https://instagram.com/${l.instagram.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream">IG</a>}
                         {l.facebook && <span className="text-cream/40">FB</span>}

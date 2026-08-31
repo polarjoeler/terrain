@@ -7,6 +7,35 @@ import type { LeadDetail } from "@/lib/lead-detail";
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
 const chips = (v: string | null) => (v ? v.split(";").map((x) => x.trim()).filter(Boolean) : []);
 
+// How we know the store: our own crawlers (Scanned) vs a data import (Imported).
+// Don't leak the raw source name (e.g. "storeleads-2026-08") to the surface.
+function sourceLabel(source: string | null): string {
+  const s = (source ?? "").toLowerCase();
+  if (s === "discovery" || s === "ct_tail" || s === "crawl") return "Scanned";
+  if (!s) return "Imported";
+  return "Imported";
+}
+
+// Apps are stored as raw Shopify app-store URLs (often concatenated). Show the
+// clean public-app names — dropping custom/private apps, which have no store URL.
+const APP_ALIAS: Record<string, string> = {
+  inbox: "Shopify Inbox", "product-reviews": "Shopify Reviews", geolocation: "Shopify Geolocation",
+  judgeme: "Judge.me", "klaviyo-email-marketing": "Klaviyo", "customer-privacy-banner": "Privacy Banner",
+  "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
+  omnisend: "Omnisend", mailchimp: "Mailchimp",
+};
+const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]);
+function cleanApps(raw: string | null): string[] {
+  if (!raw) return [];
+  const slugs = [...raw.matchAll(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)]
+    .map((m) => m[1].toLowerCase()).filter((s) => !APP_SKIP.has(s));
+  if (slugs.length) {
+    return [...new Set(slugs)].map((s) => APP_ALIAS[s] ?? s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "));
+  }
+  // Already clean, semicolon-separated names (e.g. from a snapshot) — pass through.
+  return chips(raw).filter((x) => /^[A-Za-z][A-Za-z0-9 .&'-]{1,28}$/.test(x));
+}
+
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) return null;
   return (
@@ -94,7 +123,7 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="City" value={data.city} />
               <Row label="Theme" value={data.theme} />
               <Row label="Platform" value={data.platform} />
-              <Row label="Source" value={data.source} />
+              <Row label="Source" value={sourceLabel(data.source)} />
             </Section>
 
             <Section title="Revenue & catalog">
@@ -122,9 +151,9 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="TikTok" value={social(data.tiktok, `https://tiktok.com/@${data.tiktok}`, null)} />
             </Section>
 
-            {chips(data.apps).length > 0 && (
+            {cleanApps(data.apps).length > 0 && (
               <Section title="Apps installed">
-                <Chips items={chips(data.apps)} tone="lilac" />
+                <Chips items={cleanApps(data.apps)} tone="lilac" />
               </Section>
             )}
 
