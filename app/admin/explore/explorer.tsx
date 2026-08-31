@@ -123,6 +123,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
   const [platform, setPlatform] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
+  const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>("");
   const [sort, setSort] = useState<SortKey>("score");
   const [shown, setShown] = useState(PAGE);
@@ -157,6 +158,8 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
+    if (tier === "top100" && !l.top100) return false;
+    if (tier === "top500" && !l.top500) return false;
     if (skip !== "recency" && recency) {
       const days = RECENCY_OPTS.find((o) => o.key === recency)?.days ?? 0;
       if (!withinDays(l.discoveredAt, days)) return false;
@@ -171,7 +174,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, recency, sort]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -200,10 +203,10 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, recency]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setRecency(""); };
-  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setTier(""); setRecency(""); };
+  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
 
   // Counts for the recency control — computed with recency skipped so each window
   // shows its own total regardless of the current selection.
@@ -211,7 +214,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     const base = leads.filter((l) => passes(l, "recency"));
     return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier]);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "platform", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
@@ -236,6 +239,13 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
           <button onClick={() => setEmailOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${emailOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
+          {/* Curated Top 100 / Top 500 — mutually exclusive (Top 100 is the elite subset). */}
+          <div className="flex gap-1 pt-1">
+            <button onClick={() => setTier((t) => (t === "top100" ? "" : "top100"))}
+              className={`flex-1 rounded-lg px-2 py-1.5 text-sm transition ${tier === "top100" ? "bg-cyan/20 font-medium text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>Top 100</button>
+            <button onClick={() => setTier((t) => (t === "top500" ? "" : "top500"))}
+              className={`flex-1 rounded-lg px-2 py-1.5 text-sm transition ${tier === "top500" ? "bg-cyan/20 font-medium text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>Top 500</button>
+          </div>
         </div>
 
         {/* Recently discovered — single-select (windows are nested). */}

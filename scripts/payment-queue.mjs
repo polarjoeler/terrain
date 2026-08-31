@@ -92,7 +92,7 @@ async function main() {
         ${PLUS ? sql`AND plus = true`
                : sql`AND (payments IS NULL OR payments = ''
                          OR payments_checked_at < now() - interval '30 days')`}
-      ORDER BY needs_initial DESC, t100 DESC, t500 DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
+      ORDER BY t100 DESC, t500 DESC, needs_initial DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     mkdirSync(dirname(OUT), { recursive: true });

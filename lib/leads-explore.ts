@@ -34,6 +34,8 @@ export type ExploreLead = {
   aovUsd: number | null;              // avg product price, USD-normalized
   estMonthlySales: number | null;
   plus: boolean;
+  top100: boolean;               // curated Top 100 (by sales)
+  top500: boolean;               // curated Top 500 (by sales)
   email: string | null;
   instagram: string | null;
   facebook: string | null;
@@ -101,10 +103,13 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
     estimated_monthly_sales: string | null; currency: string | null; plus: boolean; email: string | null;
     instagram: string | null; facebook: string | null; tiktok: string | null;
     instagram_followers: number | null; facebook_followers: number | null; discovered_at: Date | null;
+    top100: boolean; top500: boolean;
   }[]>`
     SELECT domain, name, category, country, city, theme, platform, payments, shipping_providers, apps,
            product_count, avg_product_price, estimated_monthly_sales, currency, plus, email,
-           instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at
+           instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at,
+           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100')) AS top100,
+           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS top500
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ANY(${[...VISIBLE_MARKETS]})
@@ -119,7 +124,7 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
       theme: r.theme, platform: r.platform, payments: r.payments, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
       productCount: r.product_count, aovUsd: aov,
-      estMonthlySales: sales, plus: r.plus, email: r.email,
+      estMonthlySales: sales, plus: r.plus, top100: r.top100, top500: r.top500, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
       discoveredAt: r.discovered_at ? new Date(r.discovered_at).toISOString().slice(0, 10) : null,
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at, r.product_count ?? 0, aov ?? 0),
