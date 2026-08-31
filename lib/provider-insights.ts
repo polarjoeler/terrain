@@ -53,6 +53,15 @@ export type ProviderInsights = {
   vintage: InsightItem[];                    // first_seen year; pct = MARKET SHARE in that year
   sizeBands: InsightItem[];                  // est monthly sales bands
   topStores: ProviderStore[];                // biggest wins (by sales)
+  // A PSP only really competes with other PSPs (BNPL/APMs sit alongside, not against).
+  // So: on your stores, how often is a RIVAL PSP also at checkout vs you being the sole PSP?
+  pspRivalry: { total: number; soloPsp: number; soloPspPct: number; withRival: number; withRivalPct: number; rivals: InsightItem[] };
+  // Where you sit in the checkout stack, by store VINTAGE cohort — are you winning the
+  // primary spot more with newer merchants? (avg rank + % you lead the checkout.)
+  rankByCohort: { cohort: string; total: number; avgRank: number; topSpotPct: number }[];
+  // Penetration in the segments a payment company sells to — the high-value/enterprise
+  // tail (Top 100 / Top 1000 by sales) and Shopify Plus. Volume is the game.
+  segments: { key: string; label: string; total: number; mine: number; pct: number }[];
 };
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -74,9 +83,13 @@ export async function providerInsights(provider: string, country?: string): Prom
   const rows = await sql<{
     domain: string; name: string | null; country: string | null;
     payments: string; launched_at: Date | null; discovered_at: Date | null;
-    est_revenue_usd: string | null;
+    est_revenue_usd: string | null; plus: boolean;
+    t100: boolean; t1000: boolean;
   }[]>`
-    SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd
+    SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd,
+           COALESCE(plus, false) AS plus,
+           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
+           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000
     FROM imported_stores
     WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''`;
   const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
@@ -144,9 +157,49 @@ export async function providerInsights(provider: string, country?: string): Prom
       firstSeen: r.launched_at ? new Date(r.launched_at).toISOString().slice(0, 10) : null,
     }));
 
+  // PSP rivalry — you only really compete with other PSPs (BNPL/APM sit alongside).
+  let soloPsp = 0, withRival = 0;
+  const rivals = new Map<string, number>();
+  for (const { gateways } of mine) {
+    const rivalPsps = gateways.filter((g) => norm(g) !== p && classify(g) === "PSP");
+    if (rivalPsps.length === 0) soloPsp++;
+    else { withRival++; for (const g of rivalPsps) rivals.set(g, (rivals.get(g) ?? 0) + 1); }
+  }
+  const pspRivalry = {
+    total, soloPsp, soloPspPct: pct(soloPsp, total),
+    withRival, withRivalPct: pct(withRival, total),
+    rivals: items(rivals, total),
+  };
+
+  // Checkout placement by store-vintage cohort — avg rank + how often you lead.
+  const cohortAgg = new Map<string, { n: number; rankSum: number; top: number }>();
+  for (const { r, rank } of mine) {
+    const yr = yearOf(r.launched_at);
+    if (yr === "unknown") continue;
+    const a = cohortAgg.get(yr) ?? { n: 0, rankSum: 0, top: 0 };
+    a.n++; a.rankSum += rank; if (rank === 1) a.top++;
+    cohortAgg.set(yr, a);
+  }
+  const rankByCohort = [...cohortAgg.entries()]
+    .map(([cohort, a]) => ({ cohort, total: a.n, avgRank: Math.round((a.rankSum / a.n) * 10) / 10, topSpotPct: pct(a.top, a.n) }))
+    .sort((x, y) => y.cohort.localeCompare(x.cohort));
+
+  // Segment penetration — Top 100 / Top 1000 (by sales) and Shopify Plus. Volume game.
+  const seg = (flag: (r: (typeof rows)[number]) => boolean, key: string, label: string) => {
+    const segTotal = rows.filter(flag).length;
+    const m = mine.filter((x) => flag(x.r)).length;
+    return { key, label, total: segTotal, mine: m, pct: pct(m, segTotal) };
+  };
+  const segments = [
+    seg((r) => r.t100, "top100", "Top 100"),
+    seg((r) => r.t1000, "top1000", "Top 1000"),
+    seg((r) => r.plus, "plus", "Shopify Plus"),
+  ];
+
   return {
     provider,
     total, verifiedBase,
+    pspRivalry, rankByCohort, segments,
     // pct = MARKET SHARE in that country (provider stores ÷ verified stores there),
     // count = provider store count. Sorted by share so the strongest market leads.
     byCountry: [...byCountry.entries()]
@@ -167,6 +220,42 @@ export async function providerInsights(provider: string, country?: string): Prom
     sizeBands: items(sizeBands, total),
     topStores,
   };
+}
+
+export type NewShareBucket = { date: string; total: number; mine: number; share: number };
+export type NewSharePeriod = "day" | "week" | "month" | "quarter" | "year";
+const NEW_SHARE_CFG: Record<NewSharePeriod, { trunc: string; window: string }> = {
+  day: { trunc: "day", window: "45 days" },
+  week: { trunc: "week", window: "26 weeks" },
+  month: { trunc: "month", window: "18 months" },
+  quarter: { trunc: "quarter", window: "36 months" },
+  year: { trunc: "year", window: "6 years" },
+};
+
+/** Share of NEWLY-DISCOVERED stores that chose this provider, bucketed by period —
+ *  the acquisition curve a payment company watches. Denominator is new stores WITH
+ *  verified payment data (so "chose you" is knowable). Sparse until coverage grows. */
+export async function providerNewShareSeries(
+  provider: string, period: NewSharePeriod = "month", country?: string,
+): Promise<NewShareBucket[]> {
+  const sql = db();
+  const p = `%${norm(provider)}%`;
+  const cfg = NEW_SHARE_CFG[period] ?? NEW_SHARE_CFG.month;
+  const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{ b: Date; total: number; mine: number }[]>`
+    SELECT date_trunc(${cfg.trunc}, discovered_at)::date AS b,
+           COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE payments ILIKE ${p})::int AS mine
+    FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${AND_C}
+      AND discovered_at IS NOT NULL AND discovered_at >= now() - ${cfg.window}::interval
+      AND payments IS NOT NULL AND payments <> ''
+    GROUP BY 1 ORDER BY 1`;
+  return rows.map((r) => ({
+    date: new Date(r.b).toISOString().slice(0, 10),
+    total: Number(r.total), mine: Number(r.mine),
+    share: pct(Number(r.mine), Number(r.total)),
+  }));
 }
 
 export type ProviderTrendPoint = { date: string; total: number; verifiedBase: number; share: number; topSpot: number; exclusive: number; newLast7: number };

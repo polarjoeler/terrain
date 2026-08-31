@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { providerInsights, providerHistory, availableProviders, providerCountries } from "@/lib/provider-insights";
+import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { ProviderView } from "./provider-view";
 
@@ -38,9 +38,15 @@ export default async function ProviderPage({
     providerInsights(canonical, country),
     providerHistory(canonical, country ?? "ALL"),
   ]);
+  // Share-of-new-stores series at each granularity, so the chart's Day/Week/Month/
+  // Quarter/Year toggle is instant (no re-fetch).
+  const periods: NewSharePeriod[] = ["day", "week", "month", "quarter", "year"];
+  const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country).catch(() => [])));
+  const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
+
   // Admins see the shareable link; a token viewer already has theirs.
   const shareToken = admin ? signProviderToken(canonical) : (t ?? "");
 
-  return <ProviderView data={data} history={history} shareToken={shareToken} isAdmin={admin}
+  return <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
     countries={countries} country={country ?? ""} />;
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
-import type { ProviderInsights, ProviderTrendPoint } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket } from "@/lib/provider-insights";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
@@ -76,11 +76,66 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
   );
 }
 
+/** Share of NEWLY-DISCOVERED stores that chose this provider, bucketed — the
+ *  acquisition curve, with a granularity toggle. This is the leading indicator a
+ *  payment company watches; a good spot to later overlay switches to/from. */
+const NS_PERIODS: NewSharePeriod[] = ["day", "week", "month", "quarter", "year"];
+const NS_LABELS: Record<NewSharePeriod, string> = { day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year" };
+function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, NewShareBucket[]>; provider: string }) {
+  const [period, setPeriod] = useState<NewSharePeriod>("month");
+  const data = series[period] ?? [];
+  const has = data.some((b) => b.total > 0);
+  const fmt = (iso: string) => {
+    const dt = new Date(iso + "T00:00:00Z");
+    const mo = dt.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+    const yr = String(dt.getUTCFullYear()).slice(2);
+    if (period === "year") return String(dt.getUTCFullYear());
+    if (period === "quarter") return `Q${Math.floor(dt.getUTCMonth() / 3) + 1} ’${yr}`;
+    if (period === "month") return `${mo} ’${yr}`;
+    return `${dt.getUTCDate()} ${mo}`;
+  };
+  return (
+    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold text-cream">Share of new stores choosing {provider}</h3>
+          <p className="mt-1 text-xs text-cream/45">Of newly-discovered stores with a verified checkout, the % that picked {provider} — the acquisition curve.</p>
+        </div>
+        <div className="flex gap-1 rounded-full border border-cream/12 p-1">
+          {NS_PERIODS.map((p) => (
+            <button key={p} onClick={() => setPeriod(p)}
+              className={`rounded-full px-3 py-1 text-xs transition ${period === p ? "bg-mint font-semibold text-ink" : "text-cream/50 hover:text-cream"}`}>
+              {NS_LABELS[p]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {has ? (
+        <div className="mt-5 space-y-2">
+          {data.map((b) => (
+            <div key={b.date} className="flex items-center gap-3">
+              <span className="w-16 shrink-0 text-xs tabular-nums text-cream/60">{fmt(b.date)}</span>
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                <div className="h-full rounded-full bg-mint" style={{ width: `${b.total ? Math.max(2, Math.min(b.share, 100)) : 0}%` }} />
+              </div>
+              <span className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{b.total ? `${b.share}%` : "—"}</span>
+              <span className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{b.mine}/{b.total}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-5 text-sm text-cream/40">Not enough new-store data at this granularity yet — it fills in as discovery and checkout coverage grow. (Later, a good place to also show stores switching to or from {provider}.)</p>
+      )}
+    </div>
+  );
+}
+
 export function ProviderView({
-  data: d, history, shareToken, isAdmin, countries, country,
+  data: d, history, newShare, shareToken, isAdmin, countries, country,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
+  newShare: Record<NewSharePeriod, NewShareBucket[]>;
   shareToken: string;
   isAdmin: boolean;
   countries: string[];
@@ -157,6 +212,11 @@ export function ProviderView({
           <MarketShareChart history={history} currentShare={d.verifiedBase ? Math.round((10000 * d.total) / d.verifiedBase) / 100 : 0} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
         </div>
 
+        {/* share of NEW stores over time — the acquisition curve, D/W/M/Q/Y */}
+        <div className="mt-6">
+          <NewShareChart series={newShare} provider={d.provider} />
+        </div>
+
         {/* position in the checkout stack */}
         <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
           <h3 className="text-lg font-semibold text-cream">Position in the checkout stack</h3>
@@ -172,6 +232,72 @@ export function ProviderView({
               </div>
             </div>
             <InteractiveBars data={d.rankDist} tone="cyan" initialLimit={8} />
+          </div>
+        </div>
+
+        {/* segment penetration + checkout placement by cohort */}
+        <div className="mt-6 grid gap-5 md:grid-cols-2">
+          <Card title={`Where ${d.provider} wins by segment`} subtitle="High-value & enterprise penetration — the volume a payment company sells for">
+            <div className="space-y-3">
+              {d.segments.map((sg) => (
+                <div key={sg.key} className="flex items-center gap-3">
+                  <div className="w-24 shrink-0 text-sm text-cream/75">{sg.label}</div>
+                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                    <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(sg.pct, 100))}%` }} />
+                  </div>
+                  <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{sg.pct}%</div>
+                  <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{sg.mine}/{sg.total}</div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-cream/35">Top 100 / Top 1000 are by sales rank; Plus = Shopify Plus merchants. Bar = share of that segment using {d.provider}.</p>
+          </Card>
+
+          <Card title="Checkout placement by cohort" subtitle={`Where ${d.provider} sits in the stack by store vintage — more top-spots with newer stores means you're winning the default`}>
+            {d.rankByCohort.length ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-cream/35">
+                  <span className="w-12">Cohort</span><span className="flex-1">Lead the checkout</span><span className="w-14 text-right">Avg rank</span><span className="w-12 text-right">Stores</span>
+                </div>
+                {d.rankByCohort.map((c) => (
+                  <div key={c.cohort} className="flex items-center gap-2">
+                    <span className="w-12 shrink-0 text-sm text-cream/75">{c.cohort}</span>
+                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+                      <div className="h-full rounded-full bg-cyan" style={{ width: `${Math.max(2, c.topSpotPct)}%` }} />
+                    </div>
+                    <span className="w-14 shrink-0 text-right text-sm tabular-nums text-cream">#{c.avgRank}</span>
+                    <span className="w-12 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.total}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-cream/40">Fills in as launch dates are captured (own-sourced).</p>}
+          </Card>
+        </div>
+
+        {/* head-to-head — a PSP only competes with other PSPs */}
+        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <h3 className="text-lg font-semibold text-cream">Head-to-head — rival PSPs</h3>
+          <p className="mt-1 text-xs text-cream/45">
+            A PSP competes with other PSPs, not with BNPL or wallets (those coexist). Of {d.provider}&apos;s {d.pspRivalry.total.toLocaleString()} stores,
+            how often does a <span className="text-cream/80">rival PSP</span> also sit at checkout?
+          </p>
+          <div className="mt-4 grid gap-5 md:grid-cols-[auto_1fr] md:items-center">
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="rounded-2xl border border-mint/25 bg-mint/[0.06] px-6 py-3">
+                <div className="font-display text-2xl text-mint">{d.pspRivalry.soloPspPct}%</div>
+                <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">sole PSP</div>
+              </div>
+              <div className="rounded-2xl border border-orange/25 bg-orange/[0.06] px-6 py-3">
+                <div className="font-display text-2xl text-orange">{d.pspRivalry.withRivalPct}%</div>
+                <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">rival PSP present</div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-cream/50">Rival PSPs they run against</div>
+              {d.pspRivalry.rivals.length
+                ? <InteractiveBars data={d.pspRivalry.rivals} tone="orange" initialLimit={6} />
+                : <p className="text-sm text-cream/35">No rival PSP seen alongside — {d.provider} stands alone at these checkouts.</p>}
+            </div>
           </div>
         </div>
 
