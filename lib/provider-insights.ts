@@ -30,6 +30,7 @@ const items = (m: Map<string, number>, denom: number): InsightItem[] =>
 export type ProviderStore = {
   domain: string; name: string | null; country: string | null;
   rank: number; gateways: string[]; sales: number | null; firstSeen: string | null;
+  plus: boolean; discoveredAt: string | null; productCount: number | null;
 };
 
 export type ProviderInsights = {
@@ -52,7 +53,7 @@ export type ProviderInsights = {
   coOccurrenceByType: Record<PayType, InsightItem[]>; // competitors alongside, grouped by type
   vintage: InsightItem[];                    // first_seen year; pct = MARKET SHARE in that year
   sizeBands: InsightItem[];                  // est monthly sales bands
-  topStores: ProviderStore[];                // biggest wins (by sales)
+  stores: ProviderStore[];                   // the provider's stores — for the filterable list
   // A PSP only really competes with other PSPs (BNPL/APMs sit alongside, not against).
   // So: on your stores, how often is a RIVAL PSP also at checkout vs you being the sole PSP?
   pspRivalry: { total: number; soloPsp: number; soloPspPct: number; withRival: number; withRivalPct: number; rivals: InsightItem[] };
@@ -83,10 +84,10 @@ export async function providerInsights(provider: string, country?: string): Prom
   const rows = await sql<{
     domain: string; name: string | null; country: string | null;
     payments: string; launched_at: Date | null; discovered_at: Date | null;
-    est_revenue_usd: string | null; plus: boolean;
+    est_revenue_usd: string | null; product_count: number | null; plus: boolean;
     t100: boolean; t1000: boolean;
   }[]>`
-    SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd,
+    SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd, product_count,
            COALESCE(plus, false) AS plus,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000
@@ -148,13 +149,18 @@ export async function providerInsights(provider: string, country?: string): Prom
     coOccurrenceByType[classify(label)].push({ label, count, pct: pct(count, total) });
   for (const t of PAY_TYPES) coOccurrenceByType[t].sort((a, b) => b.count - a.count);
 
-  const topStores: ProviderStore[] = mine
-    .sort((a, b) => (Number(b.r.est_revenue_usd) || 0) - (Number(a.r.est_revenue_usd) || 0))
-    .slice(0, 25)
+  // The provider's full store set (capped for payload) — the client sorts/filters it
+  // (most recent, largest, leads-checkout, Plus, by period). Not pre-sorted by sales:
+  // own-sourced revenue is still sparse, so "biggest" wasn't meaningful.
+  const stores: ProviderStore[] = mine
+    .slice(0, 1000)
     .map(({ r, gateways, rank }) => ({
       domain: r.domain, name: r.name, country: r.country, rank, gateways,
       sales: r.est_revenue_usd != null ? Number(r.est_revenue_usd) : null,
       firstSeen: r.launched_at ? new Date(r.launched_at).toISOString().slice(0, 10) : null,
+      plus: r.plus,
+      discoveredAt: r.discovered_at ? new Date(r.discovered_at).toISOString().slice(0, 10) : null,
+      productCount: r.product_count != null ? Number(r.product_count) : null,
     }));
 
   // PSP rivalry — you only really compete with other PSPs (BNPL/APM sit alongside).
@@ -218,7 +224,7 @@ export async function providerInsights(provider: string, country?: string): Prom
     vintage: [...vintage.entries()].map(([label, count]) => ({ label, count, pct: pct(count, allByYear.get(label) ?? count) }))
       .sort((a, b) => b.label.localeCompare(a.label)),
     sizeBands: items(sizeBands, total),
-    topStores,
+    stores,
   };
 }
 

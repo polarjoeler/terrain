@@ -4,7 +4,7 @@ import { useState } from "react";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
-import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore } from "@/lib/provider-insights";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
@@ -126,6 +126,91 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
       ) : (
         <p className="mt-5 text-sm text-cream/40">Not enough new-store data at this granularity yet — it fills in as discovery and checkout coverage grow. (Later, a good place to also show stores switching to or from {provider}.)</p>
       )}
+    </div>
+  );
+}
+
+/** The provider's stores — sortable (recent / largest / leads-checkout), filterable
+ *  by Shopify Plus and by discovery period. Replaces the old "biggest stores" table,
+ *  which sorted on own-sourced revenue that's still too sparse to be meaningful. */
+type StoreSort = "recent" | "largest" | "rank";
+type StorePeriod = "all" | "year" | "quarter" | "month" | "week";
+const SP_DAYS: Record<StorePeriod, number> = { all: Infinity, year: 365, quarter: 91, month: 30, week: 7 };
+const SP_SORTS: [StoreSort, string][] = [["recent", "Most recent"], ["largest", "Largest"], ["rank", "Leads checkout"]];
+const SP_PERIODS: [StorePeriod, string][] = [["all", "All time"], ["year", "Past year"], ["quarter", "Past quarter"], ["month", "Past month"], ["week", "Past week"]];
+
+function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: string }) {
+  const [sort, setSort] = useState<StoreSort>("recent");
+  const [plusOnly, setPlusOnly] = useState(false);
+  const [period, setPeriod] = useState<StorePeriod>("all");
+
+  const filtered = stores.filter((s) => {
+    if (plusOnly && !s.plus) return false;
+    if (period !== "all") {
+      if (!s.discoveredAt) return false;
+      if ((Date.now() - new Date(s.discoveredAt).getTime()) / 864e5 > SP_DAYS[period]) return false;
+    }
+    return true;
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === "recent") return (b.discoveredAt ?? "").localeCompare(a.discoveredAt ?? "");
+    if (sort === "largest") return (b.sales ?? 0) - (a.sales ?? 0) || (b.productCount ?? 0) - (a.productCount ?? 0);
+    return a.rank - b.rank || (b.discoveredAt ?? "").localeCompare(a.discoveredAt ?? "");
+  }).slice(0, 100);
+
+  return (
+    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold text-cream">Stores on {provider}</h3>
+          <p className="mt-1 text-xs text-cream/45">
+            {filtered.length.toLocaleString()} store{filtered.length === 1 ? "" : "s"}{plusOnly ? " · Plus only" : ""}{period !== "all" ? ` · ${SP_PERIODS.find(([k]) => k === period)![1].toLowerCase()}` : ""} · showing top {sorted.length}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1 rounded-full border border-cream/12 p-1">
+            {SP_SORTS.map(([k, l]) => (
+              <button key={k} onClick={() => setSort(k)}
+                className={`rounded-full px-3 py-1 text-xs transition ${sort === k ? "bg-mint font-semibold text-ink" : "text-cream/50 hover:text-cream"}`}>{l}</button>
+            ))}
+          </div>
+          <select value={period} onChange={(e) => setPeriod(e.target.value as StorePeriod)}
+            className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-xs text-cream outline-none focus:border-cream/50">
+            {SP_PERIODS.map(([k, l]) => <option key={k} value={k} className="text-ink">{l}</option>)}
+          </select>
+          <button onClick={() => setPlusOnly((v) => !v)}
+            className={`rounded-full px-3 py-1.5 text-xs transition ${plusOnly ? "bg-lilac/25 font-semibold text-lilac" : "border border-cream/15 text-cream/55 hover:text-cream"}`}>⚡ Plus</button>
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-sm text-cream/80">
+          <thead className="text-xs uppercase tracking-wide text-cream/40">
+            <tr>
+              <th className="pb-3 pr-4">Store</th><th className="pb-3 pr-4">Market</th>
+              <th className="pb-3 pr-4">Discovered</th><th className="pb-3 pr-4">Size</th>
+              <th className="pb-3 pr-4">{provider} rank</th><th className="pb-3">Checkout stack</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((s) => (
+              <tr key={s.domain} className="border-t border-cream/10 align-top">
+                <td className="py-3 pr-4">
+                  <div className="flex items-center gap-1.5 font-medium text-cream">{s.name ?? s.domain}{s.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}</div>
+                  <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/40 hover:underline">{s.domain}</a>
+                </td>
+                <td className="py-3 pr-4 whitespace-nowrap text-cream/60">{s.country ? marketLabel(s.country) : "—"}</td>
+                <td className="py-3 pr-4 whitespace-nowrap tabular-nums text-cream/55">{s.discoveredAt ?? "—"}</td>
+                <td className="py-3 pr-4 whitespace-nowrap">{s.sales != null ? usd(s.sales) : s.productCount != null ? `${s.productCount} products` : "—"}</td>
+                <td className="py-3 pr-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${s.rank === 1 ? "bg-mint/15 text-mint" : "bg-cream/10 text-cream/60"}`}>#{s.rank}</span></td>
+                <td className="py-3 text-xs text-cream/55">{s.gateways.map((g, i) => (
+                  <span key={i} className={g.toLowerCase() === provider.toLowerCase() ? "font-semibold text-cream" : ""}>{g}{i < s.gateways.length - 1 ? " · " : ""}</span>
+                ))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sorted.length === 0 && <p className="mt-4 text-sm text-cream/40">No stores match — widen the period or turn off the Plus filter.</p>}
     </div>
   );
 }
@@ -346,36 +431,9 @@ export function ProviderView({
           <Card title="Store size" subtitle="Estimated monthly sales"><InteractiveBars data={d.sizeBands} tone="cyan" /></Card>
         </div>
 
-        {/* top stores */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
-          <h3 className="text-lg font-semibold text-cream">Biggest stores on {d.provider}</h3>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm text-cream/80">
-              <thead className="text-xs uppercase tracking-wide text-cream/40">
-                <tr>
-                  <th className="pb-3 pr-4">Store</th><th className="pb-3 pr-4">Market</th>
-                  <th className="pb-3 pr-4">Est. sales</th><th className="pb-3 pr-4">{d.provider} rank</th>
-                  <th className="pb-3">Checkout stack</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.topStores.map((s) => (
-                  <tr key={s.domain} className="border-t border-cream/10 align-top">
-                    <td className="py-3 pr-4">
-                      <div className="font-medium text-cream">{s.name ?? s.domain}</div>
-                      <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/40 hover:underline">{s.domain}</a>
-                    </td>
-                    <td className="py-3 pr-4 whitespace-nowrap text-cream/60">{s.country ? marketLabel(s.country) : "—"}</td>
-                    <td className="py-3 pr-4 whitespace-nowrap font-medium">{usd(s.sales)}</td>
-                    <td className="py-3 pr-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${s.rank === 1 ? "bg-mint/15 text-mint" : "bg-cream/10 text-cream/60"}`}>#{s.rank}</span></td>
-                    <td className="py-3 text-xs text-cream/55">{s.gateways.map((g, i) => (
-                      <span key={i} className={g.toLowerCase() === d.provider.toLowerCase() ? "text-cream font-semibold" : ""}>{g}{i < s.gateways.length - 1 ? " · " : ""}</span>
-                    ))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {/* stores on the provider — filterable */}
+        <div className="mt-6">
+          <StoresTable stores={d.stores} provider={d.provider} />
         </div>
 
         <p className="mt-8 text-center text-xs text-cream/40">Live Terrain data · {d.total.toLocaleString()} checkout-verified stores · {new Date().toISOString().slice(0, 10)}</p>
