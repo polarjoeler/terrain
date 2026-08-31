@@ -335,7 +335,7 @@ export function ProviderView({
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-[11px] text-cream/35">Top 100 / Top 1000 are by sales rank; Plus = Shopify Plus merchants. Bar = share of that segment using {d.provider}.</p>
+            <p className="mt-3 text-[11px] text-cream/35">Top 100 / Top 500 are by sales rank; Plus = Shopify Plus merchants. Bar = share of that segment using {d.provider}.</p>
           </Card>
 
           <Card title="Checkout placement by cohort" subtitle={`Where ${d.provider} sits in the stack by store vintage — more top-spots with newer stores means you're winning the default`}>

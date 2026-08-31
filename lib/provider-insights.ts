@@ -61,7 +61,7 @@ export type ProviderInsights = {
   // primary spot more with newer merchants? (avg rank + % you lead the checkout.)
   rankByCohort: { cohort: string; total: number; avgRank: number; topSpotPct: number }[];
   // Penetration in the segments a payment company sells to — the high-value/enterprise
-  // tail (Top 100 / Top 1000 by sales) and Shopify Plus. Volume is the game.
+  // tail (Top 100 / Top 500 by sales) and Shopify Plus. Volume is the game.
   segments: { key: string; label: string; total: number; mine: number; pct: number }[];
 };
 
@@ -85,12 +85,12 @@ export async function providerInsights(provider: string, country?: string): Prom
     domain: string; name: string | null; country: string | null;
     payments: string; launched_at: Date | null; discovered_at: Date | null;
     est_revenue_usd: string | null; product_count: number | null; plus: boolean;
-    t100: boolean; t1000: boolean;
+    t100: boolean; t500: boolean;
   }[]>`
     SELECT domain, name, country, payments, launched_at, discovered_at, est_revenue_usd, product_count,
            COALESCE(plus, false) AS plus,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
-           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-1000')) AS t1000
+           (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS t500
     FROM imported_stores
     WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''`;
   const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
@@ -190,7 +190,7 @@ export async function providerInsights(provider: string, country?: string): Prom
     .map(([cohort, a]) => ({ cohort, total: a.n, avgRank: Math.round((a.rankSum / a.n) * 10) / 10, topSpotPct: pct(a.top, a.n) }))
     .sort((x, y) => y.cohort.localeCompare(x.cohort));
 
-  // Segment penetration — Top 100 / Top 1000 (by sales) and Shopify Plus. Volume game.
+  // Segment penetration — Top 100 / Top 500 (by sales) and Shopify Plus. Volume game.
   const seg = (flag: (r: (typeof rows)[number]) => boolean, key: string, label: string) => {
     const segTotal = rows.filter(flag).length;
     const m = mine.filter((x) => flag(x.r)).length;
@@ -198,7 +198,7 @@ export async function providerInsights(provider: string, country?: string): Prom
   };
   const segments = [
     seg((r) => r.t100, "top100", "Top 100"),
-    seg((r) => r.t1000, "top1000", "Top 1000"),
+    seg((r) => r.t500, "top500", "Top 500"),
     seg((r) => r.plus, "plus", "Shopify Plus"),
   ];
 

@@ -2,7 +2,7 @@
 
 export const PRESET_TAGS: { key: string; label: string }[] = [
   { key: "top-100", label: "Top 100" },
-  { key: "top-1000", label: "Top 1000" },
+  { key: "top-500", label: "Top 500" },
   { key: "partner-managed", label: "Partner Managed" },
 ];
 

@@ -39,7 +39,7 @@ export default async function AdminStores() {
           <h1 className="font-display text-4xl md:text-5xl">Leads &amp; tags</h1>
           <p className="mt-2 text-cream/60">
             {stores.length.toLocaleString()} live stores. Tag your cohorts — curate the{" "}
-            <b>Top 100 / Top 1000</b> per market, mark <b>Partner Managed</b> — then view a
+            <b>Top 100 / Top 500</b> per market, mark <b>Partner Managed</b> — then view a
             tagged breakdown in <Link href="/insights" className="text-cyan underline">Insights</Link>.
           </p>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-cream/50">
