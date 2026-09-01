@@ -75,12 +75,25 @@ const CCTLD_CC = {
   eg: "EG", ma: "MA", mu: "MU", tz: "TZ", bw: "BW", ug: "UG", gh: "GH", qa: "QA",
   kw: "KW", bh: "BH", om: "OM", jo: "JO", lb: "LB",
 };
-function detectCountry(domain, countryCol) {
+// Single-country currency → ISO. The VPS often labels a generic-TLD African store
+// just "Africa" (region, no country) — but its PRIMARY store currency pins the actual
+// country (a store based in ZAR is South African, regardless of a .com domain). Only
+// currencies that map to ONE country (skip shared XOF/XAF and non-specific USD/EUR).
+const CCY_CC = {
+  ZAR: "ZA", NGN: "NG", KES: "KE", GHS: "GH", EGP: "EG", MAD: "MA", TND: "TN",
+  DZD: "DZ", MZN: "MZ", TZS: "TZ", UGX: "UG", RWF: "RW", ZMW: "ZM", MUR: "MU",
+  BWP: "BW", NAD: "NA", ETB: "ET", AOA: "AO", KWD: "KW", QAR: "QA", BHD: "BH",
+  OMR: "OM", AED: "AE", ILS: "IL", TRY: "TR", JPY: "JP",
+};
+function detectCountry(domain, countryCol, currencyCol) {
   const c = (countryCol ?? "").toString().trim().toUpperCase();
   if (/^[A-Z]{2}$/.test(c)) return c;                       // already a 2-letter code
   if (c.includes("SOUTH AFRICA")) return "ZA";
   const d = (domain ?? "").toString().toLowerCase();
   for (const [tld, cc] of Object.entries(CCTLD_CC)) if (d.endsWith("." + tld)) return cc;
+  // No ccTLD/explicit country (e.g. VPS said "Africa"): pin it by primary currency.
+  const ccy = (currencyCol ?? "").toString().trim().toUpperCase();
+  if (CCY_CC[ccy]) return CCY_CC[ccy];
   return null;
 }
 const num = (v) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) ? n : null; };
@@ -115,7 +128,7 @@ async function main() {
       return {
         domain: r[COL.domain].trim().toLowerCase(),
         name: str(r[COL.name]) ?? r[COL.domain],
-        country: detectCountry(r[COL.domain], r[COL.country]),
+        country: detectCountry(r[COL.domain], r[COL.country], r[COL.currency]),
         email: str(r[COL.email]),
         theme: str(r[COL.theme]),
         plus: Boolean(str(r[COL.plus])),
