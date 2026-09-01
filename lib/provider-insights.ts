@@ -79,8 +79,10 @@ export async function providerInsights(provider: string, country?: string): Prom
   // Every live store that has ANY verified payment data (the honest denominator),
   // pulled with the fields we need — provider membership is decided in JS off the
   // ordered token list so rank/exclusive/top-spot are exact.
-  // Customer-facing surface → read only OWN-SOURCED fields (launched_at, est_revenue_usd),
-  // never the vendor first_seen / estimated_monthly_sales. These fill as our crawls run.
+  // Customer-facing surface → prefer own-sourced fields (est_revenue_usd), never the
+  // vendor first_seen / estimated_monthly_sales. NOTE: launched_at now also carries a
+  // StoreLeads month proxy (launched_source='storeleads_created') for older stores —
+  // a deliberate exception so launch-year cohorts aren't stuck at ~14% coverage.
   const rows = await sql<{
     domain: string; name: string | null; country: string | null;
     payments: string; launched_at: Date | null; discovered_at: Date | null;

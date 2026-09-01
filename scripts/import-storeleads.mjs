@@ -65,6 +65,10 @@ const demoji = (s) =>
     .replace(/Â(?=[®™©°])/g, "")
     .replace(/â€™/g, "'").replace(/â€œ|â€/g, '"').replace(/â€"/g, "—");
 const isoDate = (s) => (s ? String(s).trim().replace(/\//g, "-").slice(0, 10) || null : null);
+// StoreLeads' store-creation date as a MONTH-precision launch proxy (first of month).
+// Month/year is precise enough for older stores; own-sourced earliest_product (when we
+// have it) is day-precise and wins via COALESCE in the upsert below.
+const monthOf = (s) => { const d = isoDate(s); return d ? d.slice(0, 7) + "-01" : null; };
 
 function mapRow(r) {
   const domain = cleanDomain(r.domain);
@@ -96,6 +100,8 @@ function mapRow(r) {
     apps: (r.installed_apps || "").trim() || null,
     store_created: isoDate(r.created),
     first_seen: isoDate(r.created),
+    launched_at: monthOf(r.created),
+    launched_source: r.created ? "storeleads_created" : null,
     status: (r.status || "").trim() || null,
     source: SOURCE,
     published: true,
@@ -108,7 +114,7 @@ const COLS = [
   "plus", "plan", "theme", "category", "city", "region", "rank",
   "estimated_monthly_sales", "products_sold", "avg_product_price",
   "instagram_followers", "facebook_followers", "employee_count", "apps",
-  "store_created", "first_seen", "status", "source", "published", "raw",
+  "store_created", "first_seen", "launched_at", "launched_source", "status", "source", "published", "raw",
 ];
 
 async function main() {
@@ -184,6 +190,10 @@ async function main() {
           employee_count = EXCLUDED.employee_count,
           apps = EXCLUDED.apps,
           store_created = EXCLUDED.store_created,
+          -- Never clobber an existing launch date: own-sourced earliest_product is
+          -- day-precise and takes precedence over the StoreLeads month proxy.
+          launched_at = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
+          launched_source = COALESCE(imported_stores.launched_source, EXCLUDED.launched_source),
           status = EXCLUDED.status,
           source = EXCLUDED.source,
           published = true,
