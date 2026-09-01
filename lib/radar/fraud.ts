@@ -12,8 +12,9 @@ export type FraudClone = {
   verdict: MatchReport["verdict"];
   score: number;
   reasons: string[];
-  at: string;        // last confirmed
-  firstSeen: string; // first detected
+  at: string;         // last confirmed
+  firstSeen: string;  // first detected
+  newThisSweep: boolean; // first detected AFTER the previous sweep — genuinely new since you last looked
 };
 
 export type FraudCluster = {
@@ -24,15 +25,21 @@ export type FraudCluster = {
   victimPlus: boolean; // is the copied brand a Shopify Plus merchant? (higher stakes)
   enrolled: boolean;   // already a Radar customer?
   clones: FraudClone[];
-  newCount: number;    // clones first detected in the last 7 days
+  newCount: number;    // clones that are new since the previous sweep
   latestAt: string;    // most-recent detection in this cluster (ISO)
 };
 
-const NEW_DAYS = 7;
-const isRecent = (iso: string) => (Date.now() - new Date(iso).getTime()) / 864e5 < NEW_DAYS;
+// "New this sweep" = first detected after the previous run's timestamp. When there's
+// no previous run yet (first-ever sweep), fall back to a 7-day window so the very
+// first load still highlights genuinely fresh detections rather than nothing.
+const FALLBACK_NEW_DAYS = 7;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
+export async function fraudClusters(minScore = 25, sinceRun?: string | null): Promise<FraudCluster[]> {
+  const boundary = sinceRun
+    ? new Date(sinceRun).getTime()
+    : Date.now() - FALLBACK_NEW_DAYS * 864e5;
+  const isNew = (iso: string) => new Date(iso).getTime() > boundary;
   await ensureSchema();
   const rows = await db()<any[]>`
     SELECT d.brand_domain AS victim, d.brand_name AS d_name, d.suspect, d.suspect_name,
@@ -63,6 +70,7 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
       };
       byVictim.set(r.victim, c);
     }
+    const firstSeen = new Date(r.first_seen_at).toISOString();
     c.clones.push({
       suspect: r.suspect,
       suspectName: r.suspect_name ?? null,
@@ -70,7 +78,8 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
       score: r.score,
       reasons: r.reasons ?? [],
       at: new Date(r.last_seen_at).toISOString(),
-      firstSeen: new Date(r.first_seen_at).toISOString(),
+      firstSeen,
+      newThisSweep: isNew(firstSeen),
     });
   }
 
@@ -79,7 +88,7 @@ export async function fraudClusters(minScore = 25): Promise<FraudCluster[]> {
     // Newest first WITHIN a cluster, so the recent clone leads; and roll up
     // per-cluster recency (how many are new, and the latest detection).
     c.clones.sort((x, y) => +new Date(y.firstSeen) - +new Date(x.firstSeen));
-    c.newCount = c.clones.filter((cl) => isRecent(cl.firstSeen)).length;
+    c.newCount = c.clones.filter((cl) => cl.newThisSweep).length;
     c.latestAt = c.clones.reduce((m, cl) => (cl.firstSeen > m ? cl.firstSeen : m), c.latestAt);
   }
 

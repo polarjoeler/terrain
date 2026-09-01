@@ -14,7 +14,6 @@ const ago = (iso: string) => {
   if (d < 30) return `${Math.floor(d)}d ago`;
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
-const isRecent = (iso: string) => (Date.now() - new Date(iso).getTime()) / 864e5 < 7;
 
 export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
   const [clones, setClones] = useState(cluster.clones);
@@ -88,7 +87,7 @@ export function FraudClusterCard({ cluster }: { cluster: FraudCluster }) {
                 <a href={`https://${cl.suspect}`} target="_blank" rel="noopener noreferrer" className="font-mono text-sm text-cream hover:underline">
                   {cl.suspect}
                 </a>
-                {isRecent(cl.firstSeen) && (
+                {cl.newThisSweep && (
                   <span className="rounded bg-orange/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-orange">New</span>
                 )}
               </span>
