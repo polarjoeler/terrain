@@ -11,7 +11,7 @@
 
 import postgres from "postgres";
 import type { InsightItem } from "./insights";
-import { classify, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { classify, cleanPayments, canonicalProvider, providerVariants, PAY_TYPES, type PayType } from "./payments-taxonomy";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -72,7 +72,7 @@ const salesBand = (n: number | null): string =>
 
 export async function providerInsights(provider: string, country?: string): Promise<ProviderInsights> {
   const sql = db();
-  const p = norm(provider);
+  const p = norm(canonicalProvider(provider) || provider);
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
 
@@ -98,7 +98,9 @@ export async function providerInsights(provider: string, country?: string): Prom
   const verifiedBase = rows.length;
   const mine = rows
     .map((r) => {
-      const gateways = String(r.payments).split(";").map((x) => x.trim()).filter(Boolean);
+      // Canonicalise before ranking: the stored list mixes machine tokens and card
+      // icons, which would otherwise pad the stack and push real gateways down a rank.
+      const gateways = cleanPayments(String(r.payments).split(";"));
       const rank = gateways.findIndex((g) => norm(g) === p) + 1; // 1-based; 0 = absent
       return { r, gateways, rank };
     })
@@ -245,13 +247,17 @@ export async function providerNewShareSeries(
   provider: string, period: NewSharePeriod = "month", country?: string,
 ): Promise<NewShareBucket[]> {
   const sql = db();
-  const p = `%${norm(provider)}%`;
+  // Match whole checkout tokens, not substrings: ILIKE '%credit card%' also hit
+  // "Mollie - Credit Card". Variants fold aliases ("wigwag-app") into the provider.
+  const variants = providerVariants(provider);
   const cfg = NEW_SHARE_CFG[period] ?? NEW_SHARE_CFG.month;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const rows = await sql<{ b: Date; total: number; mine: number }[]>`
     SELECT date_trunc(${cfg.trunc}, discovered_at)::date AS b,
            COUNT(*)::int AS total,
-           COUNT(*) FILTER (WHERE payments ILIKE ${p})::int AS mine
+           COUNT(*) FILTER (WHERE EXISTS (
+             SELECT 1 FROM unnest(string_to_array(payments, ';')) g
+             WHERE lower(btrim(g)) = ANY(${variants}::text[])))::int AS mine
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${AND_C}
       AND discovered_at IS NOT NULL AND discovered_at >= now() - ${cfg.window}::interval
@@ -315,7 +321,8 @@ export async function providerCountries(provider: string): Promise<string[]> {
     SELECT UPPER(country) c, COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country IS NOT NULL AND country <> ''
-      AND payments ILIKE ${"%" + provider + "%"}
+      AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g
+                  WHERE lower(btrim(g)) = ANY(${providerVariants(provider)}::text[]))
     GROUP BY 1 HAVING COUNT(*) >= 1 ORDER BY n DESC`;
   return rows.map((r) => r.c);
 }
@@ -328,8 +335,19 @@ export async function availableProviders(min = 5): Promise<{ provider: string; s
       SELECT unnest(string_to_array(payments, ';')) AS g FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND payments IS NOT NULL AND payments <> ''
-    ) x WHERE trim(g) <> '' GROUP BY 1 HAVING COUNT(*) >= ${min} ORDER BY n DESC`;
-  return rows.map((r) => ({ provider: r.provider, stores: Number(r.n) }));
+    ) x WHERE trim(g) <> '' GROUP BY 1`;
+  // Fold the raw checkout labels to one row per real gateway before applying `min`,
+  // so variants count together ("wigwag-app" + "WigWag") and noise drops out entirely.
+  const agg = new Map<string, number>();
+  for (const r of rows) {
+    const canon = canonicalProvider(r.provider);
+    if (!canon) continue;
+    agg.set(canon, (agg.get(canon) ?? 0) + Number(r.n));
+  }
+  return [...agg.entries()]
+    .filter(([, n]) => n >= min)
+    .map(([provider, stores]) => ({ provider, stores }))
+    .sort((a, b) => b.stores - a.stores);
 }
 
 export type ProviderMomentum = {

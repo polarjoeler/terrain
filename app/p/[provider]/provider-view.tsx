@@ -4,6 +4,7 @@ import { useState } from "react";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
+import { providerSlug } from "@/lib/provider-slug";
 import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore } from "@/lib/provider-insights";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
@@ -63,7 +64,7 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
           ))}
           <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
           <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
-          {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r="3" fill="var(--color-cyan)"><title>{p.date}: {p.share}% ({p.total} of {p.verifiedBase})</title></circle>)}
+          {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r="3" fill="var(--color-cyan)"><title>{`${p.date}: ${p.share}% (${p.total} of ${p.verifiedBase})`}</title></circle>)}
           <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
           <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
         </svg>
@@ -216,7 +217,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country,
+  data: d, history, newShare, shareToken, isAdmin, countries, country, logo,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -225,13 +226,14 @@ export function ProviderView({
   isAdmin: boolean;
   countries: string[];
   country: string;
+  logo: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const linkFor = (c: string) => {
     const qs = new URLSearchParams();
     if (shareToken) qs.set("t", shareToken);
     if (c) qs.set("country", c);
-    return `/p/${d.provider.toLowerCase()}?${qs.toString()}`;
+    return `/p/${providerSlug(d.provider)}?${qs.toString()}`;
   };
   const copyLink = () => {
     navigator.clipboard?.writeText(`${window.location.origin}${linkFor(country)}`)
@@ -249,8 +251,17 @@ export function ProviderView({
     <div className="min-h-screen px-4 py-8 md:px-8">
       <div className="mx-auto max-w-6xl">
         <nav className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-baseline gap-2">
-            <span className="font-display text-2xl text-cream">{d.provider}</span>
+          <div className="flex items-center gap-3">
+            {logo ? (
+              // Brand marks are often dark (Stitch's purple is only 2.2:1 on the page
+              // background), so the logo sits on a cream chip rather than being recoloured.
+              <span className="inline-flex items-center rounded-xl bg-cream px-3 py-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={logo} alt={d.provider} className="h-6 w-auto" />
+              </span>
+            ) : (
+              <span className="font-display text-2xl text-cream">{d.provider}</span>
+            )}
             <span className="text-sm text-cream/45">market insights</span>
           </div>
           <div className="flex items-center gap-3">

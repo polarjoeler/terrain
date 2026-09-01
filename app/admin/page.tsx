@@ -47,6 +47,9 @@ export default async function Admin() {
             <Link href="/admin/subscribers" className="text-cream/60 hover:text-cream">
               Subscribers →
             </Link>
+            <Link href="/admin/providers" className="text-cream/60 hover:text-cream">
+              Provider reports →
+            </Link>
             <Link href="/admin/radar" className="text-cyan hover:underline">
               Radar detections →
             </Link>
