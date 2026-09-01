@@ -69,11 +69,21 @@ async function readEnriched() {
 const str = (v) => { const s = (v ?? "").toString().trim(); return s.length ? s : null; };
 
 // The VPS labels each store by TLD/country; fall back to the domain's ccTLD when the
-// country column is blank or "?". Covers Africa + Japan + Middle East targets.
+// country column is blank or "?". Comprehensive Africa + Middle East + JP coverage.
+// Deliberately EXCLUDES ccTLDs used generically so we don't mislabel: .so/.ly (tech
+// startups), .cf/.ga/.gq/.ml/.tk (Freenom free-domain abuse) — those need currency
+// or a storefront probe to resolve, not the TLD.
 const CCTLD_CC = {
-  za: "ZA", ke: "KE", ng: "NG", jp: "JP", ae: "AE", sa: "SA", il: "IL", tr: "TR",
-  eg: "EG", ma: "MA", mu: "MU", tz: "TZ", bw: "BW", ug: "UG", gh: "GH", qa: "QA",
-  kw: "KW", bh: "BH", om: "OM", jo: "JO", lb: "LB",
+  // Africa
+  za: "ZA", ke: "KE", ng: "NG", eg: "EG", ma: "MA", tn: "TN", dz: "DZ", mu: "MU",
+  tz: "TZ", bw: "BW", ug: "UG", gh: "GH", zw: "ZW", mw: "MW", sn: "SN", mz: "MZ",
+  et: "ET", ci: "CI", ls: "LS", na: "NA", rw: "RW", zm: "ZM", ao: "AO", cm: "CM",
+  bj: "BJ", bf: "BF", cd: "CD", cg: "CG", cv: "CV", dj: "DJ", er: "ER", sz: "SZ",
+  gm: "GM", gn: "GN", gw: "GW", lr: "LR", mg: "MG", mr: "MR", ne: "NE", sc: "SC",
+  sl: "SL", ss: "SS", sd: "SD", tg: "TG", bi: "BI", td: "TD", km: "KM", st: "ST",
+  // Middle East + JP
+  jp: "JP", ae: "AE", sa: "SA", il: "IL", tr: "TR", qa: "QA", kw: "KW", bh: "BH",
+  om: "OM", jo: "JO", lb: "LB",
 };
 // Single-country currency → ISO. The VPS often labels a generic-TLD African store
 // just "Africa" (region, no country) — but its PRIMARY store currency pins the actual
