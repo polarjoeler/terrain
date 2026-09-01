@@ -366,7 +366,7 @@ export function ProviderView({
                   </div>
                 ))}
               </div>
-            ) : <p className="text-sm text-cream/40">Fills in as launch dates are captured (own-sourced).</p>}
+            ) : <p className="text-sm text-cream/40">Fills in as launch dates are captured.</p>}
           </Card>
         </div>
 

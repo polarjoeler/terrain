@@ -5,6 +5,12 @@ import { marketLabel } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
+const fmtMonth = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) : null);
+// Launch dates from StoreLeads are month-precision (stored as first-of-month), so show
+// "Dec 2016" not "1 Dec 2016" — don't imply a day we don't actually have. Own-sourced
+// (earliest_product) dates are day-precise and shown in full.
+const fmtLaunch = (v: string | null, source: string | null) =>
+  source === "storeleads_created" ? fmtMonth(v) : fmtDate(v);
 const chips = (v: string | null) => (v ? v.split(";").map((x) => x.trim()).filter(Boolean) : []);
 
 // How we know the store: our own crawlers (Scanned) vs a data import (Imported).
@@ -158,7 +164,7 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             )}
 
             <Section title="Timeline">
-              <Row label="Launched" value={fmtDate(data.launched_at)} />
+              <Row label="Launched" value={fmtLaunch(data.launched_at, data.launched_source)} />
               <Row label="First product" value={fmtDate(data.first_product_at)} />
               <Row label="Discovered" value={fmtDate(data.discovered_at)} />
               <Row label="First seen" value={fmtDate(data.first_seen)} />
