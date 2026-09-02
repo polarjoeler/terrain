@@ -25,11 +25,14 @@ try {
     // The ESSENTIAL statement runs FIRST and alone — idempotent (fills only NULLs), so a
     // retry that lands here has done the job even if the follow-up count times out.
     // date_trunc → first of month = month/year precision; provenance tagged explicitly.
+    // store_created is TEXT ("YYYY-MM-DD"); take the YYYY-MM and pin to first-of-month.
+    // Guard on the date shape so a malformed value can't fail the whole batch.
     const res = await sql`
       UPDATE imported_stores
-         SET launched_at = date_trunc('month', store_created)::date,
+         SET launched_at = (left(store_created, 7) || '-01')::date,
              launched_source = 'storeleads_created'
-       WHERE published AND launched_at IS NULL AND store_created IS NOT NULL`;
+       WHERE published AND launched_at IS NULL
+         AND store_created ~ '^[0-9]{4}-[0-9]{2}'`;
     console.log(`✓ Applied: filled ${res.count}.`);
     try {
       const [after] = await sql`SELECT COUNT(launched_at)::int la, COUNT(*)::int tot FROM imported_stores WHERE published`;
