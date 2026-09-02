@@ -5,7 +5,7 @@ import { fraudClusters } from "@/lib/radar/fraud";
 import { lastRun, recentRuns, previousRunAt } from "@/lib/radar/fraud-sweep";
 import { FraudClusterCard } from "./cluster";
 import { RunSweep } from "./run-sweep";
-import { RunHistory } from "./run-history";
+import { RunHistory } from "@/app/components/run-history";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Radar — Market fraud" };

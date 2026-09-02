@@ -3,8 +3,10 @@ import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import { brandsForEmail, hasActiveMonitoring, type BrandAccount } from "@/lib/radar/brands";
 import { detectionsForBrands, type Detection } from "@/lib/radar/audit";
+import { lastRun } from "@/lib/radar/fraud-sweep";
 import {
   domainWatchesForBrands,
+  domainWatchLastRun,
   emailPosture,
   kindLabel,
   watchRisk,
@@ -32,6 +34,19 @@ function ago(iso: string) {
   if (d < 30) return `${Math.floor(d)}d ago`;
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
+
+/** How long ago a sweep ran, to the hour — "2h ago" reassures in a way that
+ *  "today" doesn't, which is the whole point of showing it on a monitoring page. */
+function sweptAgo(iso: string | null | undefined) {
+  if (!iso) return "not yet run";
+  const mins = (Date.now() - new Date(iso).getTime()) / 6e4;
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${Math.floor(mins)}m ago`;
+  if (mins < 48 * 60) return `${Math.floor(mins / 60)}h ago`;
+  return `${Math.floor(mins / 1440)}d ago`;
+}
+const exact = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "never run";
 
 function DetectionCard({ d }: { d: Detection }) {
   const v = VERDICT[d.verdict];
@@ -128,10 +143,14 @@ function ActiveBrand({
   brand,
   detections,
   watches,
+  cloneSweptAt,
+  domainSweptAt,
 }: {
   brand: BrandAccount;
   detections: Detection[];
   watches: DomainWatch[];
+  cloneSweptAt: string | null;
+  domainSweptAt: string | null;
 }) {
   const mailers = watches.filter((w) => w.hasMail).length;
   return (
@@ -141,9 +160,19 @@ function ActiveBrand({
           <h2 className="font-display text-2xl text-cream">{brand.brandName || brand.brandDomain}</h2>
           <p className="text-sm text-cream/45">{brand.brandDomain} · {brand.market}</p>
         </div>
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold text-mint">
-          <span className="h-1.5 w-1.5 rounded-full bg-mint" /> Monitoring active
-        </span>
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold text-mint">
+            <span className="h-1.5 w-1.5 rounded-full bg-mint" /> Monitoring active
+          </span>
+          {/* Two separate jobs cover this brand and they run on their own cadences,
+              so they're reported separately — one combined "last swept" would be
+              wrong for whichever ran less recently. */}
+          <span className="text-[11px] text-cream/40">
+            <span title={`Clone sweep: ${exact(cloneSweptAt)}`}>clone sweep {sweptAgo(cloneSweptAt)}</span>
+            <span className="text-cream/20"> · </span>
+            <span title={`Domain watch: ${exact(domainSweptAt)}`}>domain watch {sweptAgo(domainSweptAt)}</span>
+          </span>
+        </div>
       </div>
 
       {/* Catalogue clones */}
@@ -226,6 +255,12 @@ export default async function RadarDashboard() {
   const [all, allWatches] = activeDomains.length
     ? await Promise.all([detectionsForBrands(activeDomains), domainWatchesForBrands(activeDomains)])
     : [[] as Detection[], [] as DomainWatch[]];
+  // When each job last looked. The clone sweep is market-wide (one timestamp for
+  // everyone); the domain watch is per-brand, derived from its own rows.
+  const [cloneRun, domainRuns] = await Promise.all([
+    lastRun("fraud").catch(() => null),
+    activeDomains.length ? domainWatchLastRun(activeDomains).catch(() => new Map<string, string>()) : Promise.resolve(new Map<string, string>()),
+  ]);
   const byBrand = new Map<string, Detection[]>();
   for (const d of all) {
     const arr = byBrand.get(d.brandDomain) ?? [];
@@ -272,6 +307,8 @@ export default async function RadarDashboard() {
                   brand={b}
                   detections={byBrand.get(b.brandDomain) ?? []}
                   watches={watchesByBrand.get(b.brandDomain) ?? []}
+                  cloneSweptAt={cloneRun?.ranAt ?? null}
+                  domainSweptAt={domainRuns.get(b.brandDomain) ?? null}
                 />
               ) : (
                 <LockedBrand key={b.brandDomain} brand={b} email={email} />

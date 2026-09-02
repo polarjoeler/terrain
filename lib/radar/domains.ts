@@ -99,3 +99,22 @@ export function emailPosture(b: {
     summary,
   };
 }
+
+/** When the look-alike domain watch last ran for each brand.
+ *
+ *  radar-domain-watch.mjs refreshes last_seen_at on every pass, so MAX of it is
+ *  the honest "when did we last actually look" for that brand. It's derived from
+ *  the data rather than from radar_runs because only the fraud sweep records runs
+ *  there — claiming a single sweep time for both would misstate one of them. */
+export async function domainWatchLastRun(brandDomains: string[]): Promise<Map<string, string>> {
+  if (!brandDomains.length) return new Map();
+  await ensureSchema();
+  const rows = await db()<{ brand_domain: string; last: Date | null }[]>`
+    SELECT brand_domain, MAX(last_seen_at) AS last
+    FROM radar_domain_watches
+    WHERE brand_domain = ANY(${brandDomains}::text[])
+    GROUP BY 1`.catch(() => []);
+  return new Map(
+    rows.filter((r) => r.last).map((r) => [r.brand_domain, new Date(r.last as Date).toISOString()]),
+  );
+}

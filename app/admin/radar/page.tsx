@@ -4,6 +4,8 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { listAudits, listDetections, listMonitorDetections, type Detection } from "@/lib/radar/audit";
 import { monitoredBrandCount } from "@/lib/radar/brands";
 import { coverage } from "@/lib/radar/fingerprints";
+import { recentRuns } from "@/lib/radar/fraud-sweep";
+import { RunHistory } from "@/app/components/run-history";
 import type { Verdict } from "@/lib/radar/catalog";
 
 export const metadata = { title: "Radar — Detections" };
@@ -17,12 +19,18 @@ const VERDICT: Record<Verdict, string> = {
 };
 
 function ago(iso: string): string {
-  const d = (Date.now() - new Date(iso).getTime()) / 864e5;
-  if (d < 1) return "today";
+  const mins = (Date.now() - new Date(iso).getTime()) / 6e4;
+  if (mins < 60) return `${Math.max(1, Math.floor(mins))}m ago`;
+  if (mins < 24 * 60) return `${Math.floor(mins / 60)}h ago`;
+  const d = mins / 1440;
   if (d < 2) return "yesterday";
   if (d < 30) return `${Math.floor(d)}d ago`;
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
+/** Full date + time, for the title tooltip — the relative label is scannable,
+ *  this is what you need when comparing a detection against a sweep. */
+const exact = (iso: string) =>
+  new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
 
 function Tile({ n, label, accent }: { n: number | string; label: string; accent?: boolean }) {
   return (
@@ -42,7 +50,7 @@ function DetectionCard({ d }: { d: Detection }) {
           <div className="truncate text-xs text-cream/45">
             copying <span className="text-cream/70">{d.brandName || d.brandDomain}</span>
             {" · "}
-            {ago(d.at)}
+            <span title={exact(d.at)}>{ago(d.at)}</span>
           </div>
         </div>
         <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${VERDICT[d.verdict]}`}>
@@ -78,7 +86,7 @@ export default async function RadarDashboard() {
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  const [audits, auditDetections, monitorDetections, monitored, cov] = await Promise.all([
+  const [audits, auditDetections, monitorDetections, monitored, cov, runs] = await Promise.all([
     listAudits(100).catch(() => []),
     listDetections(25).catch(() => []),
     listMonitorDetections(25).catch(() => []),
@@ -89,6 +97,7 @@ export default async function RadarDashboard() {
       remaining: 0,
       withCatalogue: 0,
     })),
+    recentRuns("fraud", 8).catch(() => []),
   ]);
 
   // Merge audit + monitoring detections, deduped per (brand, suspect), keeping
@@ -115,6 +124,9 @@ export default async function RadarDashboard() {
             <Link href="/admin" className="text-cream/50 hover:text-cream">
               Import
             </Link>
+            <Link href="/admin/radar/relationships" className="text-cream/50 hover:text-cream">
+              Review suppressed →
+            </Link>
             <Link href="/admin/radar/fraud" className="text-orange hover:underline">
               Market fraud →
             </Link>
@@ -138,6 +150,10 @@ export default async function RadarDashboard() {
           <Tile n={audits.length} label="Audits run" />
           <Tile n={cov.withCatalogue.toLocaleString()} label="Stores fingerprinted" />
         </div>
+
+        {/* When the market fraud sweep last ran and what each batch surfaced —
+            detections below are meaningless without knowing how fresh they are. */}
+        <RunHistory runs={runs} />
 
         {/* detections */}
         <section className="mt-12">
