@@ -10,7 +10,7 @@
 #   Driven by ~/Library/LaunchAgents/com.tembo.payments-probe.plist (hourly).
 
 set -u
-cd /Users/joel/storepulse || exit 1
+cd "$HOME/storepulse" || exit 1
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
@@ -37,7 +37,7 @@ node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 >/dev/null 2>&
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
   ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
-      --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 1500 --concurrency 10 ) \
+      --from-file "$HOME/storepulse/feed/payment-queue.txt" --limit 1500 --concurrency 10 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed (continuing)"
 else
