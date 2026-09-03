@@ -391,50 +391,65 @@ export function InsightsView({
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Card
               title="Provider momentum"
-              subtitle={momentum[0]?.days ? `Share & checkout-rank movement over ${momentum[0].days} day${momentum[0].days === 1 ? "" : "s"}` : "Tracking — movement appears as daily history builds"}
+              subtitle={momentum.length ? `Which PSPs new stores are choosing — ${momentum[0].days === 1 ? "today vs yesterday" : "this week vs last week"}` : "Appears as newly-found stores are payment-verified"}
             >
               {momentum.length ? (
-                <ul className="space-y-1.5">
+                <ul className="divide-y divide-cream/[0.06]">
                   {momentum.slice(0, 8).map((m) => (
-                    <li key={m.provider} className="flex items-center justify-between gap-2 text-sm">
+                    <li key={m.provider} className="flex items-center justify-between gap-2 py-1.5 text-sm">
                       <span className="truncate text-cream/80">{m.provider}</span>
                       <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
-                        <span className="text-cream/45">{m.share}%</span>
-                        <span className={m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/30"}>
+                        <span className="text-cream/45" title="share of new stores this period">{m.share}%</span>
+                        <span
+                          className={`w-12 text-right ${m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/30"}`}
+                          title="change in new-store share vs the previous period"
+                        >
                           {m.shareDelta > 0 ? "+" : ""}{m.shareDelta}pt
                         </span>
-                        <span className="text-cream/35" title="avg checkout rank (1 = primary)">#{m.rank}</span>
-                        {/* rank going DOWN = moved up the checkout → mint */}
-                        <span className={m.rankDelta < 0 ? "text-mint" : m.rankDelta > 0 ? "text-orange" : "text-cream/30"}>
-                          {m.rankDelta < 0 ? "▲" : m.rankDelta > 0 ? "▼" : "–"}
+                        <span className="w-16 text-right text-cream/35" title="new stores on this PSP this period (vs last)">
+                          {m.total}{m.totalDelta !== 0 && <span className={m.totalDelta > 0 ? "text-mint/70" : "text-orange/70"}> {m.totalDelta > 0 ? "+" : ""}{m.totalDelta}</span>}
                         </span>
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-cream/40">No snapshot history yet — this fills in daily.</p>
+                <p className="text-sm text-cream/40">Not enough newly-discovered, payment-verified stores yet — builds as vetting reaches new finds.</p>
               )}
             </Card>
             <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store">
               {shifts.length ? (
                 <ul className="divide-y divide-cream/[0.06]">
-                  {shifts.slice(0, 10).map((s, i) => (
-                    <li key={i} className="flex items-baseline justify-between gap-3 py-1.5">
-                      <div className="flex min-w-0 items-baseline gap-2">
-                        <span className="truncate font-mono text-xs text-cream/70">{s.domain}</span>
-                        <span className="flex shrink-0 flex-wrap gap-1">
-                          {s.added.map((a) => (
-                            <span key={`a${a}`} className="rounded bg-mint/15 px-1.5 py-0.5 text-xs font-medium text-mint">+{a}</span>
-                          ))}
-                          {s.removed.map((r) => (
-                            <span key={`r${r}`} className="rounded bg-orange/15 px-1.5 py-0.5 text-xs font-medium text-orange">−{r}</span>
-                          ))}
-                        </span>
-                      </div>
-                      <span className="shrink-0 text-xs tabular-nums text-cream/30">{s.changedAt}</span>
-                    </li>
-                  ))}
+                  {shifts.slice(0, 8).map((s, i) => {
+                    const swap = s.added.length === 1 && s.removed.length === 1; // clean A→B switch
+                    return (
+                      <li key={i} className="py-2.5">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer"
+                            className="truncate font-mono text-xs text-cream/55 hover:text-cream hover:underline">{s.domain}</a>
+                          <span className="shrink-0 text-[11px] tabular-nums text-cream/30">{s.changedAt}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm">
+                          {swap ? (
+                            <>
+                              <span className="text-orange/75 line-through decoration-orange/40">{s.removed[0]}</span>
+                              <span className="text-cream/30">→</span>
+                              <span className="font-semibold text-mint">{s.added[0]}</span>
+                            </>
+                          ) : (
+                            <>
+                              {s.added.map((a) => (
+                                <span key={`a${a}`} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint">added {a}</span>
+                              ))}
+                              {s.removed.map((r) => (
+                                <span key={`r${r}`} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange">dropped {r}</span>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : (
                 <p className="text-sm text-cream/40">No switches logged yet — detected as stores are re-probed on the 60-day cycle.</p>

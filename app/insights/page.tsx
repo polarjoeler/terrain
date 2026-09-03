@@ -45,10 +45,10 @@ export default async function Insights({
   const [data, baselineDate, momentum, shifts] = await Promise.all([
     computeInsights(country, tag),
     getBaselineDate(),
-    // Scope momentum to the SAME market as the rest of the page (snapshots are
-    // per-country) — otherwise ZA visitors saw pan-African totals (e.g. Paystack's
-    // Nigeria surge) next to ZA-only provider counts, which read as inconsistent.
-    providerMomentum(country, 30).catch(() => []),
+    // Scope momentum to the SAME market as the rest of the page. Discovery-neutral,
+    // week-over-week among newly-discovered stores (not snapshot counts, which the
+    // payment backfill inflated).
+    providerMomentum(country, "week").catch(() => []),
     recentPaymentShifts(40).catch(() => []),
   ]);
   // Daily snapshots / trends are for the full ZA market only — not per-country

@@ -107,6 +107,30 @@ export async function availableCountries(): Promise<{ country: string; stores: n
 // stampede on a cold/expired key. (Module scope persists in a warm server
 // instance; a cold start recomputes once.)
 type CachedInsights = { at: number; data: InsightsData };
+// Canonicalise a raw checkout shipping token → a clean carrier name, or null to DROP.
+// Merges duplicate variants (tunl shipping / tunl shipping rates → TUNL), removes
+// Shopify's own generic layer (not a real carrier), and drops rate-calculation apps
+// and custom "carrier service" entries that aren't actual carriers.
+const CARRIER_CANON: [RegExp, string][] = [
+  [/bob\s*go|bobgo/, "Bob Go"], [/tunl/, "TUNL"], [/pargo/, "Pargo"],
+  [/courier\s*guy/, "The Courier Guy"], [/fastway/, "Fastway"], [/aramex/, "Aramex"],
+  [/\bpaxi\b/, "Paxi"], [/\bpudo\b/, "Pudo"], [/skynet/, "Skynet"], [/\bram\b/, "RAM"],
+  [/dhl/, "DHL"], [/fedex/, "FedEx"], [/\bups\b|ups_/, "UPS"], [/usps/, "USPS"],
+  [/royal\s*mail/, "Royal Mail"], [/global[-\s]?e/, "Global-e"], [/passport/, "Passport"],
+  [/zonos/, "Zonos"], [/shiprazor/, "Shiprazor"], [/sendcloud/, "Sendcloud"],
+  [/shipstation/, "ShipStation"], [/easyship/, "Easyship"], [/uafrica/, "uAfrica"],
+  [/parcel\s*perfect|parcelperfect/, "Parcel Perfect"],
+];
+// Tokens that are NOT carriers — Shopify's generic layer, rate-calc apps, custom rules.
+const CARRIER_DROP = /shopify|generic|provided_layer|carrier service|shipping app|shipping rules?|advanced shipping|better shipping|postcode|parcelify|intuitive|shipeasy|shipping easy|collective|scrubbill|calculator|\bmatrix\b|custom|\brates?\b|table rate|flat rate|manual/;
+function normalizeCarrier(raw: string): string | null {
+  const s = raw.toLowerCase().trim();
+  if (!s) return null;
+  for (const [re, name] of CARRIER_CANON) if (re.test(s)) return name; // known carriers win first
+  if (CARRIER_DROP.test(s)) return null;                                // then drop app/generic/custom noise
+  return raw.trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
 const INSIGHTS_TTL_MS = 10 * 60 * 1000;
 const _insightsCache = new Map<string, CachedInsights>();
 const _insightsInflight = new Map<string, Promise<InsightsData>>();
@@ -214,9 +238,16 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
     SELECT shipping_providers FROM imported_stores
     WHERE ${LIVE(country, tag)} AND shipping_providers IS NOT NULL AND shipping_providers <> ''`;
   const shipCount = new Map<string, number>();
-  for (const r of shipRows)
-    for (const s of String(r.shipping_providers).split(";").map((x) => x.trim()).filter(Boolean))
-      shipCount.set(s, (shipCount.get(s) ?? 0) + 1);
+  for (const r of shipRows) {
+    // Normalise + dedupe per store, so "tunl shipping;tunl shipping rates" counts TUNL
+    // once and a Shopify-only store contributes no (real) carrier.
+    const seen = new Set<string>();
+    for (const raw of String(r.shipping_providers).split(";").map((x) => x.trim()).filter(Boolean)) {
+      const name = normalizeCarrier(raw);
+      if (name) seen.add(name);
+    }
+    for (const name of seen) shipCount.set(name, (shipCount.get(name) ?? 0) + 1);
+  }
 
   // Sequential, NOT Promise.all: the db() pool is max:3, and firing several
   // concurrent queries after a prior awaited query can deadlock the ones that

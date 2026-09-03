@@ -363,39 +363,52 @@ export type ProviderMomentum = {
   days: number;         // span of history compared
 };
 
-/** Per-provider movement in share + checkout ranking, from the daily
- *  provider_snapshots series — "who's gaining/losing merchants and moving up or
- *  down the checkout". Compares the latest snapshot to the earliest within `days`. */
-export async function providerMomentum(country = "ALL", days = 30): Promise<ProviderMomentum[]> {
+/** Per-provider ADOPTION momentum among NEWLY-DISCOVERED stores — "which PSPs are new
+ *  stores choosing, this period vs last". Deliberately DISCOVERY-NEUTRAL: it compares
+ *  stores discovered in the last period against those discovered in the period before,
+ *  keyed on discovered_at. Backfilling payment data onto OLDER stores can't move this
+ *  (they fall outside both windows), so the delta is real new-store movement — not an
+ *  artefact of our vetting catching up on the existing base. */
+export async function providerMomentum(country = "ALL", period: "day" | "week" = "week"): Promise<ProviderMomentum[]> {
   const sql = db();
-  const rows = await sql<{ provider: string; date: Date; data: Record<string, number> }[]>`
-    SELECT provider, date, data FROM provider_snapshots
-    WHERE country = ${country} AND date >= CURRENT_DATE - ${days}::int
-    ORDER BY provider, date ASC`.catch(() => []);
-  const byProv = new Map<string, { date: Date; data: Record<string, number> }[]>();
+  const P = period === "day" ? 1 : 7;
+  const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{ discovered_at: Date; payments: string }[]>`
+    SELECT discovered_at, payments FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND payments IS NOT NULL AND payments <> ''
+      AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - ${2 * P}::int ${AND_C}`.catch(() => []);
+
+  const recentCut = Date.now() - P * 864e5;
+  let recentTotal = 0, priorTotal = 0;
+  const recent = new Map<string, number>(), prior = new Map<string, number>();
   for (const r of rows) {
-    if (!byProv.has(r.provider)) byProv.set(r.provider, []);
-    byProv.get(r.provider)!.push(r);
+    const isRecent = new Date(r.discovered_at).getTime() >= recentCut;
+    if (isRecent) recentTotal++; else priorTotal++;
+    // Canonical, de-duped gateways for the store (drops card icons / sub-rails).
+    const provs = new Set(cleanPayments(String(r.payments).split(";")).map((g) => canonicalProvider(g)).filter(Boolean) as string[]);
+    for (const p of provs) {
+      const m = isRecent ? recent : prior;
+      m.set(p, (m.get(p) ?? 0) + 1);
+    }
   }
+
   const out: ProviderMomentum[] = [];
-  for (const [provider, series] of byProv) {
-    if (!series.length) continue;
-    const first = series[0], last = series[series.length - 1];
-    const num = (o: Record<string, number>, k: string) => Number(o[k] ?? 0);
-    const span = Math.max(0, Math.round((new Date(last.date).getTime() - new Date(first.date).getTime()) / 864e5));
+  for (const name of new Set<string>([...recent.keys(), ...prior.keys()])) {
+    const rc = recent.get(name) ?? 0, pc = prior.get(name) ?? 0;
+    const rShare = recentTotal ? (rc / recentTotal) * 100 : 0;
+    const pShare = priorTotal ? (pc / priorTotal) * 100 : 0;
     out.push({
-      provider,
-      share: num(last.data, "share"),
-      shareDelta: Math.round((num(last.data, "share") - num(first.data, "share")) * 100) / 100,
-      rank: num(last.data, "avgRank"),
-      rankDelta: Math.round((num(last.data, "avgRank") - num(first.data, "avgRank")) * 100) / 100,
-      total: num(last.data, "total"),
-      totalDelta: num(last.data, "total") - num(first.data, "total"),
-      days: span,
+      provider: name,
+      share: Math.round(rShare * 10) / 10,
+      shareDelta: Math.round((rShare - pShare) * 10) / 10,
+      rank: 0, rankDelta: 0,          // checkout-rank movement needs stable snapshots — omitted here
+      total: rc, totalDelta: rc - pc, // new stores on this PSP: this period vs last
+      days: P,
     });
   }
-  // Biggest movers first (by absolute merchant change, then share change).
-  return out.sort((a, b) => Math.abs(b.totalDelta) - Math.abs(a.totalDelta) || Math.abs(b.shareDelta) - Math.abs(a.shareDelta));
+  // Biggest share movers first, then by new-store volume this period.
+  return out.sort((a, b) => Math.abs(b.shareDelta) - Math.abs(a.shareDelta) || b.total - a.total);
 }
 
 export type PaymentShift = {
