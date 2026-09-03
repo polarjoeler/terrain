@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
+import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { matchesProviderSlug, providerSlug, slugToTitle } from "@/lib/provider-slug";
@@ -43,9 +44,12 @@ export default async function ProviderPage({
   const canonical = providers.find((x) => matchesProviderSlug(x.provider, provider))?.provider;
   if (!canonical) notFound();
 
-  // Access: an admin (logged in) OR a valid signed share token for THIS provider.
-  const admin = isAdmin(await currentUser());
-  if (!admin && !verifyProviderToken(canonical, t)) notFound();
+  // Access: admin, OR a signed-in paid subscriber, OR a valid signed share token for
+  // THIS provider (so a report can still be shared with a PSP who isn't a subscriber).
+  const email = await currentUser();
+  const admin = isAdmin(email);
+  const paid = email ? hasAccess(await getSubscriber(email).catch(() => null)) : false;
+  if (!admin && !paid && !verifyProviderToken(canonical, t)) notFound();
 
   // Country filter (from the dropdown). Validate against the countries we actually have.
   const countries = await providerCountries(canonical).catch((): string[] => []);
