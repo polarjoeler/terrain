@@ -9,6 +9,9 @@ import {
 import { tagCounts } from "@/lib/tags";
 import { providerMomentum, recentPaymentShifts } from "@/lib/provider-insights";
 import { InsightsView } from "./insights-view";
+import { redirect } from "next/navigation";
+import { currentUser, isAdmin } from "@/lib/auth";
+import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 
 export const metadata = { title: "Terrain — Market Insights" };
 // Computed live from the store DB per request.
@@ -19,6 +22,12 @@ export default async function Insights({
 }: {
   searchParams: Promise<{ country?: string; tag?: string }>;
 }) {
+  // Paywall: proprietary market data — signed-in paid subscribers (or the owner) only.
+  const email = await currentUser();
+  if (!email) redirect("/login");
+  const subscriber = await getSubscriber(email).catch(() => null);
+  if (!hasAccess(subscriber) && !isAdmin(email)) redirect("/billing");
+
   const sp = await searchParams;
   const [countries, tags] = await Promise.all([
     availableCountries().catch(() => []),
