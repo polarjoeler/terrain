@@ -405,8 +405,9 @@ export type PaymentShift = {
   reordered: boolean;
 };
 
-/** Recent per-store payment-provider shifts (switches/adds/drops/reorders) from the
- *  payment_changes log — a live feed of stores changing their checkout. */
+/** Recent per-store payment-provider shifts from the payment_changes log — a live feed
+ *  of stores adding/dropping a gateway. ONE row per store (its latest change), and only
+ *  genuine gateway changes (add/drop), so a single flapping store can't flood the feed. */
 export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
   const sql = db();
   const rows = await sql<{
@@ -414,11 +415,29 @@ export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
     old_primary: string | null; new_primary: string | null; reordered: boolean;
   }[]>`
     SELECT domain, changed_at, added, removed, old_primary, new_primary, reordered
-    FROM payment_changes ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
-  return rows.map((r) => ({
-    domain: r.domain,
-    changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
-    added: r.added ?? [], removed: r.removed ?? [],
-    oldPrimary: r.old_primary, newPrimary: r.new_primary, reordered: r.reordered,
-  }));
+    FROM (
+      SELECT DISTINCT ON (domain) domain, changed_at, added, removed, old_primary, new_primary, reordered
+      FROM payment_changes
+      WHERE COALESCE(array_length(added, 1), 0) > 0 OR COALESCE(array_length(removed, 1), 0) > 0
+      ORDER BY domain, changed_at DESC
+    ) latest
+    ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
+  // Filter sub-rail / card-brand noise on read too, so even older rows render clean;
+  // drop any row that has no real gateway change left after filtering.
+  const clean = (arr: string[] | null) => (arr ?? []).filter((t) => !PAY_SHIFT_NOISE.has(t.toLowerCase()));
+  return rows
+    .map((r) => ({
+      domain: r.domain,
+      changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
+      added: clean(r.added), removed: clean(r.removed),
+      oldPrimary: r.old_primary, newPrimary: r.new_primary, reordered: r.reordered,
+    }))
+    .filter((s) => s.added.length > 0 || s.removed.length > 0);
 }
+
+// Kept in sync with PAY_NOISE in scripts/sync-checkout-payments.mjs — intermittent
+// sub-rails and card brands that aren't gateways.
+const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",
+  "cash on delivery", "cod", "manual payment", "manual", "other", "credit card",
+  "debit card", "card", "visa", "mastercard", "amex", "american express", "discover",
+  "maestro", "diners club", "diners", "unionpay", "jcb"]);

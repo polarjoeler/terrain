@@ -416,17 +416,23 @@ export function InsightsView({
                 <p className="text-sm text-cream/40">No snapshot history yet — this fills in daily.</p>
               )}
             </Card>
-            <Card title="Recent provider switches" subtitle="Stores that changed their checkout (caught on re-probe)">
+            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store">
               {shifts.length ? (
-                <ul className="space-y-1.5">
+                <ul className="divide-y divide-cream/[0.06]">
                   {shifts.slice(0, 10).map((s, i) => (
-                    <li key={i} className="truncate text-sm">
-                      <span className="font-mono text-xs text-cream/70">{s.domain}</span>{" "}
-                      {s.added.length > 0 && <span className="text-mint">+{s.added.join(", ")}</span>}
-                      {s.removed.length > 0 && <span className="text-orange"> −{s.removed.join(", ")}</span>}
-                      {s.reordered && s.added.length === 0 && s.removed.length === 0 && <span className="text-cream/40">reordered</span>}
-                      {s.newPrimary && s.oldPrimary !== s.newPrimary && <span className="text-cream/50"> · primary→{s.newPrimary}</span>}
-                      <span className="ml-1 text-cream/30">{s.changedAt}</span>
+                    <li key={i} className="flex items-baseline justify-between gap-3 py-1.5">
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <span className="truncate font-mono text-xs text-cream/70">{s.domain}</span>
+                        <span className="flex shrink-0 flex-wrap gap-1">
+                          {s.added.map((a) => (
+                            <span key={`a${a}`} className="rounded bg-mint/15 px-1.5 py-0.5 text-xs font-medium text-mint">+{a}</span>
+                          ))}
+                          {s.removed.map((r) => (
+                            <span key={`r${r}`} className="rounded bg-orange/15 px-1.5 py-0.5 text-xs font-medium text-orange">−{r}</span>
+                          ))}
+                        </span>
+                      </div>
+                      <span className="shrink-0 text-xs tabular-nums text-cream/30">{s.changedAt}</span>
                     </li>
                   ))}
                 </ul>
