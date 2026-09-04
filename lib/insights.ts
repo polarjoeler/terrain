@@ -32,6 +32,10 @@ export type InsightsData = {
   plusNewThisWeek: number;
   paymentsVerifiedStores: number;
   paymentsByProvider: InsightItem[];
+  // Discovery-neutral GENUINE ADOPTIONS per provider, for each period window (new-to-us
+  // stores in the window + switches to/from). Keyed provider label → count. Powers the
+  // Payment Intelligence change numbers so enrichment/backfill never inflates them.
+  paymentAdoptions: Record<PeriodKey, Record<string, number>>;
   paymentsByType: Record<PayType, InsightItem>;
   firstProvider: InsightItem[];
   themes: InsightItem[];
@@ -264,9 +268,39 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
           WHERE ${LIVE(country, tag)} AND apps IS NOT NULL AND apps <> ''
         ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`;
 
+  // Discovery-neutral payment adoptions per period window — new-to-us stores (by
+  // discovered_at) with each provider + real switches (change log), so enrichment /
+  // vetting catch-up on OLD stores never inflates the Payment Intelligence change.
+  const adoptRows = await sql<{ discovered_at: Date | null; payments: string }[]>`
+    SELECT discovered_at, payments FROM imported_stores
+    WHERE ${LIVE(country, tag)} AND payments IS NOT NULL AND payments <> ''
+      AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 365`;
+  const adoptChanges = await sql<{ changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
+    SELECT pc.changed_at, pc.added, pc.removed FROM payment_changes pc
+    JOIN imported_stores i ON i.domain = pc.domain
+    WHERE pc.changed_at >= now() - interval '365 days'
+      ${country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``}`.catch(() => []);
+  const ADOPT_PERIODS: [PeriodKey, number][] = [["day", 1], ["week", 7], ["month", 30], ["quarter", 91], ["year", 365]];
+  const paymentAdoptions = {} as Record<PeriodKey, Record<string, number>>;
+  for (const [pk, P] of ADOPT_PERIODS) {
+    const cut = Date.now() - P * 864e5;
+    const m = new Map<string, number>();
+    for (const r of adoptRows) {
+      if (!r.discovered_at || new Date(r.discovered_at).getTime() < cut) continue;
+      for (const g of cleanPayments(String(r.payments).split(";"))) m.set(g, (m.get(g) ?? 0) + 1);
+    }
+    for (const c of adoptChanges) {
+      if (new Date(c.changed_at).getTime() < cut) continue;
+      for (const a of c.added ?? []) { const v = canonicalProvider(a); if (v) m.set(v, (m.get(v) ?? 0) + 1); }
+      for (const rm of c.removed ?? []) { const v = canonicalProvider(rm); if (v) m.set(v, (m.get(v) ?? 0) - 1); }
+    }
+    paymentAdoptions[pk] = Object.fromEntries(m);
+  }
+
   return {
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
+    paymentAdoptions,
     newThisWeek: Number(t.new_week),
     discoveredByPeriod: {
       day: Number(t.disc_day), week: Number(t.disc_week), month: Number(t.disc_month),

@@ -371,7 +371,7 @@ export function InsightsView({
                         {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
                       </span>
                     </div>
-                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} />
+                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={data.paymentAdoptions[PERIOD_KEY[period]]} />
                   </div>
                 ) : null,
               )}
@@ -390,7 +390,7 @@ export function InsightsView({
               </p>
             </Card>
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}`}>
-              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} />
+              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={data.paymentAdoptions[PERIOD_KEY[period]]} />
             </Card>
           </div>
 
@@ -427,7 +427,7 @@ export function InsightsView({
                 <p className="text-sm text-cream/40">Not enough newly-discovered, payment-verified stores yet — builds as vetting reaches new finds.</p>
               )}
             </Card>
-            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/payments?country=${country}`}>
+            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/switches?country=${country}`}>
               {shifts.length ? (
                 <ul className="divide-y divide-cream/[0.06]">
                   {shifts.slice(0, 8).map((s, i) => {
@@ -519,9 +519,11 @@ export function InsightsView({
   );
 }
 
-/** Compact drill-in list (used inside the payments cards). */
+/** Compact drill-in list (used inside the payments cards). When `adopt` is given, the
+ *  change column shows GENUINE ADOPTIONS this period (discovery-neutral) instead of the
+ *  snapshot delta — so enrichment/vetting of old stores never inflates it. */
 function DrillList({
-  data, baseline, tone, showBaseline, drillParam, country,
+  data, baseline, tone, showBaseline, drillParam, country, adopt,
 }: {
   data: InsightItem[];
   baseline: InsightItem[] | null;
@@ -529,16 +531,18 @@ function DrillList({
   showBaseline: boolean;
   drillParam?: string;
   country?: string;
+  adopt?: Record<string, number>;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
   const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
+  const showChange = adopt ? true : showBaseline;
   return (
     <>
       <div className={`space-y-3 ${all && data.length > 10 ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
-          const cdel = prev != null ? i.count - prev : null;
+          const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
           const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
           const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
@@ -548,7 +552,7 @@ function DrillList({
               <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {showBaseline && <div className="w-16 shrink-0 text-right text-xs tabular-nums"><CountDelta v={cdel} /></div>}
+              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? "genuine adoptions this period" : undefined}><CountDelta v={cdel} /></div>}
             </RowTag>
           );
         })}

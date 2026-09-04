@@ -454,3 +454,32 @@ const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank tra
   "cash on delivery", "cod", "manual payment", "manual", "other", "credit card",
   "debit card", "card", "visa", "mastercard", "amex", "american express", "discover",
   "maestro", "diners club", "diners", "unionpay", "jcb"]);
+const cleanShiftTokens = (arr: string[] | null) => (arr ?? []).filter((t) => !PAY_SHIFT_NOISE.has(t.toLowerCase()));
+
+/** Genuine payment switches within a period, optionally scoped to a country — one row
+ *  per store (its latest change), genuine gateway changes only. Powers the standalone
+ *  switches report. periodDays = null → all time. */
+export async function paymentShifts(periodDays: number | null = null, country?: string, limit = 200): Promise<PaymentShift[]> {
+  const sql = db();
+  const AND_PERIOD = periodDays ? sql`AND pc.changed_at >= now() - (${periodDays}::int * interval '1 day')` : sql``;
+  const AND_C = country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{
+    domain: string; changed_at: Date; added: string[] | null; removed: string[] | null;
+    old_primary: string | null; new_primary: string | null; reordered: boolean;
+  }[]>`
+    SELECT domain, changed_at, added, removed, old_primary, new_primary, reordered FROM (
+      SELECT DISTINCT ON (pc.domain) pc.domain, pc.changed_at, pc.added, pc.removed, pc.old_primary, pc.new_primary, pc.reordered
+      FROM payment_changes pc JOIN imported_stores i ON i.domain = pc.domain
+      WHERE (COALESCE(array_length(pc.added, 1), 0) > 0 OR COALESCE(array_length(pc.removed, 1), 0) > 0)
+        ${AND_PERIOD} ${AND_C}
+      ORDER BY pc.domain, pc.changed_at DESC
+    ) latest ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
+  return rows
+    .map((r) => ({
+      domain: r.domain,
+      changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
+      added: cleanShiftTokens(r.added), removed: cleanShiftTokens(r.removed),
+      oldPrimary: r.old_primary, newPrimary: r.new_primary, reordered: r.reordered,
+    }))
+    .filter((s) => s.added.length > 0 || s.removed.length > 0);
+}
