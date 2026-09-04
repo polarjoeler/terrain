@@ -65,10 +65,17 @@ function TileDelta({ abs, pct }: { abs: number | null; pct: number | null }) {
   );
 }
 
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Card({ title, subtitle, reportHref, children }: { title: string; subtitle?: string; reportHref?: string; children: React.ReactNode }) {
   return (
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
-      <h3 className="text-lg font-semibold">{title}</h3>
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-lg font-semibold">{title}</h3>
+        {reportHref && (
+          <Link href={reportHref} className="shrink-0 whitespace-nowrap rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/55 transition hover:border-cyan/50 hover:text-cyan">
+            Open report →
+          </Link>
+        )}
+      </div>
       {subtitle && <p className="mt-1 text-sm text-cream/45">{subtitle}</p>}
       <div className="mt-6">{children}</div>
     </div>
@@ -102,7 +109,7 @@ function drillHref(param: string, label: string, country?: string): string {
 }
 
 function DistroCard({
-  title, subtitle, data, baseline, tone = "orange", drillParam, country,
+  title, subtitle, data, baseline, tone = "orange", drillParam, country, reportHref,
 }: {
   title: string;
   subtitle: string;
@@ -111,13 +118,14 @@ function DistroCard({
   tone?: string;
   drillParam?: string;
   country?: string;
+  reportHref?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
   const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
 
   return (
-    <Card title={title} subtitle={subtitle}>
+    <Card title={title} subtitle={subtitle} reportHref={reportHref}>
       <div className={`space-y-3 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
@@ -338,6 +346,7 @@ export function InsightsView({
           <Card
             title="Payment intelligence"
             subtitle={`Checkout-verified across ${data.paymentsVerifiedStores.toLocaleString()} of ${data.storesTotal.toLocaleString()} stores (${Math.round((100 * data.paymentsVerifiedStores) / Math.max(data.storesTotal, 1))}% and growing)`}
+            reportHref={`/insights/payments?country=${country}`}
           >
             {/* Headline signals for payment-company subscribers */}
             <div className="mb-6 grid grid-cols-3 gap-3">
@@ -457,10 +466,10 @@ export function InsightsView({
             </Card>
           </div>
 
-          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} />
-          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} />
-          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" />
-          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} />
+          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} />
+          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} />
+          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} />
+          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}`} />
           <DistroCard
             title="Shipping providers"
             subtitle={`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`}
@@ -469,6 +478,7 @@ export function InsightsView({
             tone="cyan"
             drillParam="shipping"
             country={country}
+            reportHref={`/insights/shipping?country=${country}`}
           />
         </div>
 

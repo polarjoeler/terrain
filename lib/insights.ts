@@ -6,7 +6,7 @@
  */
 
 import postgres from "postgres";
-import { classify, cleanPayments, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS } from "./markets";
 
 let _sql: ReturnType<typeof postgres> | null = null;
@@ -408,4 +408,93 @@ export async function setBaselineDate(date: string): Promise<void> {
     INSERT INTO app_settings (key, value, updated_at)
     VALUES ('insights_baseline_date', ${date}, now())
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+}
+
+/* -------------------------------------------------- standalone section reports --- */
+
+export type PeriodKey = "day" | "week" | "month" | "quarter" | "year";
+const REPORT_PERIOD_DAYS: Record<PeriodKey, number> = { day: 1, week: 7, month: 30, quarter: 91, year: 365 };
+export type ReportItem = { label: string; total: number; period: number };
+export type SectionReport = {
+  section: string; title: string; drillParam: string; period: PeriodKey; periodDays: number;
+  items: ReportItem[]; allTimeStores: number; periodStores: number;
+};
+
+// Apps are apps.shopify.com/<slug> URLs — show a clean name, drop custom/store links.
+function appSlugLabel(raw: string): string | null {
+  const slug = raw.toLowerCase().match(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/)?.[1];
+  if (!slug || ["partners", "collections", "browse", "categories", "stores"].includes(slug)) return null;
+  return slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+// One config per report. `multi` = semicolon-list column. `listNorm` processes the whole
+// token list (payments — folds card-icons/sub-rails then canonicalises); `norm` maps one
+// token (null = drop). Single-value columns are taken as-is.
+type SecCfg = {
+  column: string; multi: boolean; title: string; drillParam: string;
+  norm?: (s: string) => string | null; listNorm?: (arr: string[]) => string[];
+};
+const REPORT_SECTIONS: Record<string, SecCfg> = {
+  payments:   { column: "payments", multi: true, title: "Payment providers", drillParam: "payment", listNorm: (arr) => cleanPayments(arr).map(canonicalProvider) },
+  shipping:   { column: "shipping_providers", multi: true, title: "Shipping providers", drillParam: "shipping", norm: normalizeCarrier },
+  apps:       { column: "apps", multi: true, title: "Apps installed", drillParam: "app", norm: appSlugLabel },
+  categories: { column: "category", multi: false, title: "Categories", drillParam: "category" },
+  themes:     { column: "theme", multi: false, title: "Themes", drillParam: "theme" },
+  cities:     { column: "city", multi: false, title: "Cities", drillParam: "city" },
+};
+export const REPORT_SECTION_KEYS = Object.keys(REPORT_SECTIONS);
+export function isReportSection(s: string): boolean { return s in REPORT_SECTIONS; }
+
+/** A standalone, time-filtered report for one insights dimension. Each item shows its
+ *  ALL-TIME store count plus GENUINE ADOPTIONS in the chosen period: stores DISCOVERED
+ *  in the period with that value, plus (payments only) switches TO it minus switches
+ *  AWAY (from the change log). Backfilling old stores' data never moves the period
+ *  number — so the period reflects the filter, not our vetting catching up. */
+export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week"): Promise<SectionReport> {
+  const cfg = REPORT_SECTIONS[section];
+  if (!cfg) throw new Error(`unknown report section: ${section}`);
+  const P = REPORT_PERIOD_DAYS[period] ?? 7;
+  const sql = db();
+  const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{ val: string; discovered_at: Date | null }[]>`
+    SELECT ${sql(cfg.column)} AS val, discovered_at FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}`;
+
+  const cut = Date.now() - P * 864e5;
+  const total = new Map<string, number>(), periodM = new Map<string, number>();
+  let allTimeStores = 0, periodStores = 0;
+  for (const r of rows) {
+    const raw = cfg.multi ? String(r.val).split(";").map((x) => x.trim()).filter(Boolean) : [String(r.val).trim()];
+    const vals = [...new Set(
+      (cfg.listNorm ? cfg.listNorm(raw) : cfg.norm ? raw.map(cfg.norm) : raw).filter(Boolean) as string[],
+    )];
+    if (!vals.length) continue;
+    allTimeStores++;
+    const isNew = r.discovered_at != null && new Date(r.discovered_at).getTime() >= cut;
+    if (isNew) periodStores++;
+    for (const v of vals) {
+      total.set(v, (total.get(v) ?? 0) + 1);
+      if (isNew) periodM.set(v, (periodM.get(v) ?? 0) + 1);
+    }
+  }
+
+  // Payments: fold in genuine SWITCHES from the change log (adds to the destination
+  // PSP, subtracts from the dropped one) — real movement, not first-time vetting.
+  if (section === "payments") {
+    const changes = await sql<{ added: string[] | null; removed: string[] | null }[]>`
+      SELECT pc.added, pc.removed FROM payment_changes pc
+      JOIN imported_stores i ON i.domain = pc.domain
+      WHERE pc.changed_at >= now() - (${P}::int * interval '1 day')
+        ${country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``}`.catch(() => []);
+    for (const c of changes) {
+      for (const a of c.added ?? []) { const v = canonicalProvider(a); if (v) periodM.set(v, (periodM.get(v) ?? 0) + 1); }
+      for (const rm of c.removed ?? []) { const v = canonicalProvider(rm); if (v) periodM.set(v, (periodM.get(v) ?? 0) - 1); }
+    }
+  }
+
+  const items = [...total.entries()]
+    .map(([label, t]) => ({ label, total: t, period: periodM.get(label) ?? 0 }))
+    .sort((a, b) => b.total - a.total);
+  return { section, title: cfg.title, drillParam: cfg.drillParam, period, periodDays: P, items, allTimeStores, periodStores };
 }
