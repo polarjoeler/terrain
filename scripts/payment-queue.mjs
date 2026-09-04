@@ -80,9 +80,15 @@ async function main() {
     // New markets (KE/NG) jump the queue ahead of the null-sales ZA long tail —
     // freshly imported, they have no sales estimate yet so would otherwise rank
     // last and never get probed. We want gateway coverage in the new markets fast.
-    const queue = await sql`
+    // Eligibility with a TIER-AWARE re-probe cadence (#1): high-value stores
+    // (Top 100/500/Plus) are re-checked every 10 days so provider SWITCHES there —
+    // the ones payment companies care about — are caught fast; the long tail every
+    // 75 days. Unprobed stores are always eligible.
+    const HV_REPROBE_DAYS = 7, TAIL_REPROBE_DAYS = 21;
+    const eligible = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status,
         (payments IS NULL OR payments = '') AS needs_initial,
+        COALESCE(plus, false) AS plus,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS t500,
         (UPPER(country) IN ('KE', 'NG')) AS new_market
@@ -90,10 +96,35 @@ async function main() {
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
         ${PLUS ? sql`AND plus = true`
-               : sql`AND (payments IS NULL OR payments = ''
-                         OR payments_checked_at < now() - interval '30 days')`}
-      ORDER BY t100 DESC, t500 DESC, needs_initial DESC, new_market DESC, estimated_monthly_sales DESC NULLS LAST
-      ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
+               : sql`AND (
+                   payments IS NULL OR payments = ''
+                   OR ( (plus = true OR domain IN (SELECT domain FROM store_tags WHERE tag IN ('top-100','top-500')))
+                        AND payments_checked_at < now() - (${HV_REPROBE_DAYS}::int * interval '1 day') )
+                   OR payments_checked_at < now() - (${TAIL_REPROBE_DAYS}::int * interval '1 day')
+                 )`}
+      ORDER BY estimated_monthly_sales DESC NULLS LAST`;
+
+    // Build the value-ranked queue with a RESERVED re-probe slice (#2): high-value
+    // stores lead (initial or re-probe), then the tail is a ~65/35 mix of unprobed
+    // and re-probes — interleaved so re-probes land within the probe's per-run limit,
+    // instead of starving behind the whole unprobed backlog (which suppressed switches).
+    const isHV = (r) => r.t100 || r.t500 || r.plus;
+    const cap = LIMIT > 0 ? LIMIT : eligible.length;
+    const hv = eligible.filter(isHV);
+    // New markets (null-sales) boosted to the front of the unprobed tail; JS sort is stable so value order holds within a group.
+    const restInit = eligible.filter((r) => !isHV(r) && r.needs_initial).sort((a, b) => (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
+    const restRe = eligible.filter((r) => !isHV(r) && !r.needs_initial); // re-probes, value-ordered
+    const slots = Math.max(0, cap - hv.length);
+    const takeRe = restRe.slice(0, Math.round(slots * 0.35));
+    const takeInit = restInit.slice(0, slots - takeRe.length);
+    const mixed = [];
+    for (let ii = 0, ri = 0; ii < takeInit.length || ri < takeRe.length;) {
+      if (ii < takeInit.length) mixed.push(takeInit[ii++]);
+      if (ii < takeInit.length) mixed.push(takeInit[ii++]); // ~2 initials : 1 re-probe
+      if (ri < takeRe.length) mixed.push(takeRe[ri++]);
+    }
+    const queue = [...hv, ...mixed];
+    const reprobeCount = queue.filter((r) => !r.needs_initial).length;
 
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");
@@ -106,7 +137,7 @@ async function main() {
       FROM imported_stores WHERE published`;
 
     console.log(`\nPayment coverage: ${cov.have.toLocaleString()} have a provider · ${cov.live.toLocaleString()} live stores.`);
-    console.log(`Wrote ${queue.length.toLocaleString()} unverified domains → ${OUT} (${tagged.toLocaleString()} tagged Top100/Top500, queued first)`);
+    console.log(`Wrote ${queue.length.toLocaleString()} domains → ${OUT} (${tagged.toLocaleString()} Top100/500 first · ${reprobeCount.toLocaleString()} re-probes reserved for switch detection · ${(queue.length - reprobeCount).toLocaleString()} initial)`);
     console.log("Queue head (probe these first):");
     for (const r of queue.slice(0, 10)) {
       const tag = r.t100 ? " [Top100]" : r.t500 ? " [Top500]" : "";
