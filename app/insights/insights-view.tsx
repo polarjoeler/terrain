@@ -68,14 +68,14 @@ function TileDelta({ abs, pct }: { abs: number | null; pct: number | null }) {
 function Card({ title, subtitle, reportHref, children }: { title: string; subtitle?: string; reportHref?: string; children: React.ReactNode }) {
   return (
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
-      <div className="flex items-start justify-between gap-3">
+      {reportHref ? (
+        <Link href={reportHref} className="group inline-flex items-baseline gap-1.5 text-lg font-semibold text-cream transition hover:text-cyan" title="Open the full report">
+          {title}
+          <span className="text-cream/25 transition group-hover:text-cyan/70">→</span>
+        </Link>
+      ) : (
         <h3 className="text-lg font-semibold">{title}</h3>
-        {reportHref && (
-          <Link href={reportHref} className="shrink-0 whitespace-nowrap rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/55 transition hover:border-cyan/50 hover:text-cyan">
-            Open report →
-          </Link>
-        )}
-      </div>
+      )}
       {subtitle && <p className="mt-1 text-sm text-cream/45">{subtitle}</p>}
       <div className="mt-6">{children}</div>
     </div>
@@ -379,7 +379,7 @@ export function InsightsView({
           </Card>
 
           <div className="space-y-5">
-            <Card title="Shopify Plus adoption" subtitle="Cumulative total over time">
+            <Card title="Shopify Plus adoption" subtitle="Cumulative total over time" reportHref={`/dashboard?plus=true&country=${country}`}>
               {plusTrend ? <TrendLine data={plusTrend} /> : (
                 <div className="grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-sm text-cream/40">
                   Trend builds as daily snapshots accumulate
@@ -389,7 +389,7 @@ export function InsightsView({
                 {data.plusNewThisWeek} new this week · {data.plusTotal} total.
               </p>
             </Card>
-            <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)">
+            <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}`}>
               <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} />
             </Card>
           </div>
@@ -401,6 +401,7 @@ export function InsightsView({
             <Card
               title="Provider momentum"
               subtitle={momentum.length ? `Which PSPs new stores are choosing — ${momentum[0].days === 1 ? "today vs yesterday" : "this week vs last week"}` : "Appears as newly-found stores are payment-verified"}
+              reportHref={`/insights/payments?country=${country}`}
             >
               {momentum.length ? (
                 <ul className="divide-y divide-cream/[0.06]">
@@ -426,7 +427,7 @@ export function InsightsView({
                 <p className="text-sm text-cream/40">Not enough newly-discovered, payment-verified stores yet — builds as vetting reaches new finds.</p>
               )}
             </Card>
-            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store">
+            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/payments?country=${country}`}>
               {shifts.length ? (
                 <ul className="divide-y divide-cream/[0.06]">
                   {shifts.slice(0, 8).map((s, i) => {

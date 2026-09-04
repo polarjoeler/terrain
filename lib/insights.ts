@@ -433,9 +433,11 @@ function appSlugLabel(raw: string): string | null {
 type SecCfg = {
   column: string; multi: boolean; title: string; drillParam: string;
   norm?: (s: string) => string | null; listNorm?: (arr: string[]) => string[];
+  firstOnly?: boolean; // count only the FIRST value per store (e.g. leading gateway)
 };
 const REPORT_SECTIONS: Record<string, SecCfg> = {
   payments:   { column: "payments", multi: true, title: "Payment providers", drillParam: "payment", listNorm: (arr) => cleanPayments(arr).map(canonicalProvider) },
+  leading:    { column: "payments", multi: true, title: "Leading provider at checkout", drillParam: "payment", listNorm: (arr) => cleanPayments(arr).map(canonicalProvider), firstOnly: true },
   shipping:   { column: "shipping_providers", multi: true, title: "Shipping providers", drillParam: "shipping", norm: normalizeCarrier },
   apps:       { column: "apps", multi: true, title: "Apps installed", drillParam: "app", norm: appSlugLabel },
   categories: { column: "category", multi: false, title: "Categories", drillParam: "category" },
@@ -466,9 +468,10 @@ export async function sectionReport(section: string, country = "ZA", period: Per
   let allTimeStores = 0, periodStores = 0;
   for (const r of rows) {
     const raw = cfg.multi ? String(r.val).split(";").map((x) => x.trim()).filter(Boolean) : [String(r.val).trim()];
-    const vals = [...new Set(
+    let vals = [...new Set(
       (cfg.listNorm ? cfg.listNorm(raw) : cfg.norm ? raw.map(cfg.norm) : raw).filter(Boolean) as string[],
     )];
+    if (cfg.firstOnly) vals = vals.slice(0, 1); // just the primary/leading value
     if (!vals.length) continue;
     allTimeStores++;
     const isNew = r.discovered_at != null && new Date(r.discovered_at).getTime() >= cut;
