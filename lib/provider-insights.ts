@@ -450,6 +450,64 @@ export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
 
 // Kept in sync with PAY_NOISE in scripts/sync-checkout-payments.mjs — intermittent
 // sub-rails and card brands that aren't gateways.
+/* --------------------------------------------------------------- growth series --- */
+
+export type GrowthPeriod = "day" | "week" | "month" | "quarter" | "year";
+export type GrowthPoint = { date: string; launched: number; cumulative: number; churned: number };
+export type GrowthSeries = {
+  period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null; totalLaunched: number;
+};
+
+/** Retroactive Shopify-growth series — new stores per period by LAUNCH date (back to
+ *  2006 via launched_at), a running cumulative, and churn per period (forward-only, from
+ *  churn_log — historical churn isn't knowable, so it's flat until we started tracking).
+ *  Optional provider filter → that payment company's merchant growth (by current gateway,
+ *  a proxy for at-launch). Optional country + custom [from,to] range. */
+export async function growthSeries(opts: {
+  period?: GrowthPeriod; country?: string; provider?: string; from?: string; to?: string;
+} = {}): Promise<GrowthSeries> {
+  const period = opts.period ?? "month";
+  const { country, provider, from, to } = opts;
+  const sql = db();
+  const variants = provider ? providerVariants(provider) : null;
+  // Both imported_stores and churn_log have a `payments` column, so one fragment works
+  // for both queries — a store/churned-store counts if it uses one of the provider's tokens.
+  const prov = variants
+    ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
+    : sql``;
+  const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+
+  const launched = await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${period}::text, launched_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    FROM imported_stores
+    WHERE published AND launched_at IS NOT NULL ${ctry} ${prov}
+      ${from ? sql`AND launched_at >= ${from}::date` : sql``}
+      ${to ? sql`AND launched_at <= ${to}::date` : sql``}
+    GROUP BY 1 ORDER BY 1`.catch(() => []);
+
+  const churned = await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${period}::text, churned_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    FROM churn_log
+    WHERE COALESCE(historic, false) = false ${ctry} ${prov}
+      ${from ? sql`AND churned_at >= ${from}::date` : sql``}
+      ${to ? sql`AND churned_at <= ${to}::date` : sql``}
+    GROUP BY 1 ORDER BY 1`.catch(() => []);
+
+  const [cf] = await sql<{ f: string | null }[]>`
+    SELECT to_char(MIN(churned_at), 'YYYY-MM-DD') f FROM churn_log WHERE COALESCE(historic, false) = false`.catch(() => [{ f: null }]);
+
+  const launchMap = new Map(launched.map((r) => [r.b, Number(r.n)]));
+  const churnMap = new Map(churned.map((r) => [r.b, Number(r.n)]));
+  const dates = [...new Set([...launchMap.keys(), ...churnMap.keys()])].sort();
+  let cum = 0;
+  const points: GrowthPoint[] = dates.map((d) => {
+    const l = launchMap.get(d) ?? 0;
+    cum += l;
+    return { date: d, launched: l, cumulative: cum, churned: churnMap.get(d) ?? 0 };
+  });
+  return { period, points, churnTrackedFrom: cf?.f ?? null, totalLaunched: [...launchMap.values()].reduce((s, n) => s + n, 0) };
+}
+
 const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",
   "cash on delivery", "cod", "manual payment", "manual", "other", "credit card",
   "debit card", "card", "visa", "mastercard", "amex", "american express", "discover",

@@ -8,6 +8,7 @@ import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
 import { marketLabel, marketAdjective } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
 import type { InsightsData, InsightItem } from "@/lib/insights";
+import { GrowthChart } from "@/app/components/growth-chart";
 
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
@@ -342,6 +343,9 @@ export function InsightsView({
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
+          {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
+          <GrowthChart country={country} title={`${country ? marketLabel(country) + " " : ""}Shopify store growth`} />
+
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
           <Card
             title="Payment intelligence"

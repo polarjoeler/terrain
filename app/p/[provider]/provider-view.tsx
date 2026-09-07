@@ -6,6 +6,7 @@ import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
 import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore } from "@/lib/provider-insights";
+import { GrowthChart } from "@/app/components/growth-chart";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
@@ -311,6 +312,9 @@ export function ProviderView({
         {/* share of NEW stores over time — the acquisition curve, D/W/M/Q/Y */}
         <div className="mt-6">
           <NewShareChart series={newShare} provider={d.provider} />
+
+          {/* Retroactive merchant growth for this provider — launches per period + churn */}
+          <GrowthChart provider={d.provider} country={country || undefined} title={`${d.provider} merchant growth`} />
         </div>
 
         {/* position in the checkout stack */}
