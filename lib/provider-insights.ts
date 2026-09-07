@@ -453,16 +453,17 @@ export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
 /* --------------------------------------------------------------- growth series --- */
 
 export type GrowthPeriod = "day" | "week" | "month" | "quarter" | "year";
-export type GrowthPoint = { date: string; launched: number; cumulative: number; churned: number };
+export type GrowthPoint = { date: string; newStores: number; cumulative: number; churned: number };
 export type GrowthSeries = {
-  period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null; totalLaunched: number;
+  period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null; totalNew: number;
 };
 
-/** Retroactive Shopify-growth series — new stores per period by LAUNCH date (back to
- *  2006 via launched_at), a running cumulative, and churn per period (forward-only, from
- *  churn_log — historical churn isn't knowable, so it's flat until we started tracking).
- *  Optional provider filter → that payment company's merchant growth (by current gateway,
- *  a proxy for at-launch). Optional country + custom [from,to] range. */
+/** Shopify-growth series SINCE WE BEGAN — new stores per period by OUR discovery date
+ *  (discovered_at, forward-only; excludes the bulk imports, whose StoreLeads store_created
+ *  dates clustered in 2022-23 and skewed a retroactive view), a running cumulative, and
+ *  churn per period (also forward-only, from churn_log). New-stores and churn share the
+ *  same observed window, so they're directly comparable. Optional provider filter → that
+ *  PSP's merchant growth (by current gateway); optional country + custom [from,to] range. */
 export async function growthSeries(opts: {
   period?: GrowthPeriod; country?: string; provider?: string; from?: string; to?: string;
 } = {}): Promise<GrowthSeries> {
@@ -477,12 +478,12 @@ export async function growthSeries(opts: {
     : sql``;
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
 
-  const launched = await sql<{ b: string; n: number }[]>`
-    SELECT to_char(date_trunc(${period}::text, launched_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+  const found = await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${period}::text, discovered_at), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM imported_stores
-    WHERE published AND launched_at IS NOT NULL ${ctry} ${prov}
-      ${from ? sql`AND launched_at >= ${from}::date` : sql``}
-      ${to ? sql`AND launched_at <= ${to}::date` : sql``}
+    WHERE published AND discovered_at IS NOT NULL ${ctry} ${prov}
+      ${from ? sql`AND discovered_at >= ${from}::date` : sql``}
+      ${to ? sql`AND discovered_at <= ${to}::date` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
 
   const churned = await sql<{ b: string; n: number }[]>`
@@ -496,16 +497,16 @@ export async function growthSeries(opts: {
   const [cf] = await sql<{ f: string | null }[]>`
     SELECT to_char(MIN(churned_at), 'YYYY-MM-DD') f FROM churn_log WHERE COALESCE(historic, false) = false`.catch(() => [{ f: null }]);
 
-  const launchMap = new Map(launched.map((r) => [r.b, Number(r.n)]));
+  const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));
   const churnMap = new Map(churned.map((r) => [r.b, Number(r.n)]));
-  const dates = [...new Set([...launchMap.keys(), ...churnMap.keys()])].sort();
+  const dates = [...new Set([...foundMap.keys(), ...churnMap.keys()])].sort();
   let cum = 0;
   const points: GrowthPoint[] = dates.map((d) => {
-    const l = launchMap.get(d) ?? 0;
-    cum += l;
-    return { date: d, launched: l, cumulative: cum, churned: churnMap.get(d) ?? 0 };
+    const n = foundMap.get(d) ?? 0;
+    cum += n;
+    return { date: d, newStores: n, cumulative: cum, churned: churnMap.get(d) ?? 0 };
   });
-  return { period, points, churnTrackedFrom: cf?.f ?? null, totalLaunched: [...launchMap.values()].reduce((s, n) => s + n, 0) };
+  return { period, points, churnTrackedFrom: cf?.f ?? null, totalNew: [...foundMap.values()].reduce((s, n) => s + n, 0) };
 }
 
 const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",

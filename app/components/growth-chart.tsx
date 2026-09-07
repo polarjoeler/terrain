@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-type Point = { date: string; launched: number; cumulative: number; churned: number };
-type Series = { period: string; points: Point[]; churnTrackedFrom: string | null; totalLaunched: number };
+type Point = { date: string; newStores: number; cumulative: number; churned: number };
+type Series = { period: string; points: Point[]; churnTrackedFrom: string | null; totalNew: number };
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 
 /** Retroactive Shopify-growth chart: bars = new stores launched per period (back to 2006
@@ -43,7 +43,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
   const pts = data?.points ?? [];
   const W = 720, H = 250, padL = 6, padR = 6, padB = 22, padT = 8;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const maxL = Math.max(1, ...pts.map((p) => Math.max(p.launched, p.churned)));
+  const maxL = Math.max(1, ...pts.map((p) => Math.max(p.newStores, p.churned)));
   const maxC = Math.max(1, ...pts.map((p) => p.cumulative));
   const bw = pts.length ? iw / pts.length : iw;
   const x = (i: number) => padL + i * bw;
@@ -58,7 +58,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         <div>
           <h3 className="text-lg font-semibold">{title}</h3>
           <p className="mt-1 text-sm text-cream/45">
-            New stores launched per {period} (retroactive) · cumulative growth · churn where tracked
+            New stores discovered per {period} since we began tracking · cumulative · churn
             {provider ? " · by current gateway" : ""}
           </p>
         </div>
@@ -89,13 +89,13 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         ) : err ? (
           <div className="grid h-60 place-items-center text-sm text-orange">{err}</div>
         ) : pts.length === 0 ? (
-          <div className="grid h-60 place-items-center text-sm text-cream/40">No launch-dated stores for this filter yet.</div>
+          <div className="grid h-60 place-items-center text-sm text-cream/40">No stores discovered in this range yet.</div>
         ) : (
           <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
             {pts.map((p, i) => (
               <g key={p.date}>
-                <rect x={x(i) + bw * 0.18} width={bw * 0.64} y={yBar(p.launched)} height={Math.max(0, padT + ih - yBar(p.launched))} fill="var(--color-cyan)" opacity="0.7">
-                  <title>{`${p.date}: ${p.launched.toLocaleString()} new${p.churned ? `, ${p.churned.toLocaleString()} churned` : ""} · ${p.cumulative.toLocaleString()} total`}</title>
+                <rect x={x(i) + bw * 0.18} width={bw * 0.64} y={yBar(p.newStores)} height={Math.max(0, padT + ih - yBar(p.newStores))} fill="var(--color-cyan)" opacity="0.7">
+                  <title>{`${p.date}: ${p.newStores.toLocaleString()} new${p.churned ? `, ${p.churned.toLocaleString()} churned` : ""} · ${p.cumulative.toLocaleString()} cumulative`}</title>
                 </rect>
                 {p.churned > 0 && (
                   <rect x={x(i) + bw * 0.34} width={bw * 0.32} y={yBar(p.churned)} height={Math.max(0, padT + ih - yBar(p.churned))} fill="var(--color-orange)" opacity="0.8" />
@@ -114,7 +114,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         {data?.churnTrackedFrom
           ? `Churn tracked from ${data.churnTrackedFrom} — historical churn isn't available (a store's death is only seen once we're watching it).`
           : "Churn tracking builds as our liveness checks run — historical churn isn't available."}
-        {data ? ` · ${data.totalLaunched.toLocaleString()} launch-dated stores.` : ""}
+        {data ? ` · ${data.totalNew.toLocaleString()} stores discovered in range.` : ""}
       </p>
     </div>
   );
