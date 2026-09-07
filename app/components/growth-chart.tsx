@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 
 type Point = { date: string; newStores: number; cumulative: number; churned: number };
 type Series = { period: string; points: Point[]; churnTrackedFrom: string | null; totalNew: number };
@@ -16,6 +16,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
   const [data, setData] = useState<Series | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [hover, setHover] = useState<number | null>(null);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -41,16 +42,25 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
   }, [period, country, provider, from, to]);
 
   const pts = data?.points ?? [];
-  const W = 720, H = 250, padL = 6, padR = 6, padB = 22, padT = 8;
+  const W = 760, H = 300, padL = 40, padR = 46, padB = 26, padT = 12;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const maxL = Math.max(1, ...pts.map((p) => Math.max(p.newStores, p.churned)));
-  const maxC = Math.max(1, ...pts.map((p) => p.cumulative));
+  const maxNew = Math.max(1, ...pts.map((p) => p.newStores));
+  const maxChurn = Math.max(0, ...pts.map((p) => p.churned));
+  const maxCum = Math.max(1, ...pts.map((p) => p.cumulative));
+  const baseY = padT + (maxNew / (maxNew + maxChurn || 1)) * ih;   // zero line: new above, churn below
   const bw = pts.length ? iw / pts.length : iw;
-  const x = (i: number) => padL + i * bw;
-  const yBar = (v: number) => padT + ih - (v / maxL) * ih;
-  const yLine = (v: number) => padT + ih - (v / maxC) * ih;
-  const linePts = pts.map((p, i) => `${x(i) + bw / 2},${yLine(p.cumulative)}`).join(" ");
+  const xAt = (i: number) => padL + i * bw;
+  const upH = (v: number) => (v / maxNew) * (baseY - padT);
+  const downH = (v: number) => (maxChurn ? (v / maxChurn) * (padT + ih - baseY) : 0);
+  const yCum = (v: number) => padT + ih - (v / maxCum) * ih;
+  const cumLine = pts.map((p, i) => `${xAt(i) + bw / 2},${yCum(p.cumulative)}`).join(" ");
   const labelEvery = Math.max(1, Math.ceil(pts.length / 8));
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor((((e.clientX - r.left) / r.width) * W - padL) / bw);
+    setHover(i >= 0 && i < pts.length ? i : null);
+  };
+  const hp = hover != null ? pts[hover] : null;
 
   return (
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
@@ -83,30 +93,54 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         </span>
       </div>
 
-      <div className="mt-4">
+      <div className="relative mt-4" onMouseLeave={() => setHover(null)}>
         {loading ? (
-          <div className="grid h-60 place-items-center text-sm text-cream/40">Loading…</div>
+          <div className="grid h-72 place-items-center text-sm text-cream/40">Loading…</div>
         ) : err ? (
-          <div className="grid h-60 place-items-center text-sm text-orange">{err}</div>
+          <div className="grid h-72 place-items-center text-sm text-orange">{err}</div>
         ) : pts.length === 0 ? (
-          <div className="grid h-60 place-items-center text-sm text-cream/40">No stores discovered in this range yet.</div>
+          <div className="grid h-72 place-items-center text-sm text-cream/40">No stores discovered in this range yet.</div>
         ) : (
-          <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
-            {pts.map((p, i) => (
-              <g key={p.date}>
-                <rect x={x(i) + bw * 0.18} width={bw * 0.64} y={yBar(p.newStores)} height={Math.max(0, padT + ih - yBar(p.newStores))} fill="var(--color-cyan)" opacity="0.7">
-                  <title>{`${p.date}: ${p.newStores.toLocaleString()} new${p.churned ? `, ${p.churned.toLocaleString()} churned` : ""} · ${p.cumulative.toLocaleString()} cumulative`}</title>
-                </rect>
-                {p.churned > 0 && (
-                  <rect x={x(i) + bw * 0.34} width={bw * 0.32} y={yBar(p.churned)} height={Math.max(0, padT + ih - yBar(p.churned))} fill="var(--color-orange)" opacity="0.8" />
-                )}
-              </g>
-            ))}
-            <polyline points={linePts} fill="none" stroke="var(--color-mint)" strokeWidth="2.5" strokeLinejoin="round" />
-            {pts.map((p, i) => (i % labelEvery === 0 ? (
-              <text key={`t${p.date}`} x={x(i) + bw / 2} y={H - 6} textAnchor="middle" fill="var(--color-cream)" fillOpacity="0.4" fontSize="9">{p.date.slice(0, period === "year" ? 4 : 7)}</text>
-            ) : null))}
-          </svg>
+          <>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
+              {/* axes */}
+              <line x1={padL} y1={baseY} x2={W - padR} y2={baseY} stroke="var(--color-cream)" strokeOpacity="0.28" />
+              <line x1={padL} y1={padT} x2={padL} y2={padT + ih} stroke="var(--color-cream)" strokeOpacity="0.12" />
+              <line x1={W - padR} y1={padT} x2={W - padR} y2={padT + ih} stroke="var(--color-mint)" strokeOpacity="0.18" />
+              {/* left axis = per-period counts (new above 0, churn below) */}
+              <text x={padL - 6} y={padT + 5} textAnchor="end" fill="var(--color-cyan)" fillOpacity="0.8" fontSize="10">{maxNew.toLocaleString()}</text>
+              <text x={padL - 6} y={baseY + 3} textAnchor="end" fill="var(--color-cream)" fillOpacity="0.45" fontSize="10">0</text>
+              {maxChurn > 0 && <text x={padL - 6} y={padT + ih} textAnchor="end" fill="var(--color-orange)" fillOpacity="0.8" fontSize="10">{maxChurn.toLocaleString()}</text>}
+              {/* right axis = cumulative total */}
+              <text x={W - padR + 5} y={padT + 5} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.85" fontSize="10">{maxCum.toLocaleString()}</text>
+              <text x={W - padR + 5} y={padT + ih} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.5" fontSize="10">0</text>
+              {/* hover column */}
+              {hover != null && <rect x={xAt(hover)} y={padT} width={bw} height={ih} fill="var(--color-cream)" opacity="0.06" />}
+              {/* diverging bars: new UP, churn DOWN */}
+              {pts.map((p, i) => (
+                <g key={p.date}>
+                  <rect x={xAt(i) + bw * 0.2} width={bw * 0.6} y={baseY - upH(p.newStores)} height={upH(p.newStores)} fill="var(--color-cyan)" opacity={hover == null || hover === i ? 0.82 : 0.4} />
+                  {p.churned > 0 && <rect x={xAt(i) + bw * 0.2} width={bw * 0.6} y={baseY} height={downH(p.churned)} fill="var(--color-orange)" opacity={hover == null || hover === i ? 0.85 : 0.4} />}
+                </g>
+              ))}
+              {/* cumulative growth line (right scale) */}
+              <polyline points={cumLine} fill="none" stroke="var(--color-mint)" strokeWidth="2.5" strokeLinejoin="round" />
+              {hp && <circle cx={xAt(hover ?? 0) + bw / 2} cy={yCum(hp.cumulative)} r="3.5" fill="var(--color-mint)" />}
+              {/* x labels */}
+              {pts.map((p, i) => (i % labelEvery === 0 ? (
+                <text key={`t${p.date}`} x={xAt(i) + bw / 2} y={H - 8} textAnchor="middle" fill="var(--color-cream)" fillOpacity="0.4" fontSize="9">{p.date.slice(0, period === "year" ? 4 : 7)}</text>
+              ) : null))}
+            </svg>
+            {hp && (
+              <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
+                style={{ left: `${Math.min(88, Math.max(12, ((xAt(hover ?? 0) + bw / 2) / W) * 100))}%`, top: 0 }}>
+                <div className="font-semibold text-cream">{hp.date}</div>
+                <div className="mt-1 text-cyan">+{hp.newStores.toLocaleString()} new</div>
+                {hp.churned > 0 && <div className="text-orange">−{hp.churned.toLocaleString()} churned</div>}
+                <div className="mt-0.5 text-mint">{hp.cumulative.toLocaleString()} cumulative</div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
