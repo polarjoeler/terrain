@@ -2,13 +2,14 @@
 
 import { useEffect, useState, type MouseEvent } from "react";
 
-type Point = { date: string; newStores: number; cumulative: number; churned: number };
-type Series = { period: string; points: Point[]; churnTrackedFrom: string | null; totalNew: number };
+type Point = { date: string; newStores: number; total: number; churned: number };
+type Series = { period: string; points: Point[]; churnTrackedFrom: string | null; totalNew: number; currentTotal: number };
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 
-/** Retroactive Shopify-growth chart: bars = new stores launched per period (back to 2006
- *  via launch dates), a mint line = cumulative growth, orange = churn (forward-only).
- *  Filterable by period + custom date range. Fetches the paid-gated /api/growth. */
+/** Shopify-growth chart (forward-only, since we began tracking): diverging bars = new stores
+ *  added per period (cyan, up) and churned stores (orange, down); a mint line = the total live
+ *  store base, anchored to the real current count. Filterable by period + custom date range.
+ *  Fetches the paid-gated /api/growth. */
 export function GrowthChart({ country, provider, title = "Shopify store growth" }: { country?: string; provider?: string; title?: string }) {
   const [period, setPeriod] = useState("month");
   const [from, setFrom] = useState("");
@@ -46,14 +47,18 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
   const iw = W - padL - padR, ih = H - padT - padB;
   const maxNew = Math.max(1, ...pts.map((p) => p.newStores));
   const maxChurn = Math.max(0, ...pts.map((p) => p.churned));
-  const maxCum = Math.max(1, ...pts.map((p) => p.cumulative));
+  const totals = pts.map((p) => p.total);
+  const tMax = totals.length ? Math.max(...totals) : 1;
+  const tMin = totals.length ? Math.min(...totals) : 0;
+  const tSpan = Math.max(1, tMax - tMin);
   const baseY = padT + (maxNew / (maxNew + maxChurn || 1)) * ih;   // zero line: new above, churn below
   const bw = pts.length ? iw / pts.length : iw;
   const xAt = (i: number) => padL + i * bw;
   const upH = (v: number) => (v / maxNew) * (baseY - padT);
   const downH = (v: number) => (maxChurn ? (v / maxChurn) * (padT + ih - baseY) : 0);
-  const yCum = (v: number) => padT + ih - (v / maxCum) * ih;
-  const cumLine = pts.map((p, i) => `${xAt(i) + bw / 2},${yCum(p.cumulative)}`).join(" ");
+  // right axis is zoomed to the total's own [min,max] range so the climb is visible
+  const yTot = (v: number) => padT + 4 + (ih - 8) * (1 - (v - tMin) / tSpan);
+  const totLine = pts.map((p, i) => `${xAt(i) + bw / 2},${yTot(p.total)}`).join(" ");
   const labelEvery = Math.max(1, Math.ceil(pts.length / 8));
   const onMove = (e: MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -68,9 +73,15 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         <div>
           <h3 className="text-lg font-semibold">{title}</h3>
           <p className="mt-1 text-sm text-cream/45">
-            New stores discovered per {period} since we began tracking · cumulative · churn
-            {provider ? " · by current gateway" : ""}
+            Bars: new stores added ↑ / churned ↓ per {period}. Line: total live store base
+            {provider ? " on this gateway" : ""}.
           </p>
+          {data && (
+            <p className="mt-2 text-2xl font-semibold text-mint">
+              {data.currentTotal.toLocaleString()}
+              <span className="ml-2 text-sm font-normal text-cream/45">{provider ? "merchants" : "stores"} total</span>
+            </p>
+          )}
         </div>
         <div className="flex gap-1 rounded-full border border-cream/12 p-1">
           {PERIODS.map(([k, l]) => (
@@ -88,7 +99,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         {(from || to) && <button onClick={() => { setFrom(""); setTo(""); }} className="text-cream/40 hover:text-cream">clear</button>}
         <span className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-cyan opacity-70" />new</span>
-          <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm bg-mint" />cumulative</span>
+          <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-3 rounded-sm bg-mint" />total stores</span>
           <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-orange opacity-75" />churn</span>
         </span>
       </div>
@@ -111,9 +122,9 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
               <text x={padL - 6} y={padT + 5} textAnchor="end" fill="var(--color-cyan)" fillOpacity="0.8" fontSize="10">{maxNew.toLocaleString()}</text>
               <text x={padL - 6} y={baseY + 3} textAnchor="end" fill="var(--color-cream)" fillOpacity="0.45" fontSize="10">0</text>
               {maxChurn > 0 && <text x={padL - 6} y={padT + ih} textAnchor="end" fill="var(--color-orange)" fillOpacity="0.8" fontSize="10">{maxChurn.toLocaleString()}</text>}
-              {/* right axis = cumulative total */}
-              <text x={W - padR + 5} y={padT + 5} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.85" fontSize="10">{maxCum.toLocaleString()}</text>
-              <text x={W - padR + 5} y={padT + ih} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.5" fontSize="10">0</text>
+              {/* right axis = total live store base (zoomed to its own range) */}
+              <text x={W - padR + 5} y={padT + 8} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.85" fontSize="10">{tMax.toLocaleString()}</text>
+              <text x={W - padR + 5} y={padT + ih} textAnchor="start" fill="var(--color-mint)" fillOpacity="0.5" fontSize="10">{tMin.toLocaleString()}</text>
               {/* hover column */}
               {hover != null && <rect x={xAt(hover)} y={padT} width={bw} height={ih} fill="var(--color-cream)" opacity="0.06" />}
               {/* diverging bars: new UP, churn DOWN */}
@@ -123,9 +134,9 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
                   {p.churned > 0 && <rect x={xAt(i) + bw * 0.2} width={bw * 0.6} y={baseY} height={downH(p.churned)} fill="var(--color-orange)" opacity={hover == null || hover === i ? 0.85 : 0.4} />}
                 </g>
               ))}
-              {/* cumulative growth line (right scale) */}
-              <polyline points={cumLine} fill="none" stroke="var(--color-mint)" strokeWidth="2.5" strokeLinejoin="round" />
-              {hp && <circle cx={xAt(hover ?? 0) + bw / 2} cy={yCum(hp.cumulative)} r="3.5" fill="var(--color-mint)" />}
+              {/* total live store base line (right scale) */}
+              <polyline points={totLine} fill="none" stroke="var(--color-mint)" strokeWidth="2.5" strokeLinejoin="round" />
+              {hp && <circle cx={xAt(hover ?? 0) + bw / 2} cy={yTot(hp.total)} r="3.5" fill="var(--color-mint)" />}
               {/* x labels */}
               {pts.map((p, i) => (i % labelEvery === 0 ? (
                 <text key={`t${p.date}`} x={xAt(i) + bw / 2} y={H - 8} textAnchor="middle" fill="var(--color-cream)" fillOpacity="0.4" fontSize="9">{p.date.slice(0, period === "year" ? 4 : 7)}</text>
@@ -137,7 +148,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
                 <div className="font-semibold text-cream">{hp.date}</div>
                 <div className="mt-1 text-cyan">+{hp.newStores.toLocaleString()} new</div>
                 {hp.churned > 0 && <div className="text-orange">−{hp.churned.toLocaleString()} churned</div>}
-                <div className="mt-0.5 text-mint">{hp.cumulative.toLocaleString()} cumulative</div>
+                <div className="mt-0.5 text-mint">{hp.total.toLocaleString()} total stores</div>
               </div>
             )}
           </>

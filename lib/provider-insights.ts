@@ -453,9 +453,9 @@ export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
 /* --------------------------------------------------------------- growth series --- */
 
 export type GrowthPeriod = "day" | "week" | "month" | "quarter" | "year";
-export type GrowthPoint = { date: string; newStores: number; cumulative: number; churned: number };
+export type GrowthPoint = { date: string; newStores: number; total: number; churned: number };
 export type GrowthSeries = {
-  period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null; totalNew: number;
+  period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null; totalNew: number; currentTotal: number;
 };
 
 /** Shopify-growth series SINCE WE BEGAN — new stores per period by OUR discovery date
@@ -497,16 +497,28 @@ export async function growthSeries(opts: {
   const [cf] = await sql<{ f: string | null }[]>`
     SELECT to_char(MIN(churned_at), 'YYYY-MM-DD') f FROM churn_log WHERE COALESCE(historic, false) = false`.catch(() => [{ f: null }]);
 
+  // Grand total of live stores matching the filter (includes the bulk imports that predate
+  // our forward discovery) — this is the real store base the "total" line is anchored to.
+  const [gt] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int n FROM imported_stores WHERE published ${ctry} ${prov}`.catch(() => [{ n: 0 }]);
+  const currentTotal = Number(gt?.n ?? 0);
+
   const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));
   const churnMap = new Map(churned.map((r) => [r.b, Number(r.n)]));
   const dates = [...new Set([...foundMap.keys(), ...churnMap.keys()])].sort();
-  let cum = 0;
+  const totalNew = [...foundMap.values()].reduce((s, n) => s + n, 0);
+  const totalChurn = [...churnMap.values()].reduce((s, n) => s + n, 0);
+  // Anchor so the running total ends exactly at the current live count: total(t) =
+  // baseline + Σnew(≤t) − Σchurn(≤t), with baseline = current − totalNew + totalChurn
+  // (the churned stores were still alive at the window's start, so the line starts higher).
+  let running = currentTotal - totalNew + totalChurn;
   const points: GrowthPoint[] = dates.map((d) => {
     const n = foundMap.get(d) ?? 0;
-    cum += n;
-    return { date: d, newStores: n, cumulative: cum, churned: churnMap.get(d) ?? 0 };
+    const c = churnMap.get(d) ?? 0;
+    running += n - c;
+    return { date: d, newStores: n, total: running, churned: c };
   });
-  return { period, points, churnTrackedFrom: cf?.f ?? null, totalNew: [...foundMap.values()].reduce((s, n) => s + n, 0) };
+  return { period, points, churnTrackedFrom: cf?.f ?? null, totalNew, currentTotal };
 }
 
 const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",
