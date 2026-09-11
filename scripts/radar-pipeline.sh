@@ -55,33 +55,14 @@ node --env-file=.env.local scripts/sync-sheet.mjs || echo "!! sync step failed (
 echo "--- 1b land CT-tail discoveries (crt.sh-independent) ---"
 node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed (continuing)"
 
-echo "--- 2/5 fingerprint catalogue ---"
-node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
-
-echo "--- 3/5 AI enrich (category + description) ---"
-node --env-file=.env.local scripts/ai-enrich.mjs --all --country "$MARKETS" || echo "!! ai-enrich step failed (continuing)"
-
-echo "--- 4/5 monitor brands ---"
-node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
-
-echo "--- 4b market fraud sweep ---"
-node --env-file=.env.local scripts/radar-fraud-sweep.mjs --write || echo "!! fraud-sweep step failed (continuing)"
-
-echo "--- 5/6 domain & email intel ---"
-node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-watch step failed (continuing)"
-
-# Step 6: payment coverage — refresh the value-ranked queue, browser-probe the
-# top N highest-value stores that still lack a verified gateway, then sync the
-# results into imported_stores.payments + shipping_providers. The probe is now pure
-# HTTP (no browser) — it parses the enabled gateways from the server-rendered
-# checkout HTML and shipping providers (incl. TUNL international) from
-# /cart/shipping_rates.json — so it's ~10-50x cheaper and far faster, letting us
-# probe many more per run. Still capped: a probe creates a cart/checkout record in
-# the merchant's admin (but enters no email, so no abandoned-cart recovery fires).
-echo "--- 6/7 payments (queue + checkout probe + sync) ---"
+# PAYMENTS FIRST — moved ahead of the heavy fingerprint/catalog/logistics steps. Those
+# can run 90+ min on the (now fast) Mac and trip the watchdog, which used to kill the run
+# before payments ever executed. Payment/shipping coverage is the priority, so it goes first.
+# Refresh the value-ranked queue, HTTP-probe the top N stores lacking a verified gateway,
+# then sync gateways + shipping_providers into imported_stores.
+echo "--- payments FIRST (queue + checkout probe + sync) ---"
 # Share a lock with the dedicated hourly payments-probe job (scripts/payments-probe.sh)
-# so the two never write checkout_cache.json at once. If the hourly job is mid-run,
-# skip here — it already covers payments far more often than this 4h cycle.
+# so the two never write checkout_cache.json at once.
 PROBE_LOCK="$HOME/shopify-radar/.probe.lock"
 if [ -d "$PROBE_LOCK" ] && [ $(( $(date +%s) - $(stat -f %m "$PROBE_LOCK" 2>/dev/null || echo 0) )) -gt 5400 ]; then rmdir "$PROBE_LOCK" 2>/dev/null; fi
 if mkdir "$PROBE_LOCK" 2>/dev/null; then
@@ -106,6 +87,24 @@ if mkdir "$PROBE_LOCK" 2>/dev/null; then
 else
   echo "payments: probe lock held by the hourly job — skipping this cycle"
 fi
+
+echo "--- fingerprint catalogue (after payments) ---"
+node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
+
+echo "--- 3/5 AI enrich (category + description) ---"
+node --env-file=.env.local scripts/ai-enrich.mjs --all --country "$MARKETS" || echo "!! ai-enrich step failed (continuing)"
+
+echo "--- 4/5 monitor brands ---"
+node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
+
+echo "--- 4b market fraud sweep ---"
+node --env-file=.env.local scripts/radar-fraud-sweep.mjs --write || echo "!! fraud-sweep step failed (continuing)"
+
+echo "--- 5/6 domain & email intel ---"
+node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-watch step failed (continuing)"
+
+# (payments moved earlier — see "payments FIRST" above, so the heavy fingerprint/
+# catalog/logistics steps can never starve it via the 90-min watchdog.)
 
 # Step 7: liveness re-check — re-verify a batch of stores (value-ranked, skips
 # anything checked in the last 10 days) so live_status stays current and the
