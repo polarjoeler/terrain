@@ -15,6 +15,12 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 cd /Users/joel/storepulse || exit 1
+# Target markets for the budget-consuming enrichment steps (AI enrich, checkout probes).
+# ct-tail is TLD-agnostic and lands the whole global CT firehose, so without this scope
+# those steps would burn Haiku credits + checkout probes on global stores we don't sell to.
+# Scope = all of Africa (the country set geo.py tags, matching the VPS "Africa" market) + JP.
+# (Radar/fingerprint stays ZA-only — a separate, intentional scope in radar-fingerprint.mjs.)
+MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP"
 
 echo "===== radar pipeline $(date '+%Y-%m-%d %H:%M:%S') ====="
 
@@ -53,7 +59,7 @@ echo "--- 2/5 fingerprint catalogue ---"
 node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
 
 echo "--- 3/5 AI enrich (category + description) ---"
-node --env-file=.env.local scripts/ai-enrich.mjs --all || echo "!! ai-enrich step failed (continuing)"
+node --env-file=.env.local scripts/ai-enrich.mjs --all --country "$MARKETS" || echo "!! ai-enrich step failed (continuing)"
 
 echo "--- 4/5 monitor brands ---"
 node --env-file=.env.local scripts/radar-monitor.mjs || echo "!! monitor step failed (continuing)"
@@ -81,11 +87,16 @@ if [ -d "$PROBE_LOCK" ] && [ $(( $(date +%s) - $(stat -f %m "$PROBE_LOCK" 2>/dev
 if mkdir "$PROBE_LOCK" 2>/dev/null; then
   (
     trap 'rmdir "$PROBE_LOCK" 2>/dev/null' EXIT
-    node --env-file=.env.local scripts/payment-queue.mjs --limit 2000 >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
+    # Probe a MEASURED number per run: each checkout probe leaves an abandoned cart in the
+    # merchant's admin, so we cap the footprint at ~600/run (~3.6k/day across the 4h cycle) —
+    # clears the never-probed backlog in ~2 days without carpet-bombing merchant admins. The
+    # Mac can do far more now (SentinelOne gone); the limit is politeness, not speed.
+    PROBE_N=600
+    node --env-file=.env.local scripts/payment-queue.mjs --limit "$PROBE_N" --country "$MARKETS" >/dev/null 2>&1 || echo "!! payment-queue failed (continuing)"
     PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
     if [ -x "$PROBE_PY" ]; then
       ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
-          --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit 2000 --concurrency 12 ) \
+          --from-file /Users/joel/storepulse/feed/payment-queue.txt --limit "$PROBE_N" --concurrency 12 ) \
         || echo "!! checkout probe failed (continuing)"
       node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
     else

@@ -21,6 +21,10 @@ const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] 
 const PLUS = args.includes("--plus"); // enrich ALL Shopify Plus stores (highest value)
 const LIMIT = parseInt(opt("--limit", PLUS ? "0" : "500"), 10); // 0 = no cap
 const OUT = opt("--out", PLUS ? "feed/payment-queue-plus.txt" : "feed/payment-queue.txt");
+// --country ZA,KE,NG,JP scopes probing to target markets so global discoveries (ct-tail is
+// TLD-agnostic and lands the whole CT firehose) don't consume checkout probes — each probe
+// leaves an abandoned checkout in the merchant's admin, so probing off-target stores is waste.
+const CLIST = (opt("--country", null) || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL not set (run with --env-file=.env.local)");
@@ -95,6 +99,7 @@ async function main() {
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
+        ${CLIST.length ? sql`AND UPPER(country) = ANY(${CLIST})` : sql``}
         ${PLUS ? sql`AND plus = true`
                : sql`AND (
                    payments IS NULL OR payments = ''
