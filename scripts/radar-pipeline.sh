@@ -135,6 +135,11 @@ node --env-file=.env.local scripts/logistics-scan.mjs --limit 3000 || echo "!! l
 echo "--- provider snapshots ---"
 node --env-file=.env.local scripts/snapshot-providers.mjs || echo "!! provider snapshot failed (continuing)"
 
+# Partner-graph: refresh edges from current enrichment, backfill switch events, roll up today's
+# per-(partner × market) snapshots (the payment/gateway time-series we sell to PSPs). Set-based.
+echo "--- partner-graph refresh ---"
+node --env-file=.env.local scripts/partner-graph.mjs --edges --events --rollup || echo "!! partner-graph failed (continuing)"
+
 # Browse snapshot — precompute the dashboard Explorer's full dataset into a single
 # jsonb row so the request path reads ONE row instead of marshaling ~13k wide rows
 # (which timed out under this pass's concurrent DB load). Runs LAST, after enrichment,
