@@ -189,7 +189,7 @@ const bentoCards = [
   {
     n: "04",
     title: "Weekly delivery, your way",
-    body: "An email digest every Monday, plus CSV download and a live dashboard. API access on Enterprise.",
+    body: "An email digest every Monday — with CSV export and the live dashboard on Pro, and API access on Enterprise.",
     tone: "light" as const,
   },
   {
@@ -387,12 +387,12 @@ function DashboardPreview() {
 const plans = [
   {
     name: "Starter",
-    price: "$30",
-    soon: "$50",
+    price: "$79",
+    soon: null,
     blurb: "For freelancers and small agencies.",
     features: [
+      "Limited leads",
       "Weekly email digest",
-      "CSV download",
       "Contact emails included",
       "Product counts & price ranges",
     ],
@@ -402,14 +402,15 @@ const plans = [
   },
   {
     name: "Pro",
-    price: "$79",
-    soon: "$100",
+    price: "$249",
+    soon: null,
     blurb: "For teams that live on new leads.",
     features: [
       "Everything in Starter",
+      "Up to 3 seats",
+      "CSV downloads & exports",
       "Live dashboard with filters",
       "Market-share intelligence",
-      "Brand & fraud monitoring",
     ],
     featured: true,
     cta: "Go Pro",
@@ -440,7 +441,7 @@ function Pricing() {
           Simple <em className="text-orange">introductory</em> pricing.
         </h2>
         <p className="mt-4 text-center text-cream/55">
-          Lock in the launch price before it goes up. Billed in USD via Stripe.
+          Straightforward plans that scale with your team. Billed in USD via Stripe.
         </p>
         <div className="mt-14 grid gap-5 md:grid-cols-3">
           {plans.map((p) => (
