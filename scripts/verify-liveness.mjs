@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import postgres from "postgres";
 
 const DEAD_AFTER = 2;
+const MIGRATE_AFTER = 2;   // consecutive reachable-but-not-Shopify checks before "migrated"
 const args = process.argv.slice(2);
 const opt = (k, d) => {
   const i = args.indexOf(k);
@@ -133,10 +134,15 @@ async function classify(domain) {
 }
 
 function nextStatus(old, miss, { reachable, shopify, dnsDead }) {
-  if (dnsDead) return { status: "dead", miss: miss + 1 }; // no DNS = definitively gone
-  if (!reachable) return { status: miss + 1 >= DEAD_AFTER ? "dead" : (old || "active"), miss: miss + 1 };
-  if (shopify) return { status: "active", miss: 0 };
-  return { status: "migrated", miss: 0 };
+  // A single bad check is not churn. A store can throw one timeout, one DNS blip, a
+  // Cloudflare/WAF interstitial, or a maintenance page and still be perfectly alive — so
+  // BOTH terminal states now require DEAD_AFTER/MIGRATE_AFTER consecutive confirming misses
+  // before we log churn. Any healthy (reachable + Shopify) check resets the counter. The old
+  // code flipped "migrated" on the very first non-Shopify response (miss reset to 0), which
+  // logged ~2,300 false "migrated → unknown" churns and pulled those live stores out of the base.
+  if (shopify) return { status: "active", miss: 0 };                       // healthy → reset
+  if (dnsDead || !reachable) return { status: miss + 1 >= DEAD_AFTER ? "dead" : (old || "active"), miss: miss + 1 };
+  return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
 }
 
 async function main() {

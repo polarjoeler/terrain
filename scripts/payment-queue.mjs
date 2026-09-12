@@ -109,27 +109,25 @@ async function main() {
                  )`}
       ORDER BY estimated_monthly_sales DESC NULLS LAST`;
 
-    // Build the value-ranked queue with a RESERVED re-probe slice (#2): high-value
-    // stores lead (initial or re-probe), then the tail is a ~65/35 mix of unprobed
-    // and re-probes — interleaved so re-probes land within the probe's per-run limit,
-    // instead of starving behind the whole unprobed backlog (which suppressed switches).
+    // DRAIN MODE: coverage is diluting (new stores land faster than we probe them), so spend
+    // the run mostly on INITIAL probes — never-probed stores, highest-value first — and reserve
+    // only a thin slice for re-probes (switch detection on high-value stores). Once the
+    // never-probed backlog is gone, `init` runs short and the re-probe cadence naturally
+    // reclaims the freed slots. Tune with --reprobe-share / REPROBE_SHARE (0 = pure drain).
     const isHV = (r) => r.t100 || r.t500 || r.plus;
     const cap = LIMIT > 0 ? LIMIT : eligible.length;
-    const hv = eligible.filter(isHV);
-    // New markets (null-sales) boosted to the front of the unprobed tail; JS sort is stable so value order holds within a group.
-    const restInit = eligible.filter((r) => !isHV(r) && r.needs_initial).sort((a, b) => (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
-    const restRe = eligible.filter((r) => !isHV(r) && !r.needs_initial); // re-probes, value-ordered
-    const slots = Math.max(0, cap - hv.length);
-    const takeRe = restRe.slice(0, Math.round(slots * 0.35));
-    const takeInit = restInit.slice(0, slots - takeRe.length);
-    const mixed = [];
-    for (let ii = 0, ri = 0; ii < takeInit.length || ri < takeRe.length;) {
-      if (ii < takeInit.length) mixed.push(takeInit[ii++]);
-      if (ii < takeInit.length) mixed.push(takeInit[ii++]); // ~2 initials : 1 re-probe
-      if (ri < takeRe.length) mixed.push(takeRe[ri++]);
-    }
-    const queue = [...hv, ...mixed];
-    const reprobeCount = queue.filter((r) => !r.needs_initial).length;
+    const REPROBE_SHARE = Math.min(1, Math.max(0,
+      parseFloat(opt("--reprobe-share", process.env.REPROBE_SHARE || "0.12"))));
+    // Initial probes, value-ranked: HV first, then new-market (KE/NG), then the value tail.
+    const init = eligible.filter((r) => r.needs_initial).sort((a, b) =>
+      (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0) || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
+    const reprobes = eligible.filter((r) => !r.needs_initial)
+      .sort((a, b) => (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)); // HV switches first
+    const reSlots = Math.min(reprobes.length, Math.round(cap * REPROBE_SHARE));
+    const takeInit = init.slice(0, Math.max(0, cap - reSlots));
+    const takeRe = reprobes.slice(0, cap - takeInit.length);
+    const queue = [...takeInit, ...takeRe]; // never-probed (HV→new-market→value) first, re-probes last
+    const reprobeCount = takeRe.length;
 
     mkdirSync(dirname(OUT), { recursive: true });
     writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");
