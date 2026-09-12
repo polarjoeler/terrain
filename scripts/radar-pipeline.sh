@@ -106,12 +106,14 @@ node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-wat
 # (payments moved earlier — see "payments FIRST" above, so the heavy fingerprint/
 # catalog/logistics steps can never starve it via the 90-min watchdog.)
 
-# Step 7: liveness re-check — re-verify a batch of stores (value-ranked, skips
-# anything checked in the last 10 days) so live_status stays current and the
-# Insights "Store survival & churn" tracks real forward churn instead of freezing
-# at the import snapshot. Lightweight HTTP (products.json), not a checkout probe.
+# Step 7: liveness / churn monitoring — re-verify a batch of stores (value-ranked, skips
+# anything checked in the last 30 days ≈ monthly) so live_status stays current and Insights
+# "Store survival & churn" tracks real forward churn. SCOPED to $MARKETS (Africa + Japan) —
+# the markets we sell into; the ~18k global bare-records are banked, not churn-tracked, so
+# they don't drown the sold markets. Lightweight HTTP (products.json), residential IP (Mac);
+# datacenter/VPS IPs get rate-limited by Shopify's edge and would false-positive.
 echo "--- 7/7 liveness re-check ---"
-node --env-file=.env.local scripts/verify-liveness.mjs --limit 600 --min-age-days 10 --concurrency 10 \
+node --env-file=.env.local scripts/verify-liveness.mjs --country "$MARKETS" --min-age-days 30 --limit 600 --concurrency 10 \
   || echo "!! liveness step failed (continuing)"
 
 # Trigger the daily market-insights snapshot (the page computes + upserts it).

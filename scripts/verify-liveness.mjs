@@ -25,6 +25,9 @@ const opt = (k, d) => {
 const LIMIT = parseInt(opt("--limit", "0"), 10);          // 0 = all due
 const CONCURRENCY = parseInt(opt("--concurrency", "8"), 10);
 const MIN_AGE_DAYS = parseInt(opt("--min-age-days", "14"), 10);
+// --country ZA,KE,NG,JP restricts churn monitoring to markets we sell into. Global bare-record
+// stores are banked for later, not liveness-tracked now (they'd drown the sold markets).
+const COUNTRIES = (opt("--country", "") || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL not set (run with --env-file=.env.local)");
@@ -155,6 +158,7 @@ async function main() {
     const rows = await sql`
       SELECT domain, live_miss FROM imported_stores
       WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
+        ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
       ORDER BY estimated_monthly_sales DESC NULLS LAST
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}
     `;
