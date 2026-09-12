@@ -161,7 +161,9 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
-    if (noPaymentOnly && (l.payments ?? "").trim()) return false; // only stores with NO gateway yet
+    // "No gateway yet" = we PROBED the checkout and it rendered no provider — a real prospect,
+    // not a store we simply haven't scraped. Requires paymentsChecked so unknowns are excluded.
+    if (noPaymentOnly && (!l.paymentsChecked || (l.payments ?? "").trim())) return false;
     if (tier === "top100" && !l.top100) return false;
     if (tier === "top500" && !l.top500) return false;
     if (skip !== "recency" && recency) {
@@ -244,7 +246,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-            <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> No payment gateway yet
+            <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet
           </button>
           {/* Curated Top 100 / Top 500 — mutually exclusive (Top 100 is the elite subset). */}
           <div className="flex gap-1 pt-1">

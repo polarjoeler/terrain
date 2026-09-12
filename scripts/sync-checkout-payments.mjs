@@ -40,7 +40,15 @@ async function main() {
       }]);
     }
   }
-  console.log(`${verified.length.toLocaleString()} domains with verified checkout data in ${cachePath.split("/").pop()}.`);
+  // Stores we REACHED at checkout that rendered NO gateway — i.e. "checked, hasn't chosen a
+  // payment provider yet" (a real prospect signal), as opposed to stores we never probed or
+  // couldn't test. ONLY the genuine no-gateway note counts: `no_variant` means we couldn't
+  // even reach a testable checkout, and errors/WAF blocks aren't a signal — those stay
+  // "unknown", never "no gateway".
+  const checkedEmpty = Object.entries(cache)
+    .filter(([, rec]) => String(rec?.note || "").startsWith("no_gateways_found"))
+    .map(([d]) => clean(d));
+  console.log(`${verified.length.toLocaleString()} domains with verified checkout data · ${checkedEmpty.length.toLocaleString()} confirmed no-gateway (probed, none chosen).`);
 
   const POOL = 8, CONCURRENCY = 6; // CONCURRENCY < POOL so queries never queue past
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: POOL });
@@ -118,6 +126,15 @@ async function main() {
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     console.log(`✓ Updated checkout data on ${updated.toLocaleString()} stores.`);
+
+    // Stamp "we checked, no gateway" — records payments_checked_at while leaving payments
+    // empty, so the DB distinguishes checked-empty (a prospect) from never-probed (unknown).
+    // Guarded so it never overwrites a store that DOES have a gateway on record.
+    if (checkedEmpty.length) {
+      const r = await sql`UPDATE imported_stores SET payments_checked_at = now()
+        WHERE domain = ANY(${checkedEmpty}) AND published AND (payments IS NULL OR payments = '')`;
+      console.log(`  ↳ marked ${r.count.toLocaleString()} stores checked-but-no-gateway (probed, no provider yet).`);
+    }
     if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);
   } finally {
     await sql.end();
