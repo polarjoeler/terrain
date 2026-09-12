@@ -21,6 +21,7 @@ export default async function Dashboard({
   searchParams: Promise<{
     country?: string; q?: string; payment?: string; shipping?: string;
     theme?: string; city?: string; category?: string; band?: string;
+    new?: string; nopay?: string;
   }>;
 }) {
   const email = await currentUser();
@@ -39,11 +40,15 @@ export default async function Dashboard({
   // Drill-through: insights links land here with a facet pre-applied
   // (e.g. /dashboard?payment=Paystack) — seed the Explorer's filters from them.
   const csv = (v?: string) => (v ? v.split(",").map((x) => x.trim()).filter(Boolean) : undefined);
+  // ?new=7d|30d|365d seeds the "new this week/month/year" recency filter; ?nopay=1 seeds the
+  // "no payment gateway yet" prospect list — both used by outbound digest deep-links.
+  const recency = (["7d", "30d", "365d"] as const).includes(sp.new as never) ? (sp.new as "7d" | "30d" | "365d") : undefined;
   const drill = {
     q: sp.q,
     country: sp.country ? [sp.country] : undefined,
     payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
+    recency, noPayment: sp.nopay === "1",
   };
 
   // Tile numbers all come from the single getHomeStats() aggregate (one indexed

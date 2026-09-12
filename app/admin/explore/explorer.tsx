@@ -108,6 +108,8 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
 export type ExploreInitial = {
   q?: string; country?: string[]; category?: string[]; band?: string[];
   theme?: string[]; city?: string[]; payment?: string[]; shipping?: string[];
+  recency?: RecencyKey;   // seed "new this week" (7d) etc. from a deep link
+  noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
 };
 
 export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; total?: number; initial?: ExploreInitial }) {
@@ -123,8 +125,9 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
   const [platform, setPlatform] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
+  const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
-  const [recency, setRecency] = useState<RecencyKey>("");
+  const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [sort, setSort] = useState<SortKey>("score");
   const [shown, setShown] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
@@ -158,6 +161,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     }
     if (plusOnly && !l.plus) return false;
     if (emailOnly && !l.email) return false;
+    if (noPaymentOnly && (l.payments ?? "").trim()) return false; // only stores with NO gateway yet
     if (tier === "top100" && !l.top100) return false;
     if (tier === "top500" && !l.top500) return false;
     if (skip !== "recency" && recency) {
@@ -174,7 +178,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency, sort]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -203,10 +207,10 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
+  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setTier(""); setRecency(""); };
-  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); };
+  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
 
   // Counts for the recency control — computed with recency skipped so each window
   // shows its own total regardless of the current selection.
@@ -238,6 +242,9 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
           </button>
           <button onClick={() => setEmailOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${emailOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
+          </button>
+          <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> No payment gateway yet
           </button>
           {/* Curated Top 100 / Top 500 — mutually exclusive (Top 100 is the elite subset). */}
           <div className="flex gap-1 pt-1">
