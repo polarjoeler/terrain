@@ -16,7 +16,7 @@ export default async function SectionReportPage({
   params, searchParams,
 }: {
   params: Promise<{ section: string }>;
-  searchParams: Promise<{ country?: string; period?: string }>;
+  searchParams: Promise<{ country?: string; period?: string; back?: string }>;
 }) {
   const { section } = await params;
   if (!isReportSection(section)) notFound();
@@ -31,8 +31,9 @@ export default async function SectionReportPage({
   const countries = await availableCountries().catch(() => [] as { country: string; stores: number }[]);
   const country = sp.country && countries.some((c) => c.country === sp.country) ? sp.country : "ZA";
   const period = (PERIODS.includes(sp.period as PeriodKey) ? sp.period : "week") as PeriodKey;
+  const back = Math.max(0, Math.min(36, parseInt(sp.back ?? "0", 10) || 0)); // periods back (0 = now)
 
-  const report = await sectionReport(section, country, period).catch(() => null);
+  const report = await sectionReport(section, country, period, back).catch(() => null);
   if (!report) notFound();
 
   return <ReportView report={report} country={country} countries={countries.map((c) => c.country)} />;

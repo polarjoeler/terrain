@@ -448,10 +448,12 @@ export async function setBaselineDate(date: string): Promise<void> {
 
 export type PeriodKey = "day" | "week" | "month" | "quarter" | "year";
 const REPORT_PERIOD_DAYS: Record<PeriodKey, number> = { day: 1, week: 7, month: 30, quarter: 91, year: 365 };
-export type ReportItem = { label: string; total: number; period: number };
+export type ReportItem = { label: string; total: number; period: number; type?: PayType };
 export type SectionReport = {
   section: string; title: string; drillParam: string; period: PeriodKey; periodDays: number;
   items: ReportItem[]; allTimeStores: number; periodStores: number;
+  asOf?: string;   // set when viewing a historical point-in-time (back > 0); the snapshot date
+  back?: number;   // how many periods back this view is (0 = live / now)
 };
 
 // Apps are apps.shopify.com/<slug> URLs — show a clean name, drop custom/store links.
@@ -486,11 +488,33 @@ export function isReportSection(s: string): boolean { return s in REPORT_SECTION
  *  in the period with that value, plus (payments only) switches TO it minus switches
  *  AWAY (from the change log). Backfilling old stores' data never moves the period
  *  number — so the period reflects the filter, not our vetting catching up. */
-export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week"): Promise<SectionReport> {
+export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week", back = 0): Promise<SectionReport> {
   const cfg = REPORT_SECTIONS[section];
   if (!cfg) throw new Error(`unknown report section: ${section}`);
   const P = REPORT_PERIOD_DAYS[period] ?? 7;
   const sql = db();
+
+  // Time machine: for a payment section viewed `back` periods ago, render the landscape AS IT
+  // WAS from the per-(provider, country, date) history in provider_snapshots — so people can
+  // step back through days/weeks/months and watch the mix (incl. PSP/APM/BNPL) shift over time.
+  if (back > 0 && (section === "payments" || section === "leading")) {
+    const [snap] = await sql<{ date: Date }[]>`SELECT date FROM provider_snapshots
+      WHERE UPPER(country) = ${country.toUpperCase()} AND date <= (CURRENT_DATE - ${back * P}::int)
+      ORDER BY date DESC LIMIT 1`.catch(() => []);
+    if (snap) {
+      const rows = await sql<{ provider: string; data: unknown }[]>`SELECT provider, data
+        FROM provider_snapshots WHERE UPPER(country) = ${country.toUpperCase()} AND date = ${snap.date}`;
+      const items: ReportItem[] = rows.map((r) => {
+        const d = (typeof r.data === "string" ? JSON.parse(r.data) : r.data) as { total?: number };
+        const label = canonicalProvider(r.provider) || r.provider;
+        return { label, total: Number(d.total) || 0, period: 0, type: classify(label) };
+      }).filter((i) => i.total > 0).sort((a, b) => b.total - a.total);
+      const allTimeStores = items.reduce((m, i) => Math.max(m, i.total), 0); // leading provider ≈ floor
+      return { section, title: cfg.title, drillParam: cfg.drillParam, period, periodDays: P,
+        items, allTimeStores, periodStores: 0, asOf: new Date(snap.date).toISOString().slice(0, 10), back };
+    }
+  }
+
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const rows = await sql<{ val: string; discovered_at: Date | null }[]>`
     SELECT ${sql(cfg.column)} AS val, discovered_at FROM imported_stores
@@ -530,8 +554,9 @@ export async function sectionReport(section: string, country = "ZA", period: Per
     }
   }
 
-  const items = [...total.entries()]
-    .map(([label, t]) => ({ label, total: t, period: periodM.get(label) ?? 0 }))
+  const isPay = section === "payments" || section === "leading";
+  const items: ReportItem[] = [...total.entries()]
+    .map(([label, t]) => ({ label, total: t, period: periodM.get(label) ?? 0, type: isPay ? classify(label) : undefined }))
     .sort((a, b) => b.total - a.total);
-  return { section, title: cfg.title, drillParam: cfg.drillParam, period, periodDays: P, items, allTimeStores, periodStores };
+  return { section, title: cfg.title, drillParam: cfg.drillParam, period, periodDays: P, items, allTimeStores, periodStores, back: 0 };
 }
