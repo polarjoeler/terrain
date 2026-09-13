@@ -450,9 +450,8 @@ export type PeriodKey = "day" | "week" | "month" | "quarter" | "year";
 const REPORT_PERIOD_DAYS: Record<PeriodKey, number> = { day: 1, week: 7, month: 30, quarter: 91, year: 365 };
 export type ReportItem = {
   label: string; total: number; period: number; type?: PayType;
-  share?: number;        // % of the market's payment-verified merchants using this provider
-  deltaCount?: number;   // change in merchant count vs the comparison period
-  deltaShare?: number;   // change in share in PERCENTAGE POINTS vs the comparison period
+  share?: number;        // % of payment-verified merchants in the market using this provider
+  deltaShare?: number;   // change in share in PERCENTAGE POINTS vs the comparison period (the up/down)
   trend?: number[];      // recent share series (oldest→newest) for a sparkline
 };
 export type SectionReport = {
@@ -521,24 +520,42 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
     ORDER BY date`;
   const byProv = new Map<string, Map<string, { total: number; share: number }>>();
   for (const r of rows) {
+    const label = canonicalProvider(r.provider);
+    if (!label) continue; // drop test gateways (bogus), bare "Credit Card"/cards, generic captions
     const d = (typeof r.data === "string" ? JSON.parse(r.data) : r.data) as { total?: number; share?: number };
-    const label = canonicalProvider(r.provider) || r.provider;
     if (!byProv.has(label)) byProv.set(label, new Map());
-    byProv.get(label)!.set(iso(r.date), { total: Number(d.total) || 0, share: Number(d.share) || 0 });
+    const day = byProv.get(label)!, k = iso(r.date), prevDay = day.get(k); // merge raw names → one label
+    day.set(k, { total: (prevDay?.total ?? 0) + (Number(d.total) || 0), share: (prevDay?.share ?? 0) + (Number(d.share) || 0) });
   }
   const trendDates = [...new Set(rows.map((r) => iso(r.date)))].sort().slice(-14);
   const vIso = iso(viewDate), pIso = priorDate ? iso(priorDate) : null;
 
+  // "New" = stores that ACTUALLY LAUNCHED (were discovered) within [viewDate-P, viewDate] using each
+  // provider — NOT the snapshot count delta, which also jumps when we backfill/enrich old stores.
+  const winStart = iso(new Date(ms(viewDate) - P * MS));
+  const newRows = await sql<{ payments: string }[]>`SELECT payments FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND UPPER(country) = ${cc} AND payments IS NOT NULL AND payments <> ''
+      AND discovered_at > ${winStart} AND discovered_at <= ${vIso}`.catch(() => []);
+  const newBy = new Map<string, number>();
+  for (const r of newRows) {
+    const seen = new Set<string>();
+    for (const tok of String(r.payments).split(";")) {
+      const l = canonicalProvider(tok.trim());
+      if (l && !seen.has(l)) { seen.add(l); newBy.set(l, (newBy.get(l) ?? 0) + 1); }
+    }
+  }
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
   const items: ReportItem[] = [];
   for (const [label, m] of byProv) {
     const cur = m.get(vIso);
     if (!cur || !cur.total) continue;
     const prev = pIso ? m.get(pIso) : null;
-    const r1 = (n: number) => Math.round(n * 10) / 10;
     items.push({
-      label, total: cur.total, share: r1(cur.share), period: prev ? cur.total - prev.total : 0, type: classify(label),
-      deltaCount: prev ? cur.total - prev.total : undefined,
-      deltaShare: prev ? r1(cur.share - prev.share) : undefined,
+      label, total: cur.total, share: r1(cur.share), type: classify(label),
+      period: newBy.get(label) ?? 0,                             // genuine launches this period (≥0)
+      deltaShare: prev ? r1(cur.share - prev.share) : undefined, // market-share change in pp (the up/down)
       trend: trendDates.map((d) => m.get(d)?.share).filter((x): x is number => x != null),
     });
   }

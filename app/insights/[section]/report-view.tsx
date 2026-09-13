@@ -22,15 +22,14 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
-/** Δ vs the comparison period: change in merchant count, and change in share in percentage points. */
-function Delta({ dc, ds }: { dc?: number; ds?: number }) {
-  if (dc == null) return <span className="w-24 text-right text-cream/25">new</span>;
-  const dir = (ds ?? dc);
-  const col = dir > 0 ? "text-mint" : dir < 0 ? "text-orange" : "text-cream/30";
+/** Market-share change vs the comparison period, in percentage points — the ONLY value that
+ *  carries an up/down direction (a provider can gain merchants yet still lose share). */
+function SharePp({ v }: { v?: number }) {
+  if (v == null) return <span className="w-[4.5rem] text-right text-cream/25">—</span>;
+  const col = v > 0 ? "text-mint" : v < 0 ? "text-orange" : "text-cream/30";
   return (
-    <span className={`w-24 text-right ${col}`}>
-      {dir > 0 ? "▲" : dir < 0 ? "▼" : "·"} {dc > 0 ? "+" : ""}{dc.toLocaleString()}
-      {ds != null && <span className="ml-1 opacity-70">{ds > 0 ? "+" : ""}{ds}pp</span>}
+    <span className={`w-[4.5rem] text-right ${col}`} title="market-share change vs the comparison period">
+      {v > 0 ? "▲" : v < 0 ? "▼" : "·"} {v > 0 ? "+" : ""}{v}pp
     </span>
   );
 }
@@ -42,6 +41,13 @@ export function ReportView({ report, country, countries }: { report: SectionRepo
     window.location.assign(`?${p.toString()}`);
   };
   const drill = (label: string) => {
+    // Payments → the provider's own growth page; everything else → the pre-filtered store list.
+    if (report.section === "payments") {
+      const p = new URLSearchParams();
+      if (country) p.set("country", country);
+      const qs = p.toString();
+      return `/p/${encodeURIComponent(label)}${qs ? `?${qs}` : ""}`;
+    }
     const p = new URLSearchParams();
     p.set(report.drillParam, label);
     if (country) p.set("country", country);
@@ -60,13 +66,23 @@ export function ReportView({ report, country, countries }: { report: SectionRepo
         <div className="flex items-center justify-between gap-3">
           <span className="truncate text-sm text-cream/85 group-hover:text-cream">{it.label}</span>
           <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
-            {it.share != null && <span className="w-12 text-right font-semibold text-cream/90">{it.share}%</span>}
-            <span className="w-14 text-right text-cream/50">{it.total.toLocaleString()}</span>
-            {hasShare
-              ? <Delta dc={it.deltaCount} ds={it.deltaShare} />
-              : <span className={`w-16 text-right ${it.period > 0 ? "text-mint" : it.period < 0 ? "text-orange" : "text-cream/25"}`} title={`genuine adoptions this ${noun}`}>
+            {hasShare ? (
+              <>
+                <span className="w-12 text-right font-semibold text-cream/90" title="market share">{it.share}%</span>
+                <SharePp v={it.deltaShare} />
+                <span className="w-14 text-right text-cream/50" title="total merchants">{it.total.toLocaleString()}</span>
+                <span className={`w-20 text-right ${it.period > 0 ? "text-mint" : "text-cream/25"}`} title={`stores that launched this ${noun}`}>
+                  {it.period > 0 ? `+${it.period.toLocaleString()}` : "0"} new
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="w-14 text-right text-cream/50">{it.total.toLocaleString()}</span>
+                <span className={`w-16 text-right ${it.period > 0 ? "text-mint" : it.period < 0 ? "text-orange" : "text-cream/25"}`} title={`genuine adoptions this ${noun}`}>
                   {it.period > 0 ? "+" : it.period < 0 ? "−" : ""}{it.period !== 0 ? Math.abs(it.period).toLocaleString() : "±0"}
-                </span>}
+                </span>
+              </>
+            )}
           </span>
         </div>
         {it.trend && it.trend.length > 1
@@ -88,7 +104,7 @@ export function ReportView({ report, country, countries }: { report: SectionRepo
           <h1 className="font-display text-4xl text-cream md:text-5xl">{report.title}</h1>
           <p className="mt-2 text-cream/60">
             {hasShare
-              ? <>{report.items.length.toLocaleString()} {report.title.toLowerCase()} · <span className="text-cream/80">{report.asOf}</span>. <span className="text-cream/85">Share</span> = % of payment-verified merchants in this market using it; the arrow is the change{report.comparedTo ? <> since <span className="text-cream/80">{report.comparedTo}</span></> : <> vs the prior {noun}</>} (Δ merchants and Δ share in percentage points), and the line is its recent share trend.</>
+              ? <>{report.items.length.toLocaleString()} {report.title.toLowerCase()} · <span className="text-cream/80">{report.asOf}</span>. Each row: <span className="text-cream/85">share</span> (% of payment-verified merchants using it) and its <span className="text-cream/85">▲▼ change in points</span>{report.comparedTo ? <> since <span className="text-cream/80">{report.comparedTo}</span></> : null}; <span className="text-cream/85">merchants</span> (total on it now); and <span className="text-mint">new</span> — stores that <em>launched</em> this {noun} on it (excludes backfill/enrichment). The line is its share trend. Tap a provider for its full growth page.</>
               : <>{report.allTimeStores.toLocaleString()} stores all-time · {report.items.length.toLocaleString()} {report.title.toLowerCase()}. The number after each total is <span className="text-mint">genuine adoptions this {noun}</span> — stores that newly started using it, excluding catch-up on already-known stores.</>}
           </p>
 
