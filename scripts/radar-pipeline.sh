@@ -63,9 +63,11 @@ WOO_CANDS="$HOME/shopify-radar/feed/woo-candidates.txt"; WOO_PY="$HOME/shopify-r
 if [ -s "$WOO_CANDS" ] && [ -x "$WOO_PY" ]; then
   B="$WOO_CANDS.batch"
   if mv "$WOO_CANDS" "$B" 2>/dev/null; then
-    sort -u "$B" > "$B.u"; head -600 "$B.u" > "$B.run"; tail -n +601 "$B.u" >> "$WOO_CANDS" 2>/dev/null || true
-    ( cd "$HOME/shopify-radar" && set -a && . /Users/joel/storepulse/.env.local && set +a \
-      && "$WOO_PY" woo_probe.py --from-file "$B.run" --land --concurrency 4 >/dev/null 2>&1 ) \
+    sort -u "$B" > "$B.u"; head -2500 "$B.u" > "$B.run"; tail -n +2501 "$B.u" | head -40000 >> "$WOO_CANDS" 2>/dev/null || true
+    # DATABASE_URL only — bash can't `source` the .env.local (some values aren't shell-safe).
+    WOO_DB="$(grep -E '^DATABASE_URL=' /Users/joel/storepulse/.env.local | head -1 | cut -d= -f2-)"
+    ( cd "$HOME/shopify-radar" && DATABASE_URL="$WOO_DB" \
+      "$WOO_PY" woo_probe.py --from-file "$B.run" --land --concurrency 6 >/dev/null 2>&1 ) \
       || echo "!! woo scan failed (continuing)"
     rm -f "$B" "$B.u" "$B.run"
   fi
