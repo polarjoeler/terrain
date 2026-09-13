@@ -55,6 +55,22 @@ node --env-file=.env.local scripts/sync-sheet.mjs || echo "!! sync step failed (
 echo "--- 1b land CT-tail discoveries (crt.sh-independent) ---"
 node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed (continuing)"
 
+# 1c: WooCommerce scan — ct_tail routes African/JP non-Shopify ccTLD domains to a candidate
+# feed; confirm + land them (platform=woocommerce + activity tier) via woo_probe. Capped per run;
+# overflow is requeued. Residential IP (Mac), same as the checkout probe.
+echo "--- 1c woo scan (African/JP non-Shopify → WooCommerce) ---"
+WOO_CANDS="$HOME/shopify-radar/feed/woo-candidates.txt"; WOO_PY="$HOME/shopify-radar/.venv/bin/python"
+if [ -s "$WOO_CANDS" ] && [ -x "$WOO_PY" ]; then
+  B="$WOO_CANDS.batch"
+  if mv "$WOO_CANDS" "$B" 2>/dev/null; then
+    sort -u "$B" > "$B.u"; head -600 "$B.u" > "$B.run"; tail -n +601 "$B.u" >> "$WOO_CANDS" 2>/dev/null || true
+    ( cd "$HOME/shopify-radar" && set -a && . /Users/joel/storepulse/.env.local && set +a \
+      && "$WOO_PY" woo_probe.py --from-file "$B.run" --land --concurrency 4 >/dev/null 2>&1 ) \
+      || echo "!! woo scan failed (continuing)"
+    rm -f "$B" "$B.u" "$B.run"
+  fi
+fi
+
 # PAYMENTS FIRST — moved ahead of the heavy fingerprint/catalog/logistics steps. Those
 # can run 90+ min on the (now fast) Mac and trip the watchdog, which used to kill the run
 # before payments ever executed. Payment/shipping coverage is the priority, so it goes first.
