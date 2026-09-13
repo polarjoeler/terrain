@@ -448,12 +448,19 @@ export async function setBaselineDate(date: string): Promise<void> {
 
 export type PeriodKey = "day" | "week" | "month" | "quarter" | "year";
 const REPORT_PERIOD_DAYS: Record<PeriodKey, number> = { day: 1, week: 7, month: 30, quarter: 91, year: 365 };
-export type ReportItem = { label: string; total: number; period: number; type?: PayType };
+export type ReportItem = {
+  label: string; total: number; period: number; type?: PayType;
+  share?: number;        // % of the market's payment-verified merchants using this provider
+  deltaCount?: number;   // change in merchant count vs the comparison period
+  deltaShare?: number;   // change in share in PERCENTAGE POINTS vs the comparison period
+  trend?: number[];      // recent share series (oldest→newest) for a sparkline
+};
 export type SectionReport = {
   section: string; title: string; drillParam: string; period: PeriodKey; periodDays: number;
   items: ReportItem[]; allTimeStores: number; periodStores: number;
-  asOf?: string;   // set when viewing a historical point-in-time (back > 0); the snapshot date
-  back?: number;   // how many periods back this view is (0 = live / now)
+  asOf?: string;      // the snapshot date this view reflects (back > 0 = historical; 0 = latest)
+  comparedTo?: string; // the prior-period snapshot date the deltas are measured against
+  back?: number;      // how many periods back this view is (0 = live / now)
 };
 
 // Apps are apps.shopify.com/<slug> URLs — show a clean name, drop custom/store links.
@@ -488,32 +495,69 @@ export function isReportSection(s: string): boolean { return s in REPORT_SECTION
  *  in the period with that value, plus (payments only) switches TO it minus switches
  *  AWAY (from the change log). Backfilling old stores' data never moves the period
  *  number — so the period reflects the filter, not our vetting catching up. */
+/** Payment landscape from provider_snapshots: each provider's merchant count, market share %,
+ *  change vs the prior comparable period (Δcount + Δshare in pp), and a share sparkline —
+ *  at `back` periods ago (0 = latest). This is what makes the numbers legible over time. */
+async function paymentSnapshotReport(country: string, period: PeriodKey, back: number): Promise<SectionReport> {
+  const sql = db();
+  const P = REPORT_PERIOD_DAYS[period] ?? 7;
+  const cfg = REPORT_SECTIONS.payments;
+  const cc = (country || "ZA").toUpperCase();
+  const base: SectionReport = { section: "payments", title: cfg.title, drillParam: cfg.drillParam,
+    period, periodDays: P, items: [], allTimeStores: 0, periodStores: 0, back };
+
+  const dates = (await sql<{ date: Date }[]>`SELECT DISTINCT date FROM provider_snapshots
+    WHERE UPPER(country) = ${cc} ORDER BY date DESC`.catch(() => [])).map((r) => r.date);
+  if (!dates.length) return base;
+
+  const MS = 864e5, iso = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
+  const ms = (d: Date) => new Date(d).getTime();
+  const viewDate = back === 0 ? dates[0] : (dates.find((d) => ms(d) <= Date.now() - back * P * MS) ?? dates[dates.length - 1]);
+  const priorDate = dates.find((d) => ms(d) <= ms(viewDate) - P * MS) ?? null;
+  const windowStart = iso(new Date(ms(viewDate) - 35 * MS)); // trailing window for the sparkline
+
+  const rows = await sql<{ provider: string; date: Date; data: unknown }[]>`SELECT provider, date, data
+    FROM provider_snapshots WHERE UPPER(country) = ${cc} AND date <= ${viewDate} AND date >= ${windowStart}
+    ORDER BY date`;
+  const byProv = new Map<string, Map<string, { total: number; share: number }>>();
+  for (const r of rows) {
+    const d = (typeof r.data === "string" ? JSON.parse(r.data) : r.data) as { total?: number; share?: number };
+    const label = canonicalProvider(r.provider) || r.provider;
+    if (!byProv.has(label)) byProv.set(label, new Map());
+    byProv.get(label)!.set(iso(r.date), { total: Number(d.total) || 0, share: Number(d.share) || 0 });
+  }
+  const trendDates = [...new Set(rows.map((r) => iso(r.date)))].sort().slice(-14);
+  const vIso = iso(viewDate), pIso = priorDate ? iso(priorDate) : null;
+
+  const items: ReportItem[] = [];
+  for (const [label, m] of byProv) {
+    const cur = m.get(vIso);
+    if (!cur || !cur.total) continue;
+    const prev = pIso ? m.get(pIso) : null;
+    const r1 = (n: number) => Math.round(n * 10) / 10;
+    items.push({
+      label, total: cur.total, share: r1(cur.share), period: prev ? cur.total - prev.total : 0, type: classify(label),
+      deltaCount: prev ? cur.total - prev.total : undefined,
+      deltaShare: prev ? r1(cur.share - prev.share) : undefined,
+      trend: trendDates.map((d) => m.get(d)?.share).filter((x): x is number => x != null),
+    });
+  }
+  items.sort((a, b) => b.total - a.total);
+  return { ...base, items, allTimeStores: items.reduce((mx, i) => Math.max(mx, i.total), 0),
+    asOf: vIso, comparedTo: pIso ?? undefined };
+}
+
 export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week", back = 0): Promise<SectionReport> {
   const cfg = REPORT_SECTIONS[section];
   if (!cfg) throw new Error(`unknown report section: ${section}`);
   const P = REPORT_PERIOD_DAYS[period] ?? 7;
   const sql = db();
 
-  // Time machine: for a payment section viewed `back` periods ago, render the landscape AS IT
-  // WAS from the per-(provider, country, date) history in provider_snapshots — so people can
-  // step back through days/weeks/months and watch the mix (incl. PSP/APM/BNPL) shift over time.
-  if (back > 0 && (section === "payments" || section === "leading")) {
-    const [snap] = await sql<{ date: Date }[]>`SELECT date FROM provider_snapshots
-      WHERE UPPER(country) = ${country.toUpperCase()} AND date <= (CURRENT_DATE - ${back * P}::int)
-      ORDER BY date DESC LIMIT 1`.catch(() => []);
-    if (snap) {
-      const rows = await sql<{ provider: string; data: unknown }[]>`SELECT provider, data
-        FROM provider_snapshots WHERE UPPER(country) = ${country.toUpperCase()} AND date = ${snap.date}`;
-      const items: ReportItem[] = rows.map((r) => {
-        const d = (typeof r.data === "string" ? JSON.parse(r.data) : r.data) as { total?: number };
-        const label = canonicalProvider(r.provider) || r.provider;
-        return { label, total: Number(d.total) || 0, period: 0, type: classify(label) };
-      }).filter((i) => i.total > 0).sort((a, b) => b.total - a.total);
-      const allTimeStores = items.reduce((m, i) => Math.max(m, i.total), 0); // leading provider ≈ floor
-      return { section, title: cfg.title, drillParam: cfg.drillParam, period, periodDays: P,
-        items, allTimeStores, periodStores: 0, asOf: new Date(snap.date).toISOString().slice(0, 10), back };
-    }
-  }
+  // The payments report is sourced from the per-(provider, country, date) history in
+  // provider_snapshots so every row carries share %, its change vs the prior comparable period,
+  // and a trend sparkline — and can be stepped back through time. (Best practice: an absolute
+  // number is meaningless without a denominator + a comparison.)
+  if (section === "payments") return paymentSnapshotReport(country, period, back);
 
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const rows = await sql<{ val: string; discovered_at: Date | null }[]>`
