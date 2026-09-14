@@ -513,6 +513,26 @@ export function InsightsView({
             Forward-looking: we only count stores that migrate off Shopify or close <em>after</em> we
             started tracking them — the one-time bulk import is excluded so this reflects real ongoing churn.
           </p>
+
+          {/* Where the migrating stores went — the platform-switch intel. */}
+          {(data.churn.migratedTo?.length ?? 0) > 0 && (
+            <div className="mt-4 rounded-3xl border border-cream/12 px-5 py-4">
+              <div className="mb-2 flex items-baseline justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-cream/50">Migrated to</h3>
+                <span className="text-xs text-cream/35">
+                  {data.churn.migratedTo!.reduce((s, m) => s + m.n, 0).toLocaleString()} stores now on another platform
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {data.churn.migratedTo!.map((m) => (
+                  <span key={m.platform} className="flex items-center gap-1.5 rounded-full border border-cream/12 px-3 py-1 text-xs text-cream/80">
+                    <span className="font-medium text-cream">{m.platform}</span>
+                    <span className="text-cream/40 tabular-nums">{m.n.toLocaleString()}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <p className="mt-8 text-center text-xs text-cream/40">

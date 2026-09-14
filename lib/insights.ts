@@ -56,6 +56,7 @@ export type InsightsData = {
     migrated: number;
     dead: number;
     survival: number | null;
+    migratedTo: { platform: string; n: number }[];   // Shopify → WooCommerce / Wix / … switch intel
   };
 };
 
@@ -176,7 +177,11 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
       COUNT(*) FILTER (WHERE za)::int                                      AS churn_total,
       COUNT(*) FILTER (WHERE za AND live_checked_at IS NOT NULL)::int      AS churn_checked,
       COUNT(*) FILTER (WHERE za AND live_status = 'active')::int           AS churn_active,
-      COUNT(*) FILTER (WHERE za AND live_status = 'migrated')::int         AS churn_migrated,
+      -- "migrated" = we detected the store now runs a NON-Shopify platform (live_platform).
+      -- We count that signal directly, NOT live_status='migrated' — confirming that status needs
+      -- 2 consecutive monthly checks, so real moves sit as 'active' with a non-Shopify platform
+      -- for up to a month and were showing as 0 migrations. live_platform is the true signal.
+      COUNT(*) FILTER (WHERE za AND live_platform IS NOT NULL AND live_platform <> 'Shopify')::int AS churn_migrated,
       COUNT(*) FILTER (WHERE za AND live_status = 'dead')::int             AS churn_dead,
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
@@ -297,6 +302,16 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
     paymentAdoptions[pk] = Object.fromEntries(m);
   }
 
+  // Where migrating stores went — the platform they now run (Shopify → WooCommerce / Wix / …).
+  // This is the switch-intel signal; keyed on live_platform (see churn_migrated note above).
+  const migratedRows = await sql<{ platform: string; n: number }[]>`
+    SELECT live_platform AS platform, COUNT(*)::int n
+    FROM imported_stores
+    WHERE published AND country = ${country} ${inTag}
+      AND live_platform IS NOT NULL AND live_platform <> 'Shopify'
+    GROUP BY 1 ORDER BY n DESC`;
+  const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
+
   return {
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
@@ -330,6 +345,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
       migrated: Number(t.churn_migrated),
       dead: Number(t.churn_dead),
       survival: Number(t.churn_checked) ? pct(Number(t.churn_active), Number(t.churn_checked)) : null,
+      migratedTo,
     },
   };
 }
