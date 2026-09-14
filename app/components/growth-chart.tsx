@@ -49,7 +49,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
 
   const pts = data?.points ?? [];
   const noun = provider ? "merchants" : "stores";
-  const W = 760, H = 260, padL = 44, padR = 14, padB = 24, padT = 14;
+  const W = 760, H = 280, padL = 44, padR = 14, padB = 40, padT = 14;
   const iw = W - padL - padR, ih = H - padT - padB;
   const maxNew = Math.max(1, ...pts.map((p) => p.newStores));
   const maxChurn = Math.max(0, ...pts.map((p) => p.churned));
@@ -58,7 +58,18 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
   const xAt = (i: number) => padL + i * bw;
   const upH = (v: number) => (v / maxNew) * (baseY - padT);
   const downH = (v: number) => (maxChurn ? (v / maxChurn) * (padT + ih - baseY) : 0);
-  const labelEvery = Math.max(1, Math.ceil(pts.length / 8));
+  // Fewer, bigger, readable ticks. Weekly/daily need the actual day (Sep 7), not just the
+  // month — otherwise every bar in a month reads identically. Parse the YYYY-MM-DD parts
+  // directly (no Date()/timezone drift).
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const fmtTick = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    if (period === "year") return String(y);
+    if (period === "quarter") return `Q${Math.floor((m - 1) / 3) + 1} '${String(y).slice(2)}`;
+    if (period === "month") return `${MON[m - 1]} '${String(y).slice(2)}`;
+    return `${MON[m - 1]} ${d}`;                       // day + week → "Sep 7"
+  };
+  const labelEvery = Math.max(1, Math.ceil(pts.length / (period === "week" || period === "day" ? 10 : 8)));
   const onMove = (e: MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const i = Math.floor((((e.clientX - r.left) / r.width) * W - padL) / bw);
@@ -140,15 +151,23 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
                   {p.churned > 0 && <rect x={xAt(i) + bw * 0.18} width={bw * 0.64} y={baseY} height={downH(p.churned)} rx="1.5" fill="var(--color-orange)" opacity={hover == null || hover === i ? 0.85 : 0.38} />}
                 </g>
               ))}
-              {/* x labels */}
+              {/* x labels — real dates, readable size; a tick mark anchors each */}
               {pts.map((p, i) => (i % labelEvery === 0 ? (
-                <text key={`t${p.date}`} x={xAt(i) + bw / 2} y={H - 7} textAnchor="middle" fill="var(--color-cream)" fillOpacity="0.4" fontSize="9">{p.date.slice(0, period === "year" ? 4 : 7)}</text>
+                <g key={`t${p.date}`}>
+                  <line x1={xAt(i) + bw / 2} y1={padT + ih + 2} x2={xAt(i) + bw / 2} y2={padT + ih + 6} stroke="var(--color-cream)" strokeOpacity="0.25" />
+                  <text x={xAt(i) + bw / 2} y={H - 12} textAnchor="middle" fill="var(--color-cream)" fillOpacity="0.6" fontSize="12">{fmtTick(p.date)}</text>
+                </g>
               ) : null))}
+              {(period === "week" || period === "day") && pts.length > 0 && (
+                <text x={padL} y={H - 1} textAnchor="start" fill="var(--color-cream)" fillOpacity="0.35" fontSize="10">
+                  {period === "week" ? "week beginning" : "day"}
+                </text>
+              )}
             </svg>
             {hp && (
               <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
                 style={{ left: `${Math.min(86, Math.max(14, ((xAt(hover ?? 0) + bw / 2) / W) * 100))}%`, top: 0 }}>
-                <div className="font-semibold text-cream">{hp.date}</div>
+                <div className="font-semibold text-cream">{period === "week" ? `Week of ${fmtTick(hp.date)}, ${hp.date.slice(0, 4)}` : period === "day" ? `${fmtTick(hp.date)}, ${hp.date.slice(0, 4)}` : fmtTick(hp.date)}</div>
                 <div className="mt-1 text-cyan">+{hp.newStores.toLocaleString()} launched</div>
                 {hp.churned > 0 ? <div className="text-orange">−{hp.churned.toLocaleString()} churned</div> : <div className="text-cream/40">no churn</div>}
               </div>

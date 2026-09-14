@@ -11,6 +11,10 @@ import postgres from "postgres";
 const ALL = process.argv.includes("--all");
 const li = process.argv.indexOf("--limit");
 const LIMIT = ALL ? 0 : li > -1 ? Number(process.argv[li + 1]) : 3000;
+// --country ZA,KE,NG,… scopes the backfill to the markets we sell into (the launch metric is
+// per-country), so we don't spend the run enriching the globally-banked ccTLD stores first.
+const ci = process.argv.indexOf("--country");
+const COUNTRIES = ci > -1 ? process.argv[ci + 1].split(",").map((c) => c.trim().toUpperCase()).filter(Boolean) : null;
 // Low concurrency + a per-request pause: hitting products.json too fast gets our IP
 // HTTP 429'd (Shopify/Cloudflare throttle), which was tanking the hit rate.
 const POOL = 6, CONCURRENCY = 4, PAUSE_MS = 250;
@@ -50,10 +54,15 @@ async function main() {
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND catalog_checked_at IS NULL
-      -- Recently-discovered stores first: first_product_at (the true launch signal that powers the
-      -- "new stores" metric) only exists once a store is catalog-enriched, so enriching recent
-      -- discoveries promptly is what keeps the launch-date "new" count from lagging behind reality.
-      ORDER BY discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
+        AND platform IS DISTINCT FROM 'woocommerce'   -- Woo has its own probe; products.json is Shopify-only
+        ${COUNTRIES ? sql`AND country = ANY(${COUNTRIES})` : sql``}
+      -- Priority for the LAUNCH metric: catalog-enrich fills launched_at (= earliest product date)
+      -- only where it's missing, so stores with NO launch date come first — they're what actually
+      -- moves the "new stores launched" count. Confirmed Shopify before unconfirmed (platform NULL),
+      -- because the NULL bucket is mostly banked ccTLD certs that aren't stores (they time out and
+      -- tank throughput). Recent discoveries first within each group.
+      ORDER BY (launched_at IS NULL) DESC, (platform = 'Shopify') DESC,
+               discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
     console.log(`Catalog-enriching ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY})…`);
 
@@ -67,6 +76,8 @@ async function main() {
                     avg_product_price = COALESCE(${r.avg}, avg_product_price),
                     launched_at = COALESCE(${r.launched}, launched_at),
                     launched_source = CASE WHEN ${r.launched}::text IS NOT NULL AND launched_at IS NULL THEN 'earliest_product' ELSE launched_source END,
+                    -- A valid products.json IS proof of Shopify — confirm any store still unlabeled.
+                    platform = COALESCE(platform, 'Shopify'),
                     catalog_checked_at = now()
                     WHERE domain = ${domain}`;
           ok++;
