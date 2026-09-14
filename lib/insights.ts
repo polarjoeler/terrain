@@ -140,13 +140,22 @@ const INSIGHTS_TTL_MS = 10 * 60 * 1000;
 const _insightsCache = new Map<string, CachedInsights>();
 const _insightsInflight = new Map<string, Promise<InsightsData>>();
 
-export async function computeInsights(country = "ZA", tag?: string): Promise<InsightsData> {
-  const key = `${country}|${tag ?? ""}`;
+// Platform selector for insights. "shopify" (default) = everything except confirmed WooCommerce
+// (Shopify + not-yet-classified CT discoveries); "woocommerce" = confirmed Woo; "all" = both.
+export type PlatformSel = "shopify" | "woocommerce" | "all";
+export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel) {
+  if (platform === "woocommerce") return sql`AND platform = 'woocommerce'`;
+  if (platform === "all") return sql``;
+  return sql`AND platform IS DISTINCT FROM 'woocommerce'`;
+}
+
+export async function computeInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
+  const key = `${country}|${tag ?? ""}|${platform}`;
   const hit = _insightsCache.get(key);
   if (hit && Date.now() - hit.at < INSIGHTS_TTL_MS) return hit.data;
   let inflight = _insightsInflight.get(key);
   if (!inflight) {
-    inflight = computeInsightsUncached(country, tag)
+    inflight = computeInsightsUncached(country, tag, platform)
       .then((data) => {
         _insightsCache.set(key, { at: Date.now(), data });
         _insightsInflight.delete(key);
@@ -162,10 +171,11 @@ export async function computeInsights(country = "ZA", tag?: string): Promise<Ins
   return inflight;
 }
 
-async function computeInsightsUncached(country = "ZA", tag?: string): Promise<InsightsData> {
+async function computeInsightsUncached(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
   const sql = db();
   // Cohort filter (Top 100, Brand New, …) applied inside the flag subquery.
   const inTag = cohortFilter(tag);
+  const platClause = platformClause(sql, platform);
 
   const [t] = await sql`
     SELECT
@@ -198,8 +208,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string): Promise<In
       COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 365)::int  AS disc_year
     FROM (
       SELECT *,
-        (published AND country = ${country} ${inTag} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = ${country} ${inTag}) AS za,
+        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
+        (published AND country = ${country} ${inTag} ${platClause}) AS za,
         -- "new this week" = genuinely DISCOVERED by our engine in the last 7 days.
         -- Use discovered_at (set only by the CT discovery feed), NOT created_at:
         -- created_at also fires on bulk imports, so a backfill of old stores would
@@ -361,21 +371,23 @@ const STATS_TTL_MS = 5 * 60 * 1000;
 const _statsCache = new Map<string, CachedStats>();
 const _statsInflight = new Map<string, Promise<import("./sheets").FeedStats>>();
 
-export async function getHomeStats(country = "ZA"): Promise<import("./sheets").FeedStats> {
-  const hit = _statsCache.get(country);
+export async function getHomeStats(country = "ZA", platform: PlatformSel = "shopify"): Promise<import("./sheets").FeedStats> {
+  const key = `${country}|${platform}`;
+  const hit = _statsCache.get(key);
   if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
-  let inflight = _statsInflight.get(country);
+  let inflight = _statsInflight.get(key);
   if (!inflight) {
-    inflight = getHomeStatsUncached(country)
-      .then((data) => { _statsCache.set(country, { at: Date.now(), data }); _statsInflight.delete(country); return data; })
-      .catch((e) => { _statsInflight.delete(country); if (hit) return hit.data; throw e; });
-    _statsInflight.set(country, inflight);
+    inflight = getHomeStatsUncached(country, platform)
+      .then((data) => { _statsCache.set(key, { at: Date.now(), data }); _statsInflight.delete(key); return data; })
+      .catch((e) => { _statsInflight.delete(key); if (hit) return hit.data; throw e; });
+    _statsInflight.set(key, inflight);
   }
   return inflight;
 }
 
-async function getHomeStatsUncached(country = "ZA"): Promise<import("./sheets").FeedStats> {
+async function getHomeStatsUncached(country = "ZA", platform: PlatformSel = "shopify"): Promise<import("./sheets").FeedStats> {
   const sql = db();
+  const platClause = platformClause(sql, platform);
   // Restrict to the country's live rows in the WHERE (uses the published/country
   // indexes and scans only those rows' needed columns) — NOT a `SELECT *` subquery
   // over the whole table, which under write-load went pathological (a single run
@@ -387,7 +399,7 @@ async function getHomeStatsUncached(country = "ZA"): Promise<import("./sheets").
       COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int                       AS with_email,
       COUNT(*) FILTER (WHERE plus)::int                                                    AS plus
     FROM imported_stores
-    WHERE published AND country = ${country}
+    WHERE published AND country = ${country} ${platClause}
       AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   // Freshness = the discovery pipeline's last run (updates every pipeline pass),
   // not the imported first_seen dates (historical) or created_at (frozen at import).

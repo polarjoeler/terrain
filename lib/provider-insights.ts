@@ -467,10 +467,15 @@ export type GrowthSeries = {
  *  PSP's merchant growth (by current gateway); optional country + custom [from,to] range. */
 export async function growthSeries(opts: {
   period?: GrowthPeriod; country?: string; provider?: string; from?: string; to?: string;
+  platform?: "shopify" | "woocommerce" | "all";
 } = {}): Promise<GrowthSeries> {
   const period = opts.period ?? "month";
   const { country, provider, from, to } = opts;
   const sql = db();
+  // Platform filter (imported_stores only — churn_log has no platform column). Default Shopify.
+  const plat = opts.platform === "woocommerce" ? sql`AND platform = 'woocommerce'`
+    : opts.platform === "all" ? sql``
+    : sql`AND platform IS DISTINCT FROM 'woocommerce'`;
   const variants = provider ? providerVariants(provider) : null;
   // Both imported_stores and churn_log have a `payments` column, so one fragment works
   // for both queries — a store/churned-store counts if it uses one of the provider's tokens.
@@ -495,12 +500,13 @@ export async function growthSeries(opts: {
   const found = await sql<{ b: string; n: number }[]>`
     SELECT to_char(date_trunc(${period}::text, ${LAUNCH}), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM imported_stores
-    WHERE published AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${floor}::date ${ctry} ${prov}
+    WHERE published AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${floor}::date ${ctry} ${prov} ${plat}
       ${from ? sql`AND ${LAUNCH} >= ${from}::date` : sql``}
       ${to ? sql`AND ${LAUNCH} <= ${to}::date` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
 
-  const churned = await sql<{ b: string; n: number }[]>`
+  // churn_log has no platform column and tracks Shopify liveness, so the Woo view has no churn.
+  const churned = opts.platform === "woocommerce" ? [] : await sql<{ b: string; n: number }[]>`
     SELECT to_char(date_trunc(${period}::text, churned_at), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM churn_log
     WHERE COALESCE(historic, false) = false ${ctry} ${prov}
@@ -516,7 +522,7 @@ export async function growthSeries(opts: {
   // narrows it to that PSP's live merchants.
   const [gt] = await sql<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry} ${prov}`.catch(() => [{ n: 0 }]);
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry} ${prov} ${plat}`.catch(() => [{ n: 0 }]);
   const currentTotal = Number(gt?.n ?? 0);
 
   const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));

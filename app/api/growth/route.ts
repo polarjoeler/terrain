@@ -16,12 +16,14 @@ export async function GET(req: Request) {
 
   const p = new URL(req.url).searchParams;
   const period = (PERIODS.has(p.get("period") ?? "") ? p.get("period") : "month") as GrowthPeriod;
+  const plat = p.get("platform");
   const data = await growthSeries({
     period,
     country: p.get("country") || undefined,
     provider: p.get("provider") || undefined,
     from: p.get("from") || undefined,
     to: p.get("to") || undefined,
+    platform: plat === "woocommerce" || plat === "all" ? plat : "shopify",
   }).catch(() => null);
   if (!data) return NextResponse.json({ error: "failed" }, { status: 500 });
   return NextResponse.json(data);

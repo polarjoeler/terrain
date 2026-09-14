@@ -5,6 +5,7 @@ import {
   getBaselineDate,
   availableCountries,
   cohortCount,
+  type PlatformSel,
 } from "@/lib/insights";
 import { tagCounts } from "@/lib/tags";
 import { providerMomentum, recentPaymentShifts } from "@/lib/provider-insights";
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 export default async function Insights({
   searchParams,
 }: {
-  searchParams: Promise<{ country?: string; tag?: string }>;
+  searchParams: Promise<{ country?: string; tag?: string; platform?: string }>;
 }) {
   // Paywall: proprietary market data — signed-in paid subscribers (or the owner) only.
   const email = await currentUser();
@@ -41,9 +42,10 @@ export default async function Insights({
   const cohorts = [{ tag: "new", count: newCount }, ...tags];
   // Only accept a cohort that actually has stores.
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
+  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "all" ? sp.platform : "shopify";
 
   const [data, baselineDate, momentum, shifts] = await Promise.all([
-    computeInsights(country, tag),
+    computeInsights(country, tag, platform),
     getBaselineDate(),
     // Scope momentum to the SAME market as the rest of the page. Discovery-neutral,
     // week-over-week among newly-discovered stores (not snapshot counts, which the
@@ -69,6 +71,7 @@ export default async function Insights({
       country={country}
       cohorts={cohorts}
       tag={tag ?? ""}
+      platform={platform}
       momentum={momentum}
       shifts={shifts}
     />

@@ -159,7 +159,7 @@ function DistroCard({
 
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
-  momentum = [], shifts = [],
+  platform = "shopify", momentum = [], shifts = [],
 }: {
   data: InsightsData;
   history: InsightsData[];
@@ -168,19 +168,21 @@ export function InsightsView({
   country?: string;
   cohorts?: { tag: string; count: number }[];
   tag?: string;
+  platform?: "shopify" | "woocommerce" | "all";
   momentum?: ProviderMomentum[];
   shifts?: PaymentShift[];
 }) {
-  // Navigate preserving both country + cohort in the URL.
-  const go = (next: { country?: string; tag?: string }) => {
+  // Navigate preserving country + cohort + platform in the URL (server refetch filters the data).
+  const go = (next: { country?: string; tag?: string; platform?: string }) => {
     const c = next.country ?? country;
     const t = next.tag ?? tag;
+    const pf = next.platform ?? platform;
     const qs = new URLSearchParams();
     if (c) qs.set("country", c);
     if (t) qs.set("tag", t);
+    if (pf && pf !== "shopify") qs.set("platform", pf);
     window.location.href = `/insights?${qs.toString()}`;
   };
-  const [platform, setPlatform] = useState("Shopify");
   const [period, setPeriod] = useState<Period>("Week");
 
   // Trends/comparisons only look back to the baseline (reset after a bulk import
@@ -296,10 +298,12 @@ export function InsightsView({
           )}
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
-            <button onClick={() => setPlatform("Shopify")} className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm ${platform === "Shopify" ? "bg-cream text-ink" : "border border-cream/15 text-cream/60"}`}>
-              <span className="h-2 w-2 rounded-full bg-[#95BF47]" /> Shopify
-            </button>
-            <button disabled className="cursor-not-allowed rounded-full border border-cream/10 px-3.5 py-1.5 text-sm text-cream/30">WooCommerce · soon</button>
+            {([["shopify", "Shopify", "#95BF47"], ["woocommerce", "WooCommerce", "#96588a"], ["all", "All", "#8fb0c4"]] as const).map(([key, label, dot]) => (
+              <button key={key} onClick={() => go({ platform: key })}
+                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition ${platform === key ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:text-cream"}`}>
+                <span className="h-2 w-2 rounded-full" style={{ background: dot }} /> {label}
+              </button>
+            ))}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Compare</span>
@@ -344,7 +348,7 @@ export function InsightsView({
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
           {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
-          <GrowthChart country={country} title={`${country ? marketLabel(country) + " " : ""}Shopify store growth`} />
+          <GrowthChart country={country} platform={platform} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
 
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
           <Card

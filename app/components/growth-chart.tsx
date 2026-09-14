@@ -15,7 +15,7 @@ const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter
  *  keyed to real launch date (first product / launched_at), not when we discovered the store —
  *  so cert-renewal discovery floods don't inflate it. Filterable by period + custom range.
  *  Fetches paid-gated /api/growth. */
-export function GrowthChart({ country, provider, title = "Shopify store growth" }: { country?: string; provider?: string; title?: string }) {
+export function GrowthChart({ country, provider, platform, title = "Shopify store growth" }: { country?: string; provider?: string; platform?: string; title?: string }) {
   const [period, setPeriod] = useState("month");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -32,6 +32,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
       const p = new URLSearchParams({ period });
       if (country) p.set("country", country);
       if (provider) p.set("provider", provider);
+      if (platform) p.set("platform", platform);
       if (from) p.set("from", from);
       if (to) p.set("to", to);
       try {
@@ -45,7 +46,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
       }
     })();
     return () => ac.abort();
-  }, [period, country, provider, from, to]);
+  }, [period, country, provider, platform, from, to]);
 
   const pts = data?.points ?? [];
   const noun = provider ? "merchants" : "stores";
