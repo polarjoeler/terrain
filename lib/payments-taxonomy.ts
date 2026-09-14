@@ -13,7 +13,7 @@ export type PayType = "PSP" | "BNPL" | "APM";
 const TYPE: Record<string, PayType> = {
   // PSP — gateways/acquirers
   PayFast: "PSP", Yoco: "PSP", "Peach Payments": "PSP", PayGate: "PSP",
-  Stripe: "PSP", Adyen: "PSP", Paystack: "PSP",
+  Stripe: "PSP", Adyen: "PSP", Paystack: "PSP", "Paystack Onsite": "PSP",
   Flutterwave: "PSP", PayPal: "PSP", PayU: "PSP", Stitch: "PSP", iKhokha: "PSP",
   "Shopify Payments": "PSP", Pesapal: "PSP", DPO: "PSP", IntaSend: "PSP",
   OPay: "PSP", Nomba: "PSP", Paga: "PSP", Interswitch: "PSP", "Adumo Online": "PSP",
