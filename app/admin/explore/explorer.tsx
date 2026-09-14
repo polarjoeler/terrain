@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { marketLabel } from "@/lib/markets";
+import { platformLabel } from "@/lib/platforms";
 import { revenueBand, bandTone, scoreColor, REVENUE_BANDS, type RevenueBand } from "@/lib/revenue";
 import type { ExploreLead } from "@/lib/leads-explore";
 import { LeadDrawer } from "./lead-drawer";
@@ -292,7 +293,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
             })}
           </div>
         </div>
-        {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} />}
+        {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
         {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
         {facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
         <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />

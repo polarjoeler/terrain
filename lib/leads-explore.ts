@@ -4,6 +4,13 @@
 
 import postgres from "postgres";
 
+// DB `platform` values NOT yet launched to customers — kept in sync with lib/platforms.ts
+// (customerVisible:false there). Inlined, like VISIBLE_MARKETS below, so the standalone
+// snapshot-refresh script (Node --experimental-strip-types) doesn't hit a relative .ts import
+// that tsc then rejects. When you launch a platform, drop its values here AND flip the flag in
+// platforms.ts. NULL platform is an unconfirmed CT discovery (Shopify-first) and stays visible.
+const HIDDEN_PLATFORM_DBVALUES = ["woocommerce", "wix", "adobe_commerce", "magento"];
+
 // Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — kept in sync).
 // Inlined here rather than imported so the standalone snapshot-refresh script (Node
 // --experimental-strip-types) doesn't choke on a relative .ts import.
@@ -97,11 +104,19 @@ function scoreLead(sales: number, email: boolean, plus: boolean, social: number,
 // ~13k rows (~3.8MB) parses/facets fine, and only `shown` (60) render at a time.
 // The 20k ceiling is a guardrail against unbounded growth, not the working size.
 export async function exploreLeads(limit = 20000): Promise<ExploreLead[]> {
-  return loadExploreLeads(limit);
+  return loadExploreLeads(limit);           // admin: every platform
 }
 
-async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
-  const rows = await db()<{
+async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<ExploreLead[]> {
+  const sql = db();
+  // Customer surfaces only show launched platforms (see lib/platforms.ts). Not-yet-launched
+  // platforms (WooCommerce today; Wix / Adobe Commerce next) stay admin-only until their
+  // dataset is thick enough. NULL platform = unconfirmed CT discovery (Shopify-first), kept.
+  const hidden = customerOnly ? HIDDEN_PLATFORM_DBVALUES : [];
+  const platformGate = hidden.length
+    ? sql`AND (platform IS NULL OR lower(platform) <> ALL(${hidden}))`
+    : sql``;
+  const rows = await sql<{
     domain: string; name: string | null; category: string | null; country: string | null; city: string | null;
     theme: string | null; platform: string | null; activity_tier: string | null; activity_score: number | null;
     hosting_provider: string | null; platform_version: string | null;
@@ -125,6 +140,7 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
       -- Woo parked/holding-page installs ('not_a_store') are captured + revealed elsewhere,
       -- but they aren't leads — keep them out of the browsable list (Shopify + real Woo only).
       AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
+      ${platformGate}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
 
@@ -149,12 +165,18 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
 
 /** Total live, published leads — so the UI can show the real count even when the
  *  explorer only loads the top slice for speed. */
-export async function exploreLeadCount(): Promise<number> {
-  const [r] = await db()<{ n: number }[]>`
+export async function exploreLeadCount(customerOnly = false): Promise<number> {
+  const sql = db();
+  const hidden = customerOnly ? HIDDEN_PLATFORM_DBVALUES : [];
+  const platformGate = hidden.length
+    ? sql`AND (platform IS NULL OR lower(platform) <> ALL(${hidden}))`
+    : sql``;
+  const [r] = await sql<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ANY(${[...VISIBLE_MARKETS]})
-      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')`;
+      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
+      ${platformGate}`;
   return Number(r.n);
 }
 
@@ -181,7 +203,8 @@ async function ensureSnapshotTable() {
 /** Recompute the browse snapshot and persist it. Run OFF the request path — from the
  *  pipeline after enrichment — so live reads never touch the heavy query. */
 export async function refreshBrowseSnapshot(): Promise<number> {
-  const [leads, count] = await Promise.all([loadExploreLeads(), exploreLeadCount()]);
+  // The snapshot feeds the CUSTOMER dashboard, so it only carries launched platforms.
+  const [leads, count] = await Promise.all([loadExploreLeads(20000, true), exploreLeadCount(true)]);
   const data: Browse = { leads, count };
   await ensureSnapshotTable();
   // Pass the payload as a text param cast to jsonb — avoids sql.json()'s narrow
