@@ -484,8 +484,13 @@ export async function growthSeries(opts: {
   // stores we merely re-saw (a cert renewal) as "new". Floored at when tracking began so old
   // stores we backfill-discovered don't reappear as historical launches.
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  // Floor = when our FORWARD tracking began, so old stores we merely backfill-discovered don't
+  // reappear as historical launches. Guard against bulk imports that carry historical
+  // discovered_at (e.g. the BuiltWith Woo list, dated 2016-2019): Terrain didn't exist before
+  // 2026, so any earlier discovered_at is imported backfill and must not drag the floor back.
   const [tf] = await sql<{ f: string | null }[]>`
-    SELECT to_char(MIN(discovered_at), 'YYYY-MM-DD') f FROM imported_stores WHERE published AND discovered_at IS NOT NULL`.catch(() => [{ f: null }]);
+    SELECT to_char(MIN(discovered_at), 'YYYY-MM-DD') f FROM imported_stores
+    WHERE published AND discovered_at >= '2026-01-01'`.catch(() => [{ f: null }]);
   const floor = tf?.f ?? "2026-01-01";
   const found = await sql<{ b: string; n: number }[]>`
     SELECT to_char(date_trunc(${period}::text, ${LAUNCH}), 'YYYY-MM-DD') b, COUNT(*)::int n
