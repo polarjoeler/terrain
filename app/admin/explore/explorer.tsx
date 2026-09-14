@@ -29,6 +29,14 @@ const usd = (n: number | null) =>
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
 const isCleanTheme = (t: string) => /^[A-Za-z][A-Za-z &'-]{1,24}$/.test(t.trim());
 
+// WooCommerce activity tier — the "is this a REAL store or a stale build" reveal.
+// Ordered strongest-first in the facet; labeled for humans in the rail.
+const ACTIVITY_ORDER: Record<string, number> = { selling: 0, active: 1, dormant: 2, not_a_store: 3 };
+const ACTIVITY_LABEL: Record<string, string> = {
+  selling: "Selling (has sales/reviews)", active: "Active (live, stocked)",
+  dormant: "Dormant (built, not selling)", not_a_store: "Not a store",
+};
+
 // Store logo. Favicons are built for LIGHT backgrounds, so on our dark table the
 // dark/transparent ones muddy into the UI — we sit them on a white tile with a
 // little padding so every logo reads cleanly. Google's service returns a generic
@@ -71,7 +79,7 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
-function Facet({ title, values, selected, onToggle }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void }) {
+function Facet({ title, values, selected, onToggle, label }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string }) {
   const [open, setOpen] = useState(true);
   const [expand, setExpand] = useState(false);
   const shown = expand ? values : values.slice(0, 6);
@@ -87,7 +95,7 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
               className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-left text-sm transition ${selected.has(v) ? "bg-cyan/15 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
               <span className="flex items-center gap-1.5 truncate">
                 <span className={`h-3 w-3 shrink-0 rounded border ${selected.has(v) ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                <span className="truncate">{title === "Country" ? marketLabel(v) : v}</span>
+                <span className="truncate">{label ? label(v) : title === "Country" ? marketLabel(v) : v}</span>
               </span>
               <span className="ml-2 shrink-0 text-xs tabular-nums text-cream/35">{n.toLocaleString()}</span>
             </button>
@@ -108,6 +116,7 @@ function Facet({ title, values, selected, onToggle }: { title: string; values: [
 export type ExploreInitial = {
   q?: string; country?: string[]; category?: string[]; band?: string[];
   theme?: string[]; city?: string[]; payment?: string[]; shipping?: string[];
+  activity?: string[];    // seed Woo activity tier (selling/active/dormant) from a deep link
   recency?: RecencyKey;   // seed "new this week" (7d) etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
 };
@@ -123,6 +132,8 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
   const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
   const [app, setApp] = useState<Set<string>>(new Set());
   const [platform, setPlatform] = useState<Set<string>>(new Set());
+  const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
+  const [hosting, setHosting] = useState<Set<string>>(new Set());
   const [plusOnly, setPlusOnly] = useState(false);
   const [emailOnly, setEmailOnly] = useState(false);
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
@@ -147,6 +158,8 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     if (skip !== "theme" && theme.size && !theme.has(l.theme ?? "—")) return false;
     if (skip !== "city" && city.size && !city.has(l.city ?? "—")) return false;
     if (skip !== "platform" && platform.size && !platform.has(l.platform ?? "—")) return false;
+    if (skip !== "activity" && activity.size && !activity.has(l.activityTier ?? "—")) return false;
+    if (skip !== "hosting" && hosting.size && !hosting.has(l.hostingProvider ?? "—")) return false;
     if (skip !== "payment" && payment.size) {
       const toks = (l.payments ?? "").split(";").map((t) => t.trim());
       if (![...payment].some((p) => toks.includes(p))) return false;
@@ -180,7 +193,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, sort]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -200,6 +213,9 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     return {
       country: countBy("country", (l) => (l.country ?? "??").toUpperCase()),
       platform: countBy("platform", (l) => l.platform ?? "—").filter(([p]) => p !== "—"),
+      activity: countBy("activity", (l) => l.activityTier ?? "—").filter(([t]) => t !== "—")
+        .sort((a, b) => (ACTIVITY_ORDER[a[0]] ?? 9) - (ACTIVITY_ORDER[b[0]] ?? 9)),
+      hosting: countBy("hosting", (l) => l.hostingProvider ?? "—").filter(([h]) => h !== "—"),
       category: countBy("category", (l) => l.category ?? "—").filter(([c]) => c !== "—"),
       band: countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9)),
       theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => isCleanTheme(t)),
@@ -209,10 +225,10 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); };
-  const activeCount = country.size + platform.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
 
   // Counts for the recency control — computed with recency skipped so each window
   // shows its own total regardless of the current selection.
@@ -220,12 +236,12 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     const base = leads.filter((l) => passes(l, "recency"));
     return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier]);
 
   const exportCsv = () => {
-    const head = ["domain", "name", "category", "country", "city", "platform", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
+    const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
     const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const rows = filtered.map((l) => [l.domain, l.name, l.category, l.country, l.city, l.platform, l.theme, l.productCount, l.aovUsd, l.estMonthlySales, revenueBand(l.estMonthlySales), l.score, l.plus, l.email, l.payments, l.shippingProviders, l.apps, l.instagram, l.facebook, l.tiktok].map(esc).join(","));
+    const rows = filtered.map((l) => [l.domain, l.name, l.category, l.country, l.city, l.platform, l.activityTier, l.activityScore, l.hostingProvider, l.platformVersion, l.theme, l.productCount, l.aovUsd, l.estMonthlySales, revenueBand(l.estMonthlySales), l.score, l.plus, l.email, l.payments, l.shippingProviders, l.apps, l.instagram, l.facebook, l.tiktok].map(esc).join(","));
     const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `terrain-leads-${filtered.length}.csv`; a.click();
   };
@@ -277,6 +293,8 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
           </div>
         </div>
         {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} />}
+        {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
+        {facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
         <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
@@ -326,6 +344,10 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
                           <div className="flex items-center gap-1.5 font-medium text-cream">
                             <span className="truncate">{l.name ?? l.domain}</span>
                             {l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
+                            {l.platform === "woocommerce" && <span className="rounded bg-cream/10 px-1 py-0.5 text-[8px] font-bold uppercase text-cream/50">Woo</span>}
+                            {l.activityTier && l.activityTier !== "not_a_store" && (
+                              <span className={`rounded px-1 py-0.5 text-[8px] font-bold uppercase ${l.activityTier === "selling" ? "bg-mint/20 text-mint" : l.activityTier === "active" ? "bg-cyan/20 text-cyan" : "bg-orange/20 text-orange"}`}>{l.activityTier}</span>
+                            )}
                           </div>
                           {/* External site link — stop the row's drawer-open when clicked. */}
                           <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>

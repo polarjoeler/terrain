@@ -61,6 +61,23 @@ function Chips({ items, tone = "cream" }: { items: string[]; tone?: string }) {
   );
 }
 
+// Woo activity tier badge — the "real store vs stale build" reveal, color-coded by strength.
+const TIER_META: Record<string, { label: string; tone: string }> = {
+  selling: { label: "Selling", tone: "bg-mint/20 text-mint" },
+  active: { label: "Active", tone: "bg-cyan/20 text-cyan" },
+  dormant: { label: "Dormant", tone: "bg-orange/20 text-orange" },
+  not_a_store: { label: "Not a store", tone: "bg-cream/10 text-cream/45" },
+};
+function TierBadge({ tier, score }: { tier: string; score: number | null }) {
+  const m = TIER_META[tier] ?? { label: tier, tone: "bg-cream/10 text-cream/60" };
+  return (
+    <span className="flex items-center justify-end gap-1.5">
+      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${m.tone}`}>{m.label}</span>
+      {score != null && <span className="text-xs text-cream/35 tabular-nums">{score}/100</span>}
+    </span>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="border-t border-cream/10 py-3">
@@ -131,6 +148,15 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="Platform" value={data.platform} />
               <Row label="Source" value={sourceLabel(data.source)} />
             </Section>
+
+            {data.platform === "woocommerce" && (
+              <Section title="WooCommerce">
+                <Row label="Activity" value={data.activity_tier ? <TierBadge tier={data.activity_tier} score={data.activity_score} /> : null} />
+                <Row label="Hosting" value={data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null} />
+                <Row label="Woo version" value={data.platform_version} />
+                <Row label="Plugins" value={chips(data.plugins).length ? <Chips items={chips(data.plugins).slice(0, 12)} tone="lilac" /> : null} />
+              </Section>
+            )}
 
             <Section title="Revenue & catalog">
               <Row label="Est. monthly sales" value={money(data.estimated_monthly_sales, data.currency)} />

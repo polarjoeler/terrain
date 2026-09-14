@@ -17,6 +17,8 @@ export type LeadDetail = {
   domain: string; name: string | null; category: string | null;
   country: string | null; city: string | null;
   theme: string | null; platform: string | null; plus: boolean | null;
+  activity_tier: string | null; activity_score: number | null;   // Woo: real-store reveal
+  hosting_provider: string | null; hosting_asn: number | null; platform_version: string | null; plugins: string | null;
   payments: string | null; shipping_providers: string | null; free_shipping: boolean | null;
   logistics_apps: string | null; apps: string | null;
   product_count: number | null; avg_product_price: string | null;
@@ -33,6 +35,7 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
   const d = domain.trim().toLowerCase();
   const [r] = await db()<LeadDetail[]>`
     SELECT domain, name, category, country, city, theme, platform, plus,
+           activity_tier, activity_score, hosting_provider, hosting_asn, platform_version, plugins,
            payments, shipping_providers, free_shipping, logistics_apps, apps,
            product_count, avg_product_price, estimated_monthly_sales, est_revenue_usd, currency,
            email, contact_email, contact_phone,

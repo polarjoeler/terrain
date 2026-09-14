@@ -27,6 +27,10 @@ export type ExploreLead = {
   city: string | null;
   theme: string | null;
   platform: string | null;
+  activityTier: string | null;        // Woo only: selling | active | dormant | not_a_store — the "is it a REAL store" reveal
+  activityScore: number | null;       // 0–100 composite behind the tier
+  hostingProvider: string | null;     // host/CDN brand (ASN-resolved), e.g. Cloudflare, xneelo, WP Engine
+  platformVersion: string | null;     // Woo version (sellers care which release a store runs)
   payments: string | null;            // semicolon-separated verified gateways
   paymentsChecked: boolean;           // we ran a checkout probe (so empty payments = "no gateway", not "unknown")
   shippingProviders: string | null;   // semicolon-separated carriers/apps
@@ -99,14 +103,18 @@ export async function exploreLeads(limit = 20000): Promise<ExploreLead[]> {
 async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
   const rows = await db()<{
     domain: string; name: string | null; category: string | null; country: string | null; city: string | null;
-    theme: string | null; platform: string | null; payments: string | null; shipping_providers: string | null; apps: string | null;
+    theme: string | null; platform: string | null; activity_tier: string | null; activity_score: number | null;
+    hosting_provider: string | null; platform_version: string | null;
+    payments: string | null; shipping_providers: string | null; apps: string | null;
     product_count: number | null; avg_product_price: string | null;
     estimated_monthly_sales: string | null; currency: string | null; plus: boolean; email: string | null;
     instagram: string | null; facebook: string | null; tiktok: string | null;
     instagram_followers: number | null; facebook_followers: number | null; discovered_at: Date | null;
     payments_checked_at: Date | null; top100: boolean; top500: boolean;
   }[]>`
-    SELECT domain, name, category, country, city, theme, platform, payments, shipping_providers, apps,
+    SELECT domain, name, category, country, city, theme, platform,
+           activity_tier, activity_score, hosting_provider, platform_version,
+           payments, shipping_providers, apps,
            product_count, avg_product_price, estimated_monthly_sales, currency, plus, email,
            instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at, payments_checked_at,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100')) AS top100,
@@ -114,6 +122,9 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ANY(${[...VISIBLE_MARKETS]})
+      -- Woo parked/holding-page installs ('not_a_store') are captured + revealed elsewhere,
+      -- but they aren't leads — keep them out of the browsable list (Shopify + real Woo only).
+      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
 
@@ -123,7 +134,10 @@ async function loadExploreLeads(limit = 20000): Promise<ExploreLead[]> {
     const social = (r.instagram_followers ?? 0) + (r.facebook_followers ?? 0);
     return {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
-      theme: r.theme, platform: r.platform, payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
+      theme: r.theme, platform: r.platform,
+      activityTier: r.activity_tier, activityScore: r.activity_score,
+      hostingProvider: r.hosting_provider, platformVersion: r.platform_version,
+      payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
       productCount: r.product_count, aovUsd: aov,
       estMonthlySales: sales, plus: r.plus, top100: r.top100, top500: r.top500, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
@@ -139,7 +153,8 @@ export async function exploreLeadCount(): Promise<number> {
   const [r] = await db()<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-      AND country = ANY(${[...VISIBLE_MARKETS]})`;
+      AND country = ANY(${[...VISIBLE_MARKETS]})
+      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')`;
   return Number(r.n);
 }
 
