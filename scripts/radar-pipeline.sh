@@ -153,17 +153,21 @@ node --env-file=.env.local scripts/logistics-scan.mjs --limit 3000 || echo "!! l
 echo "--- provider snapshots ---"
 node --env-file=.env.local scripts/snapshot-providers.mjs || echo "!! provider snapshot failed (continuing)"
 
-# Partner-graph: refresh edges from current enrichment, backfill switch events, roll up today's
-# per-(partner × market) snapshots (the payment/gateway time-series we sell to PSPs). Set-based.
-echo "--- partner-graph refresh ---"
-node --env-file=.env.local scripts/partner-graph.mjs --edges --events --rollup || echo "!! partner-graph failed (continuing)"
-
 # Browse snapshot — precompute the dashboard Explorer's full dataset into a single
 # jsonb row so the request path reads ONE row instead of marshaling ~13k wide rows
-# (which timed out under this pass's concurrent DB load). Runs LAST, after enrichment,
-# so today's catalog/contacts/launch-date fills show up in the browse view.
+# (which timed out under this pass's concurrent DB load). This is the CUSTOMER-FACING
+# view, so it runs BEFORE the partner-graph backfill — which grew slow enough (17k+
+# stores) to trip the 90-min watchdog and, when it ran last, starved this refresh so
+# the dashboard went stale. Enrichment above has already landed for this run.
 echo "--- browse snapshot refresh ---"
 node --env-file=.env.local --experimental-strip-types scripts/refresh-browse-snapshot.mjs \
   || echo "!! browse snapshot refresh failed (continuing)"
+
+# Partner-graph: refresh edges from current enrichment, backfill switch events, roll up today's
+# per-(partner × market) snapshots (the payment/gateway time-series we sell to PSPs). Set-based.
+# Runs LAST — it's an internal data product, so if the watchdog kills it late, the next cycle
+# just re-runs it; nothing customer-facing depends on it finishing within a single run.
+echo "--- partner-graph refresh ---"
+node --env-file=.env.local scripts/partner-graph.mjs --edges --events --rollup || echo "!! partner-graph failed (continuing)"
 
 echo "===== pipeline done $(date '+%H:%M:%S') ====="
