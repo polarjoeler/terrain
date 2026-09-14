@@ -9,10 +9,12 @@ type Series = {
 };
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 
-/** Shopify-growth chart (forward-only, since we began tracking). The store base barely moves
- *  relative to its size, so the absolute total is a headline stat — not a line. The chart is
- *  the flow that actually varies: diverging bars, new stores discovered per period (cyan, up)
- *  and churn (orange, down). Filterable by period + custom range. Fetches paid-gated /api/growth. */
+/** Shopify-growth chart. The store base barely moves relative to its size, so the absolute
+ *  total is a headline stat — not a line. The chart is the flow that actually varies: diverging
+ *  bars, stores that truly launched per period (cyan, up) and churned (orange, down). "New" is
+ *  keyed to real launch date (first product / launched_at), not when we discovered the store —
+ *  so cert-renewal discovery floods don't inflate it. Filterable by period + custom range.
+ *  Fetches paid-gated /api/growth. */
 export function GrowthChart({ country, provider, title = "Shopify store growth" }: { country?: string; provider?: string; title?: string }) {
   const [period, setPeriod] = useState("month");
   const [from, setFrom] = useState("");
@@ -71,7 +73,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         <div>
           <h3 className="text-lg font-semibold">{title}</h3>
           <p className="mt-1 text-sm text-cream/45">
-            New {noun} discovered ↑ and churned ↓ per {period}, since we began tracking.
+            {noun === "merchants" ? "Merchants" : "Stores"} that launched ↑ and churned ↓ per {period}.
           </p>
         </div>
         <div className="flex gap-1 rounded-full border border-cream/12 p-1">
@@ -90,7 +92,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         </div>
         <div>
           <div className="text-xl font-semibold text-cyan">+{data ? data.totalNew.toLocaleString() : "—"}</div>
-          <div className="text-xs text-cream/45">new, this range</div>
+          <div className="text-xs text-cream/45">launched, this range</div>
         </div>
         <div>
           <div className="text-xl font-semibold text-orange">−{data ? data.totalChurn.toLocaleString() : "—"}</div>
@@ -109,7 +111,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
         {(from || to) && <button onClick={() => { setFrom(""); setTo(""); }} className="text-cream/40 hover:text-cream">clear</button>}
         <span className="ml-auto flex items-center gap-3">
-          <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-cyan opacity-80" />new</span>
+          <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-cyan opacity-80" />launched</span>
           <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-orange opacity-80" />churn</span>
         </span>
       </div>
@@ -120,7 +122,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
         ) : err ? (
           <div className="grid h-64 place-items-center text-sm text-orange">{err}</div>
         ) : pts.length === 0 ? (
-          <div className="grid h-64 place-items-center text-sm text-cream/40">No {noun} discovered in this range yet.</div>
+          <div className="grid h-64 place-items-center text-sm text-cream/40">No {noun} launched in this range yet.</div>
         ) : (
           <>
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
@@ -147,7 +149,7 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
               <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
                 style={{ left: `${Math.min(86, Math.max(14, ((xAt(hover ?? 0) + bw / 2) / W) * 100))}%`, top: 0 }}>
                 <div className="font-semibold text-cream">{hp.date}</div>
-                <div className="mt-1 text-cyan">+{hp.newStores.toLocaleString()} new</div>
+                <div className="mt-1 text-cyan">+{hp.newStores.toLocaleString()} launched</div>
                 {hp.churned > 0 ? <div className="text-orange">−{hp.churned.toLocaleString()} churned</div> : <div className="text-cream/40">no churn</div>}
               </div>
             )}
@@ -157,8 +159,8 @@ export function GrowthChart({ country, provider, title = "Shopify store growth" 
 
       <p className="mt-3 text-xs text-cream/35">
         {data?.churnTrackedFrom
-          ? `Churn tracked from ${data.churnTrackedFrom}; new-store discovery is forward-only — figures reflect when we observed each store, not when it launched.`
-          : "Figures are forward-only, from when our tracking began."}
+          ? `"New" counts stores by real launch date (first product / launched_at), not when we discovered them. Churn tracked forward from ${data.churnTrackedFrom}. Recent launches lag slightly until each store is enriched.`
+          : `"New" counts stores by real launch date, not discovery date. Recent launches lag slightly until each store is enriched.`}
       </p>
     </div>
   );

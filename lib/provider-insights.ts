@@ -479,12 +479,20 @@ export async function growthSeries(opts: {
     : sql``;
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
 
+  // "New" = stores that TRULY LAUNCHED in the period — from a real launch date (the catalog's
+  // oldest product, else the StoreLeads launch date) — NOT discovered_at, which counts old
+  // stores we merely re-saw (a cert renewal) as "new". Floored at when tracking began so old
+  // stores we backfill-discovered don't reappear as historical launches.
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const [tf] = await sql<{ f: string | null }[]>`
+    SELECT to_char(MIN(discovered_at), 'YYYY-MM-DD') f FROM imported_stores WHERE published AND discovered_at IS NOT NULL`.catch(() => [{ f: null }]);
+  const floor = tf?.f ?? "2026-01-01";
   const found = await sql<{ b: string; n: number }[]>`
-    SELECT to_char(date_trunc(${period}::text, discovered_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    SELECT to_char(date_trunc(${period}::text, ${LAUNCH}), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM imported_stores
-    WHERE published AND discovered_at IS NOT NULL ${ctry} ${prov}
-      ${from ? sql`AND discovered_at >= ${from}::date` : sql``}
-      ${to ? sql`AND discovered_at <= ${to}::date` : sql``}
+    WHERE published AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${floor}::date ${ctry} ${prov}
+      ${from ? sql`AND ${LAUNCH} >= ${from}::date` : sql``}
+      ${to ? sql`AND ${LAUNCH} <= ${to}::date` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
 
   const churned = await sql<{ b: string; n: number }[]>`

@@ -50,7 +50,10 @@ async function main() {
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND catalog_checked_at IS NULL
-      ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
+      -- Recently-discovered stores first: first_product_at (the true launch signal that powers the
+      -- "new stores" metric) only exists once a store is catalog-enriched, so enriching recent
+      -- discoveries promptly is what keeps the launch-date "new" count from lagging behind reality.
+      ORDER BY discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
     console.log(`Catalog-enriching ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY})…`);
 
