@@ -318,7 +318,7 @@ export function InsightsView({
             ))}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Compare</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Timeframe</span>
             {PERIODS.map((p) => {
               const ok = available(p);
               return (
@@ -360,7 +360,7 @@ export function InsightsView({
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
           {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
-          <GrowthChart country={country} platform={platform} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
+          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
 
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
           <Card

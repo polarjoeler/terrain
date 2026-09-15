@@ -15,8 +15,12 @@ const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter
  *  keyed to real launch date (first product / launched_at), not when we discovered the store —
  *  so cert-renewal discovery floods don't inflate it. Filterable by period + custom range.
  *  Fetches paid-gated /api/growth. */
-export function GrowthChart({ country, provider, platform, title = "Shopify store growth" }: { country?: string; provider?: string; platform?: string; title?: string }) {
-  const [period, setPeriod] = useState("month");
+export function GrowthChart({ country, provider, platform, period: periodProp, title = "Shopify store growth" }: { country?: string; provider?: string; platform?: string; period?: string; title?: string }) {
+  // When `periodProp` is passed the parent's period control drives the chart (no duplicate
+  // selector — the redundancy we're removing); standalone (provider pages) it keeps its own.
+  const controlled = !!periodProp;
+  const [period, setPeriod] = useState(periodProp ?? "month");
+  useEffect(() => { if (periodProp) setPeriod(periodProp); }, [periodProp]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [data, setData] = useState<Series | null>(null);
@@ -88,12 +92,14 @@ export function GrowthChart({ country, provider, platform, title = "Shopify stor
             {noun === "merchants" ? "Merchants" : "Stores"} that launched ↑ and churned ↓ per {period}.
           </p>
         </div>
-        <div className="flex gap-1 rounded-full border border-cream/12 p-1">
-          {PERIODS.map(([k, l]) => (
-            <button key={k} onClick={() => setPeriod(k)}
-              className={`rounded-full px-3 py-1 text-xs transition ${period === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}>{l}</button>
-          ))}
-        </div>
+        {!controlled && (
+          <div className="flex gap-1 rounded-full border border-cream/12 p-1">
+            {PERIODS.map(([k, l]) => (
+              <button key={k} onClick={() => setPeriod(k)}
+                className={`rounded-full px-3 py-1 text-xs transition ${period === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}>{l}</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* headline figures */}
