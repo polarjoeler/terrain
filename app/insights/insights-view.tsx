@@ -101,9 +101,14 @@ function TrendLine({ data }: { data: number[] }) {
 
 /** A distribution (providers / themes / apps / categories) with % + absolute
  *  counts, drill-in to see every item, and per-item change vs the chosen period. */
-// Drill-through link: an insights data point → the dashboard Explorer, pre-filtered
-// (e.g. click "Paystack" → /dashboard?payment=Paystack&country=ZA → the actual stores).
+// Drill-through link. Payment providers go to their DEDICATED PERFORMANCE PAGE (/p/[provider]) —
+// insights should lead to deeper analysis, not back to the raw leads list. Everything else still
+// pre-filters the Explorer for now (theme/category/app reports are a later step).
 function drillHref(param: string, label: string, country?: string): string {
+  if (param === "payment") {
+    const q = country ? `?country=${encodeURIComponent(country)}` : "";
+    return `/p/${encodeURIComponent(label)}${q}`;
+  }
   const p = new URLSearchParams();
   p.set(param, label);
   if (country) p.set("country", country);
@@ -427,7 +432,7 @@ export function InsightsView({
                 <ul className="divide-y divide-cream/[0.06]">
                   {momentum.slice(0, 8).map((m) => (
                     <li key={m.provider} className="flex items-center justify-between gap-2 py-1.5 text-sm">
-                      <span className="truncate text-cream/80">{m.provider}</span>
+                      <Link href={drillHref("payment", m.provider, country)} className="truncate text-cream/80 hover:text-cream hover:underline">{m.provider}</Link>
                       <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
                         <span className="text-cream/45" title="share of new stores this period">{m.share}%</span>
                         <span
@@ -462,17 +467,17 @@ export function InsightsView({
                         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm">
                           {swap ? (
                             <>
-                              <span className="text-orange/75 line-through decoration-orange/40">{s.removed[0]}</span>
+                              <Link href={drillHref("payment", s.removed[0], country)} className="text-orange/75 line-through decoration-orange/40 hover:text-orange">{s.removed[0]}</Link>
                               <span className="text-cream/30">→</span>
-                              <span className="font-semibold text-mint">{s.added[0]}</span>
+                              <Link href={drillHref("payment", s.added[0], country)} className="font-semibold text-mint hover:underline">{s.added[0]}</Link>
                             </>
                           ) : (
                             <>
                               {s.added.map((a) => (
-                                <span key={`a${a}`} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint">added {a}</span>
+                                <Link key={`a${a}`} href={drillHref("payment", a, country)} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint hover:bg-mint/25">added {a}</Link>
                               ))}
                               {s.removed.map((r) => (
-                                <span key={`r${r}`} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange">dropped {r}</span>
+                                <Link key={`r${r}`} href={drillHref("payment", r, country)} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange hover:bg-orange/25">dropped {r}</Link>
                               ))}
                             </>
                           )}
