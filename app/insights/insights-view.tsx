@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
@@ -172,7 +173,11 @@ export function InsightsView({
   momentum?: ProviderMomentum[];
   shifts?: PaymentShift[];
 }) {
-  // Navigate preserving country + cohort + platform in the URL (server refetch filters the data).
+  // Soft-navigate (keeps the current data on screen, dimmed, while the new data loads) and mark
+  // the transition pending so the UI shows IMMEDIATE feedback on any filter click — the #1 thing
+  // that was missing. loading.tsx covers the first load / hard reloads.
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const go = (next: { country?: string; tag?: string; platform?: string }) => {
     const c = next.country ?? country;
     const t = next.tag ?? tag;
@@ -181,7 +186,7 @@ export function InsightsView({
     if (c) qs.set("country", c);
     if (t) qs.set("tag", t);
     if (pf && pf !== "shopify") qs.set("platform", pf);
-    window.location.href = `/insights?${qs.toString()}`;
+    startTransition(() => router.push(`/insights?${qs.toString()}`));
   };
   const [period, setPeriod] = useState<Period>("Week");
 
@@ -237,7 +242,14 @@ export function InsightsView({
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
-      <div className="mx-auto max-w-6xl">
+      {/* Indeterminate top bar + dim while a filter change is loading — immediate feedback. */}
+      {pending && (
+        <div className="fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden bg-cyan/20" aria-hidden>
+          <div className="h-full w-1/3 animate-[insLoad_1s_ease-in-out_infinite] bg-cyan" />
+          <style>{`@keyframes insLoad{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}`}</style>
+        </div>
+      )}
+      <div className={`mx-auto max-w-6xl transition-opacity duration-200 ${pending ? "pointer-events-none opacity-50" : ""}`}>
         <nav className="flex items-center justify-between">
           <Link href="/"><Wordmark size="text-xl" /></Link>
           <div className="flex items-center gap-3">

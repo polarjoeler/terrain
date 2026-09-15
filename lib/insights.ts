@@ -68,6 +68,20 @@ const prettyApp = (s: string) =>
 const items = (rows: { label: string; n: number }[], denom: number): InsightItem[] =>
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
+// Merge rows that are the same value in different casing ("dawn" / "Dawn") — sum the counts,
+// display Title Case, re-sort. Fixes duplicate themes/cities inflating the list.
+const mergeVariants = (rows: { label: string; n: number }[]): { label: string; n: number }[] => {
+  const m = new Map<string, { label: string; n: number }>();
+  for (const r of rows) {
+    if (!r.label) continue;
+    const key = r.label.trim().toLowerCase();
+    const disp = key.replace(/\b\w/g, (c) => c.toUpperCase());
+    const cur = m.get(key);
+    if (cur) cur.n += r.n; else m.set(key, { label: disp, n: r.n });
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
+};
+
 // "Brand New Stores" = discovered (cert-transparency found) in this window.
 export const NEW_STORE_DAYS = 90;
 
@@ -81,11 +95,13 @@ const cohortFilter = (tag?: string) =>
       : db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})`;
 
 // Published live stores for a market — the universe the insights describe.
-// An optional cohort tag narrows it (Top 100, Brand New, …).
-const LIVE = (country: string, tag?: string) =>
+// An optional cohort tag narrows it (Top 100, Brand New, …); platform narrows it to the
+// selected platform (default Shopify) so EVERY distribution (payments, themes, apps, cities)
+// respects the toggle AND shares the same denominator as the headline counts (no >100% %s).
+const LIVE = (country: string, tag?: string, platform: PlatformSel = "shopify") =>
   db()`published AND country = ${country}
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
-       ${cohortFilter(tag)}`;
+       ${cohortFilter(tag)} ${platformClause(db(), platform)}`;
 
 /** Count of stores in a dynamic/curated cohort for a market — for the selector. */
 export async function cohortCount(country: string, tag: string): Promise<number> {
@@ -228,7 +244,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // first-listed provider (best-effort ordering from the checkout sync).
   const payRows = await sql`
     SELECT payments FROM imported_stores
-    WHERE ${LIVE(country, tag)} AND payments IS NOT NULL AND payments <> ''`;
+    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''`;
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
@@ -255,7 +271,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   const shippingKnown = Number(t.shipping_known);
   const shipRows = await sql`
     SELECT shipping_providers FROM imported_stores
-    WHERE ${LIVE(country, tag)} AND shipping_providers IS NOT NULL AND shipping_providers <> ''`;
+    WHERE ${LIVE(country, tag, platform)} AND shipping_providers IS NOT NULL AND shipping_providers <> ''`;
   const shipCount = new Map<string, number>();
   for (const r of shipRows) {
     // Normalise + dedupe per store, so "tunl shipping;tunl shipping rates" counts TUNL
@@ -273,14 +289,14 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // queue beyond the pool (postgres.js). Sequential never exceeds the pool.
   type Agg = { label: string; n: number };
   const themes = await sql<Agg[]>`SELECT theme AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`;
+        WHERE ${LIVE(country, tag, platform)} AND theme IS NOT NULL AND theme <> '' GROUP BY theme ORDER BY n DESC`;
   const categories = await sql<Agg[]>`SELECT category AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`;
+        WHERE ${LIVE(country, tag, platform)} AND category IS NOT NULL GROUP BY category ORDER BY n DESC`;
   const cities = await sql<Agg[]>`SELECT city AS label, COUNT(*)::int n FROM imported_stores
-        WHERE ${LIVE(country, tag)} AND city IS NOT NULL AND city <> '' GROUP BY city ORDER BY n DESC`;
+        WHERE ${LIVE(country, tag, platform)} AND city IS NOT NULL AND city <> '' GROUP BY city ORDER BY n DESC`;
   const apps = await sql<Agg[]>`SELECT app AS label, COUNT(*)::int n FROM (
           SELECT trim(unnest(string_to_array(apps, ';'))) AS app FROM imported_stores
-          WHERE ${LIVE(country, tag)} AND apps IS NOT NULL AND apps <> ''
+          WHERE ${LIVE(country, tag, platform)} AND apps IS NOT NULL AND apps <> ''
         ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`;
 
   // Discovery-neutral payment adoptions per period window — new-to-us stores (by
@@ -288,7 +304,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // vetting catch-up on OLD stores never inflates the Payment Intelligence change.
   const adoptRows = await sql<{ discovered_at: Date | null; payments: string }[]>`
     SELECT discovered_at, payments FROM imported_stores
-    WHERE ${LIVE(country, tag)} AND payments IS NOT NULL AND payments <> ''
+    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''
       AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 365`;
   const adoptChanges = await sql<{ changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
     SELECT pc.changed_at, pc.added, pc.removed FROM payment_changes pc
@@ -337,11 +353,11 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     paymentsByProvider: items(toSorted(providerCount), verified),
     paymentsByType,
     firstProvider: items(toSorted(firstCount), verified),
-    themes: items(themes, themesKnown),
+    themes: items(mergeVariants(themes), themesKnown),
     themesKnown,
     categories: items(categories, categoriesKnown),
     categoriesKnown,
-    cities: items(cities, citiesKnown),
+    cities: items(mergeVariants(cities), citiesKnown),
     citiesKnown,
     apps: items(apps.map((a) => ({ label: prettyApp(a.label), n: a.n })), appsKnown),
     appsKnown,
