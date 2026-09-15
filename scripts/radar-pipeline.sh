@@ -106,6 +106,13 @@ else
   echo "payments: probe lock held by the hourly job — skipping this cycle"
 fi
 
+# NEW STORES FIRST — catalog-enrich runs right after payments (both queues are newest-discovered
+# first) so a freshly-discovered lead gets its gateway AND launch date/AOV in the SAME cycle it's
+# found, before the heavy fingerprint/AI steps that can trip the 90-min watchdog. The product is
+# predicated on subscribers getting complete new leads fast, so this is the top enrichment priority.
+echo "--- catalog enrich (NEW STORES FIRST: product_count + AOV + launch date) ---"
+node --env-file=.env.local scripts/catalog-enrich.mjs --limit 3000 --country "$MARKETS" || echo "!! catalog-enrich failed (continuing)"
+
 echo "--- fingerprint catalogue (after payments) ---"
 node --env-file=.env.local scripts/radar-fingerprint.mjs --all || echo "!! fingerprint step failed (continuing)"
 
@@ -138,10 +145,7 @@ node --env-file=.env.local scripts/verify-liveness.mjs --country "$MARKETS" --mi
 echo "--- insights snapshot ---"
 curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://terrain.tembocommerce.app/insights || echo "!! insights snapshot failed (continuing)"
 
-# Catalog enrichment — capture product_count + AOV from public /products.json
-# (footprint-free). Powers the revenue estimator + Lead Fit Score. Resumable.
-echo "--- catalog enrich (product_count + AOV) ---"
-node --env-file=.env.local scripts/catalog-enrich.mjs --limit 3000 || echo "!! catalog-enrich failed (continuing)"
+# (catalog-enrich moved up to run right after payments — NEW STORES FIRST. See above.)
 
 # Homepage fingerprint scan — detect shipping/logistics apps (Shiprazor, TUNL, Bob
 # Go…) that don't appear as a checkout carrier, and capture clean theme names.

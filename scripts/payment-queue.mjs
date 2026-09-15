@@ -90,7 +90,7 @@ async function main() {
     // 75 days. Unprobed stores are always eligible.
     const HV_REPROBE_DAYS = 7, TAIL_REPROBE_DAYS = 21;
     const eligible = await sql`
-      SELECT domain, estimated_monthly_sales sales, live_status,
+      SELECT domain, estimated_monthly_sales sales, live_status, discovered_at,
         (payments IS NULL OR payments = '') AS needs_initial,
         COALESCE(plus, false) AS plus,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
@@ -118,9 +118,15 @@ async function main() {
     const cap = LIMIT > 0 ? LIMIT : eligible.length;
     const REPROBE_SHARE = Math.min(1, Math.max(0,
       parseFloat(opt("--reprobe-share", process.env.REPROBE_SHARE || "0.12"))));
-    // Initial probes, value-ranked: HV first, then new-market (KE/NG), then the value tail.
+    // NEW STORES FIRST. The product sells subscribers fast access to new leads, so a
+    // freshly-discovered store must get its gateway probed before the value backlog — a
+    // brand-new lead with no payment data is worthless the week it matters most. Order
+    // initial probes newest-discovered first; HV / new-market only break ties on the same day.
+    const disc = (r) => (r.discovered_at ? new Date(r.discovered_at).getTime() : 0);
     const init = eligible.filter((r) => r.needs_initial).sort((a, b) =>
-      (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0) || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
+      disc(b) - disc(a)
+      || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)
+      || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
     const reprobes = eligible.filter((r) => !r.needs_initial)
       .sort((a, b) => (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)); // HV switches first
     const reSlots = Math.min(reprobes.length, Math.round(cap * REPROBE_SHARE));
