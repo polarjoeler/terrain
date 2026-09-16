@@ -30,9 +30,14 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 echo "===== payments probe $(date '+%F %T') ====="
 
+# Target markets ONLY (Africa + JP) — the markets we sell into. Without this scope the queue
+# is newest-discovered-first GLOBALLY, so the huge global CT-tail flow (UK/DE/AU/…) hijacks the
+# probe budget away from ZA/KE/NG. Matches radar-pipeline.sh's MARKETS.
+MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP"
+
 # Refresh the value-ranked queue (skips already-verified; re-surfaces >60d-stale so
 # provider switches get caught), then HTTP-probe the top batch and sync results.
-node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 >/dev/null 2>&1 \
+node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 --country "$MARKETS" >/dev/null 2>&1 \
   || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
