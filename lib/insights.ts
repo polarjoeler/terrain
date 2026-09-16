@@ -58,6 +58,17 @@ export type InsightsData = {
     survival: number | null;
     migratedTo: { platform: string; n: number }[];   // Shopify → WooCommerce / Wix / … switch intel
   };
+  // Present only when the WooCommerce platform is selected — the WordPress/Woo-native view
+  // (store status, hosting, versions, plugins) instead of the Shopify-shaped sections.
+  woo?: {
+    total: number;
+    statusTiers: InsightItem[];     // selling / active / dormant / not_a_store
+    hosting: InsightItem[];         // ASN-resolved host/CDN
+    wooVersions: InsightItem[];     // WooCommerce version
+    wpVersions: InsightItem[];      // WordPress version
+    plugins: InsightItem[];         // top installed plugins
+    paymentPlugins: InsightItem[];  // Woo payment gateways (from payment plugins)
+  };
 };
 
 const pct = (n: number, denom: number) => (denom > 0 ? Math.round((100 * n) / denom) : 0);
@@ -65,6 +76,9 @@ const pct = (n: number, denom: number) => (denom > 0 ? Math.round((100 * n) / de
 // App identifiers arrive as Shopify app-store URLs — show the readable slug.
 const prettyApp = (s: string) =>
   s.replace(/https?:\/\/apps\.shopify\.com\//g, "").replace(/^https?:\/\//, "").replace(/[-_]/g, " ").trim();
+// WordPress plugin slug → readable name ("woocommerce-gateway-stripe" → "Woocommerce Gateway Stripe").
+const prettyPlugin = (s: string) =>
+  s.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
 const items = (rows: { label: string; n: number }[], denom: number): InsightItem[] =>
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
@@ -338,6 +352,41 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     GROUP BY 1 ORDER BY n DESC`;
   const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
 
+  // WooCommerce-native distributions — only when the Woo platform is selected. WP/Woo world data
+  // (store status, hosting, versions, plugins) that has no Shopify equivalent. LIVE() already
+  // scopes to platform='woocommerce' here, so denominators + rows share the same filter.
+  let woo: InsightsData["woo"] = undefined;
+  if (platform === "woocommerce") {
+    const [wt] = await sql<{ n: number }[]>`SELECT COUNT(*)::int n FROM imported_stores WHERE ${LIVE(country, tag, platform)}`;
+    const wooTotal = Number(wt?.n ?? 0);
+    const tiers = await sql<Agg[]>`SELECT activity_tier AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND activity_tier IS NOT NULL GROUP BY 1 ORDER BY n DESC`;
+    const hosting = await sql<Agg[]>`SELECT hosting_provider AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND hosting_provider IS NOT NULL AND hosting_provider <> '' GROUP BY 1 ORDER BY n DESC`;
+    const wooVers = await sql<Agg[]>`SELECT platform_version AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND platform_version IS NOT NULL AND platform_version <> '' GROUP BY 1 ORDER BY n DESC`;
+    const wpVers = await sql<Agg[]>`SELECT activity_signals->>'wp_version' AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND activity_signals->>'wp_version' IS NOT NULL GROUP BY 1 ORDER BY n DESC`;
+    const plug = await sql<Agg[]>`SELECT p AS label, COUNT(*)::int n FROM (
+            SELECT trim(unnest(string_to_array(plugins, ';'))) AS p FROM imported_stores
+            WHERE ${LIVE(country, tag, platform)} AND plugins IS NOT NULL AND plugins <> ''
+          ) x WHERE p <> '' GROUP BY p ORDER BY n DESC`;
+    const payPlug = await sql<Agg[]>`SELECT p AS label, COUNT(*)::int n FROM (
+            SELECT trim(unnest(string_to_array(payments, ';'))) AS p FROM imported_stores
+            WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''
+          ) x WHERE p <> '' GROUP BY p ORDER BY n DESC`;
+    const wooKnown = (rows: Agg[]) => rows.reduce((s, r) => s + r.n, 0);
+    woo = {
+      total: wooTotal,
+      statusTiers: items(tiers, wooTotal),
+      hosting: items(hosting, wooKnown(hosting)),
+      wooVersions: items(wooVers, wooKnown(wooVers)),
+      wpVersions: items(wpVers, wooKnown(wpVers)),
+      plugins: items(plug.map((r) => ({ label: prettyPlugin(r.label), n: r.n })), wooTotal),
+      paymentPlugins: items(payPlug, wooKnown(payPlug)),
+    };
+  }
+
   return {
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
@@ -373,6 +422,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       survival: Number(t.churn_checked) ? pct(Number(t.churn_active), Number(t.churn_checked)) : null,
       migratedTo,
     },
+    woo,
   };
 }
 

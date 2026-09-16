@@ -54,9 +54,11 @@ export default async function Insights({
     recentPaymentShifts(40).catch(() => []),
   ]);
   // Daily snapshots / trends are for the full ZA market only — not per-country
-  // or per-cohort (the snapshot table is single-series).
+  // or per-cohort (the snapshot table is single-series). MUST be the Shopify (default)
+  // view: a WooCommerce/all page view once overwrote the daily snapshot with Woo data
+  // (storesTotal 679, plus 0), showing as a fake drop in the Plus trend.
   let history = [data];
-  if (country === "ZA" && !tag) {
+  if (country === "ZA" && !tag && platform === "shopify") {
     await snapshotInsights(data).catch(() => {});
     const h = await insightsHistory().catch(() => [data]);
     if (h.length) history = h;

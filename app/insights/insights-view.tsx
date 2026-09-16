@@ -163,6 +163,34 @@ function DistroCard({
   );
 }
 
+// WooCommerce-native sections — shown instead of the Shopify-shaped ones when the Woo platform
+// is selected. Store status is the headline ("real store vs stale build"); the rest is the
+// WP/Woo intel no competitor surfaces (hosting, versions, plugins).
+const WOO_TIER: Record<string, { label: string; tone: string }> = {
+  selling: { label: "Selling (has sales/reviews)", tone: "mint" },
+  active: { label: "Active (live, stocked)", tone: "cyan" },
+  dormant: { label: "Dormant (built, not selling)", tone: "orange" },
+  not_a_store: { label: "Not a store (parked)", tone: "lilac" },
+};
+function WooSections({ woo }: { woo: NonNullable<InsightsData["woo"]> }) {
+  const realN = woo.statusTiers.filter((t) => t.label === "selling" || t.label === "active").reduce((s, t) => s + t.count, 0);
+  const status = woo.statusTiers.map((t) => ({ ...t, label: WOO_TIER[t.label]?.label ?? t.label }));
+  return (
+    <>
+      <DistroCard
+        title="Store status"
+        subtitle={`${woo.total.toLocaleString()} confirmed WooCommerce stores · ${realN.toLocaleString()} actually selling/active — the rest are parked or stale builds`}
+        data={status} baseline={null} tone="mint"
+      />
+      <DistroCard title="Hosting provider" subtitle="Where these stores are hosted — ASN-resolved (a market no one else surfaces)" data={woo.hosting} baseline={null} tone="cyan" />
+      <DistroCard title="WooCommerce version" subtitle="Which WooCommerce release these stores run" data={woo.wooVersions} baseline={null} tone="lilac" />
+      <DistroCard title="WordPress version" subtitle="Which WordPress version these stores run" data={woo.wpVersions} baseline={null} tone="orange" />
+      <DistroCard title="Top plugins" subtitle="Most-installed WordPress plugins across these stores" data={woo.plugins} baseline={null} tone="mint" />
+      <DistroCard title="Payment gateways" subtitle="Woo payment plugins detected at these stores" data={woo.paymentPlugins} baseline={null} tone="cyan" />
+    </>
+  );
+}
+
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
   platform = "shopify", momentum = [], shifts = [],
@@ -241,8 +269,16 @@ export function InsightsView({
     // snapshot history — unlike the old snapshot delta, which counted imports.
     { n: data.storesTotal.toLocaleString(), label: "stores tracked", abs: data.discoveredByPeriod[PERIOD_KEY[period]], pct: null, tone: "outline" },
     { n: `+${data.newThisWeek}`, label: "new this week", abs: null, pct: null, tone: "mint" },
-    { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", ...metric("plusTotal"), tone: "lilac" },
-    { n: data.paymentsVerifiedStores.toLocaleString(), label: "with payment data", abs: null, pct: null, tone: "outline" },
+    // WooCommerce shows real-store + hosting signals instead of Shopify Plus / payment coverage.
+    ...(platform === "woocommerce" && data.woo
+      ? [
+          { n: data.woo.statusTiers.filter((t) => ["selling", "active"].some((k) => t.label.toLowerCase().startsWith(k))).reduce((s, t) => s + t.count, 0).toLocaleString(), label: "selling / active", abs: null, pct: null, tone: "mint" },
+          { n: data.woo.hosting.length.toLocaleString(), label: "hosting providers", abs: null, pct: null, tone: "outline" },
+        ]
+      : [
+          { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", ...metric("plusTotal"), tone: "lilac" },
+          { n: data.paymentsVerifiedStores.toLocaleString(), label: "with payment data", abs: null, pct: null, tone: "outline" },
+        ]),
   ];
 
   return (
@@ -367,6 +403,8 @@ export function InsightsView({
           {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
           <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
 
+          {/* Shopify payment intelligence — hidden on the WooCommerce view (its own sections below) */}
+          {platform !== "woocommerce" && (<>
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
           <Card
             title="Payment intelligence"
@@ -491,7 +529,12 @@ export function InsightsView({
               )}
             </Card>
           </div>
+          </>)}
 
+          {/* WooCommerce-native sections — store status, hosting, versions, plugins, gateways */}
+          {platform === "woocommerce" && data.woo && <WooSections woo={data.woo} />}
+
+          {platform !== "woocommerce" && (<>
           <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} />
           <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} />
           <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} />
@@ -506,6 +549,7 @@ export function InsightsView({
             country={country}
             reportHref={`/insights/shipping?country=${country}`}
           />
+          </>)}
         </div>
 
         {/* Store survival & churn — measured GOING FORWARD from our baseline, so
