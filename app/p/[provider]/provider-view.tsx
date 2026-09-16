@@ -346,13 +346,16 @@ export function ProviderView({
 
         {/* Recent switches involving this provider — leads with WHAT changed; Paystack keeps
             the Onsite vs redirect distinction, Stitch keeps Stitch vs WigWag. */}
-        {switches.length > 0 && (
+        {(
           <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
             <div className="mb-1 flex items-baseline justify-between">
               <h3 className="text-lg font-semibold text-cream">Recent switches</h3>
               <span className="text-xs text-cream/40">latest stores adding or dropping {d.provider}</span>
             </div>
             <p className="mb-4 text-sm text-cream/45">Most recent gateway changes involving {d.provider}{subReport ? " — split by product where relevant" : ""}.</p>
+            {switches.length === 0 && (
+              <p className="mb-2 text-sm text-cream/40">No switches logged yet — these appear as stores are re-probed on the 60-day cycle. Open the full log to search by date across all history.</p>
+            )}
             <ul className="divide-y divide-cream/[0.06]">
               {switches.slice(0, 12).map((s, i) => {
                 const swap = s.added.length === 1 && s.removed.length === 1;
