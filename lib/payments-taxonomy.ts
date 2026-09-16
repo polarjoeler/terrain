@@ -13,7 +13,7 @@ export type PayType = "PSP" | "BNPL" | "APM";
 const TYPE: Record<string, PayType> = {
   // PSP — gateways/acquirers
   PayFast: "PSP", Yoco: "PSP", "Peach Payments": "PSP", PayGate: "PSP",
-  Stripe: "PSP", Adyen: "PSP", Paystack: "PSP", "Paystack Onsite": "PSP",
+  Stripe: "PSP", Adyen: "PSP", Paystack: "PSP",
   Flutterwave: "PSP", PayPal: "PSP", PayU: "PSP", Stitch: "PSP", iKhokha: "PSP",
   "Shopify Payments": "PSP", Pesapal: "PSP", DPO: "PSP", IntaSend: "PSP",
   OPay: "PSP", Nomba: "PSP", Paga: "PSP", Interswitch: "PSP", "Adumo Online": "PSP",
@@ -58,6 +58,9 @@ const ALIASES: Record<string, string> = Object.fromEntries(
   Object.entries({
     "Shopify Payments": ["shopify_payments"],
     Stitch: ["wigwag-app", "wigwag"],
+    // Paystack's new on-page checkout merges into Paystack for the market view; the Paystack
+    // provider page keeps them split via PROVIDER_SUBBRANDS below.
+    Paystack: ["paystack onsite"],
     "Apple Pay": ["applepay"],
     "Google Pay": ["googlepay"],
     IntaSend: ["intasend payments", "intasend payment gateway"],
@@ -190,3 +193,18 @@ export function providerVariants(provider: string): string[] {
   for (const [raw, c] of Object.entries(ALIASES)) if (c === canon) out.add(raw);
   return [...out];
 }
+
+// Sub-brands split apart ONLY on a provider's OWN page (merged into the parent everywhere else).
+// Each entry tests a store's raw payments string (lowercased). Order = display order; the
+// redirect/parent variant excludes the more-specific one so a store isn't double-labelled.
+export const PROVIDER_SUBBRANDS: Record<string, { label: string; test: (raw: string) => boolean }[]> = {
+  Paystack: [
+    { label: "Paystack Onsite", test: (r) => /paystack onsite/.test(r) },
+    { label: "Paystack (redirect)", test: (r) => /paystack/.test(r) && !/paystack onsite/.test(r) },
+  ],
+  Stitch: [
+    { label: "WigWag", test: (r) => /wigwag/.test(r) },
+    { label: "Stitch", test: (r) => /\bstitch\b/.test(r) && !/wigwag/.test(r) },
+  ],
+};
+export function hasSubBrands(provider: string): boolean { return provider in PROVIDER_SUBBRANDS; }

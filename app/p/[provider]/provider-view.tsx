@@ -5,7 +5,7 @@ import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
-import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport } from "@/lib/provider-insights";
 import { GrowthChart } from "@/app/components/growth-chart";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
@@ -218,7 +218,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country, logo,
+  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -228,6 +228,7 @@ export function ProviderView({
   countries: string[];
   country: string;
   logo: string | null;
+  subReport?: ProviderSubReport | null;
 }) {
   const [copied, setCopied] = useState(false);
   const linkFor = (c: string) => {
@@ -316,6 +317,30 @@ export function ProviderView({
           {/* Retroactive merchant growth for this provider — launches per period + churn */}
           <GrowthChart provider={d.provider} country={country || undefined} title={`${d.provider} merchant growth`} />
         </div>
+
+        {/* Sub-brand breakdown — only for providers with distinct products (Paystack Onsite vs
+            redirect; Stitch vs WigWag). Merged into the parent everywhere else. */}
+        {subReport && subReport.subs.some((s) => s.count > 0) && (
+          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+            <div className="mb-1 flex items-baseline justify-between">
+              <h3 className="text-lg font-semibold text-cream">Product breakdown</h3>
+              <span className="text-xs text-cream/40">{subReport.total.toLocaleString()} merchants on {d.provider}</span>
+            </div>
+            <p className="mb-4 text-sm text-cream/45">How {d.provider}&rsquo;s merchants split across its products (a store can use more than one).</p>
+            <div className="space-y-3">
+              {subReport.subs.map((s) => (
+                <div key={s.label} className="flex items-center gap-3">
+                  <div className="w-40 shrink-0 truncate text-sm text-cream/80">{s.label}</div>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-cream/10">
+                    <div className="h-full rounded-full bg-cyan/70" style={{ width: `${Math.max(2, s.pct)}%` }} />
+                  </div>
+                  <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream/70">{s.pct}%</div>
+                  <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{s.count.toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* position in the checkout stack */}
         <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">

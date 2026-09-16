@@ -3,7 +3,7 @@ import path from "node:path";
 import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
-import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
+import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { matchesProviderSlug, providerSlug, slugToTitle } from "@/lib/provider-slug";
 import { ProviderView } from "./provider-view";
@@ -55,9 +55,10 @@ export default async function ProviderPage({
   const countries = await providerCountries(canonical).catch((): string[] => []);
   const country = countryParam && countries.includes(countryParam.toUpperCase()) ? countryParam.toUpperCase() : undefined;
 
-  const [data, history] = await Promise.all([
+  const [data, history, subReport] = await Promise.all([
     providerInsights(canonical, country),
     providerHistory(canonical, country ?? "ALL"),
+    providerSubReport(canonical, country),   // Paystack → Onsite/redirect, Stitch → Stitch/WigWag
   ]);
   // Share-of-new-stores series at each granularity, so the chart's Day/Week/Month/
   // Quarter/Year toggle is instant (no re-fetch).
@@ -72,5 +73,5 @@ export default async function ProviderPage({
   const logo = providerLogo(providerSlug(canonical));
 
   return <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
-    countries={countries} country={country ?? ""} logo={logo} />;
+    countries={countries} country={country ?? ""} logo={logo} subReport={subReport} />;
 }

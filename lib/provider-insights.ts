@@ -11,7 +11,33 @@
 
 import postgres from "postgres";
 import type { InsightItem } from "./insights";
-import { classify, cleanPayments, canonicalProvider, providerVariants, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { classify, cleanPayments, canonicalProvider, providerVariants, PROVIDER_SUBBRANDS, PAY_TYPES, type PayType } from "./payments-taxonomy";
+
+export type ProviderSubReport = { total: number; subs: { label: string; count: number; pct: number }[] };
+
+/** Split a provider into its sub-brands (Paystack → Onsite vs redirect; Stitch → Stitch vs
+ *  WigWag) for the provider's OWN page. Merged everywhere else. null if the provider has none. */
+export async function providerSubReport(canonical: string, country?: string): Promise<ProviderSubReport | null> {
+  const subs = PROVIDER_SUBBRANDS[canonical];
+  if (!subs) return null;
+  const sql = db();
+  const variants = providerVariants(canonical);
+  const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{ payments: string }[]>`
+    SELECT payments FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry}
+      AND payments IS NOT NULL AND payments <> ''
+      AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))
+  `.catch(() => []);
+  const counts = subs.map((s) => ({ label: s.label, count: 0, pct: 0 }));
+  for (const r of rows) {
+    const raw = (r.payments || "").toLowerCase();
+    subs.forEach((s, i) => { if (s.test(raw)) counts[i].count++; });
+  }
+  const total = rows.length;
+  for (const c of counts) c.pct = total ? Math.round((100 * c.count) / total) : 0;
+  return { total, subs: counts };
+}
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
