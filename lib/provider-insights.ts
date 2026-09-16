@@ -640,3 +640,37 @@ export async function providerSwitches(canonical: string, country?: string, limi
     }))
     .filter((s) => s.added.length > 0 || s.removed.length > 0);
 }
+
+/** The FULL switches log — every change event (not just the latest per store), filterable by
+ *  provider, country and date range. Powers the expandable /insights/switches report. When a
+ *  provider is given, its tokens keep the sub-brand label (Paystack Onsite vs redirect). */
+export async function switchesLog(opts: {
+  provider?: string; country?: string; from?: string; to?: string; limit?: number;
+}): Promise<PaymentShift[]> {
+  const sql = db();
+  const { provider, country, from, to, limit = 500 } = opts;
+  const canonical = provider ? (canonicalProvider(provider) || provider) : null;
+  const variants = canonical ? providerVariants(canonical) : null;
+  const AND_C = country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``;
+  const AND_FROM = from ? sql`AND pc.changed_at >= ${from}::date` : sql``;
+  const AND_TO = to ? sql`AND pc.changed_at < (${to}::date + interval '1 day')` : sql``;
+  const AND_PROV = variants
+    ? sql`AND (EXISTS (SELECT 1 FROM unnest(pc.added) a WHERE lower(btrim(a)) = ANY(${variants}::text[]))
+              OR EXISTS (SELECT 1 FROM unnest(pc.removed) x WHERE lower(btrim(x)) = ANY(${variants}::text[])))`
+    : sql``;
+  const rows = await sql<{ domain: string; changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
+    SELECT pc.domain, pc.changed_at, pc.added, pc.removed
+    FROM payment_changes pc JOIN imported_stores i ON i.domain = pc.domain
+    WHERE (COALESCE(array_length(pc.added, 1), 0) > 0 OR COALESCE(array_length(pc.removed, 1), 0) > 0)
+      ${AND_C} ${AND_FROM} ${AND_TO} ${AND_PROV}
+    ORDER BY pc.changed_at DESC LIMIT ${limit}`.catch(() => []);
+  return rows
+    .map((r) => ({
+      domain: r.domain,
+      changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
+      added: canonical ? labelShiftTokens(cleanShiftTokens(r.added), canonical) : cleanShiftTokens(r.added).map((t) => canonicalProvider(t) || t),
+      removed: canonical ? labelShiftTokens(cleanShiftTokens(r.removed), canonical) : cleanShiftTokens(r.removed).map((t) => canonicalProvider(t) || t),
+      oldPrimary: null, newPrimary: null, reordered: false,
+    }))
+    .filter((s) => s.added.length > 0 || s.removed.length > 0);
+}

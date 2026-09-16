@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
@@ -379,6 +380,12 @@ export function ProviderView({
                 );
               })}
             </ul>
+            <Link
+              href={`/insights/switches?provider=${encodeURIComponent(d.provider)}${country ? `&country=${country}` : ""}`}
+              className="mt-4 inline-block text-sm font-medium text-cyan hover:underline"
+            >
+              See the full switch log + filter by date →
+            </Link>
           </div>
         )}
 
