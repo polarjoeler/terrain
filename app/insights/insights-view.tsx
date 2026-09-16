@@ -467,25 +467,33 @@ export function InsightsView({
               reportHref={`/insights/payments?country=${country}`}
             >
               {momentum.length ? (
-                <ul className="divide-y divide-cream/[0.06]">
-                  {momentum.slice(0, 8).map((m) => (
-                    <li key={m.provider} className="flex items-center justify-between gap-2 py-1.5 text-sm">
-                      <Link href={drillHref("payment", m.provider, country)} className="truncate text-cream/80 hover:text-cream hover:underline">{m.provider}</Link>
-                      <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
-                        <span className="text-cream/45" title="share of new stores this period">{m.share}%</span>
-                        <span
-                          className={`w-12 text-right ${m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/30"}`}
-                          title="change in new-store share vs the previous period"
-                        >
-                          {m.shareDelta > 0 ? "+" : ""}{m.shareDelta}pt
-                        </span>
-                        <span className="w-16 text-right text-cream/35" title="new stores on this PSP this period (vs last)">
-                          {m.total}{m.totalDelta !== 0 && <span className={m.totalDelta > 0 ? "text-mint/70" : "text-orange/70"}> {m.totalDelta > 0 ? "+" : ""}{m.totalDelta}</span>}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                <div>
+                  {/* labelled columns so the numbers read without hovering */}
+                  <div className="mb-2 flex items-center gap-3 border-b border-cream/10 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-cream/35">
+                    <span className="flex-1">Provider</span>
+                    <span className="w-14 text-right">Share</span>
+                    <span className="w-16 text-right">Δ share</span>
+                    <span className="w-12 text-right">New</span>
+                  </div>
+                  <ul className="space-y-2.5">
+                    {momentum.slice(0, 8).map((m) => (
+                      <li key={m.provider}>
+                        <div className="flex items-center gap-3 text-sm">
+                          <Link href={drillHref("payment", m.provider, country)} className="flex-1 truncate text-cream/85 hover:text-cream hover:underline">{m.provider}</Link>
+                          <span className="w-14 text-right tabular-nums text-cream/70">{m.share}%</span>
+                          <span className={`w-16 text-right text-xs tabular-nums ${m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/25"}`}>
+                            {m.shareDelta > 0 ? "▲" : m.shareDelta < 0 ? "▼" : "·"} {m.shareDelta > 0 ? "+" : ""}{m.shareDelta}pt
+                          </span>
+                          <span className="w-12 text-right text-xs tabular-nums text-cream/50">{m.total}{m.totalDelta !== 0 && <span className={m.totalDelta > 0 ? "text-mint/70" : "text-orange/70"}> {m.totalDelta > 0 ? "+" : ""}{m.totalDelta}</span>}</span>
+                        </div>
+                        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                          <div className="h-full rounded-full bg-cyan/50" style={{ width: `${Math.max(2, Math.min(100, m.share))}%` }} />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 text-[11px] text-cream/35">Share of newly-discovered stores choosing each gateway, and how that share moved vs the previous period.</p>
+                </div>
               ) : (
                 <p className="text-sm text-cream/40">Not enough newly-discovered, payment-verified stores yet — builds as vetting reaches new finds.</p>
               )}
@@ -496,13 +504,9 @@ export function InsightsView({
                   {shifts.slice(0, 8).map((s, i) => {
                     const swap = s.added.length === 1 && s.removed.length === 1; // clean A→B switch
                     return (
-                      <li key={i} className="py-2.5">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer"
-                            className="truncate font-mono text-xs text-cream/55 hover:text-cream hover:underline">{s.domain}</a>
-                          <span className="shrink-0 text-[11px] tabular-nums text-cream/30">{s.changedAt}</span>
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm">
+                      <li key={i} className="py-3">
+                        {/* Lead with WHAT CHANGED — that's the signal; domain + date are metadata. */}
+                        <div className="flex flex-wrap items-center gap-1.5 text-sm">
                           {swap ? (
                             <>
                               <Link href={drillHref("payment", s.removed[0], country)} className="text-orange/75 line-through decoration-orange/40 hover:text-orange">{s.removed[0]}</Link>
@@ -512,13 +516,18 @@ export function InsightsView({
                           ) : (
                             <>
                               {s.added.map((a) => (
-                                <Link key={`a${a}`} href={drillHref("payment", a, country)} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint hover:bg-mint/25">added {a}</Link>
+                                <Link key={`a${a}`} href={drillHref("payment", a, country)} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint hover:bg-mint/25">+ {a}</Link>
                               ))}
                               {s.removed.map((r) => (
-                                <Link key={`r${r}`} href={drillHref("payment", r, country)} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange hover:bg-orange/25">dropped {r}</Link>
+                                <Link key={`r${r}`} href={drillHref("payment", r, country)} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange hover:bg-orange/25">− {r}</Link>
                               ))}
                             </>
                           )}
+                        </div>
+                        <div className="mt-1 flex items-baseline justify-between gap-2 text-[11px] text-cream/35">
+                          <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer"
+                            className="truncate font-mono hover:text-cream hover:underline">{s.domain}</a>
+                          <span className="shrink-0 tabular-nums">{s.changedAt}</span>
                         </div>
                       </li>
                     );
