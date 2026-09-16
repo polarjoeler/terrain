@@ -595,3 +595,48 @@ export async function paymentShifts(periodDays: number | null = null, country?: 
     }))
     .filter((s) => s.added.length > 0 || s.removed.length > 0);
 }
+
+// Label a switch's raw tokens: THIS provider's tokens get their sub-brand name (Paystack Onsite
+// vs Paystack redirect; Stitch vs WigWag); everything else is canonicalised normally.
+function labelShiftTokens(tokens: string[], canonical: string): string[] {
+  const subs = PROVIDER_SUBBRANDS[canonical];
+  const out: string[] = [];
+  for (const t of tokens) {
+    const low = t.toLowerCase();
+    let label: string;
+    if (subs && (canonicalProvider(t) === canonical)) {
+      label = subs.find((s) => s.test(low))?.label ?? canonical;
+    } else {
+      label = canonicalProvider(t) || t.trim();
+    }
+    if (label && !out.includes(label)) out.push(label);
+  }
+  return out;
+}
+
+/** Recent switches that involve THIS provider (added or dropped), for its own page. Keeps the
+ *  sub-brand distinction (Paystack Onsite vs Paystack). */
+export async function providerSwitches(canonical: string, country?: string, limit = 12): Promise<PaymentShift[]> {
+  const sql = db();
+  const variants = providerVariants(canonical);
+  const AND_C = country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``;
+  const rows = await sql<{ domain: string; changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
+    SELECT domain, changed_at, added, removed FROM (
+      SELECT DISTINCT ON (pc.domain) pc.domain, pc.changed_at, pc.added, pc.removed
+      FROM payment_changes pc JOIN imported_stores i ON i.domain = pc.domain
+      WHERE (
+        EXISTS (SELECT 1 FROM unnest(pc.added) a   WHERE lower(btrim(a)) = ANY(${variants}::text[]))
+        OR EXISTS (SELECT 1 FROM unnest(pc.removed) x WHERE lower(btrim(x)) = ANY(${variants}::text[]))
+      ) ${AND_C}
+      ORDER BY pc.domain, pc.changed_at DESC
+    ) latest ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
+  return rows
+    .map((r) => ({
+      domain: r.domain,
+      changedAt: new Date(r.changed_at).toISOString().slice(0, 10),
+      added: labelShiftTokens(cleanShiftTokens(r.added), canonical),
+      removed: labelShiftTokens(cleanShiftTokens(r.removed), canonical),
+      oldPrimary: null, newPrimary: null, reordered: false,
+    }))
+    .filter((s) => s.added.length > 0 || s.removed.length > 0);
+}

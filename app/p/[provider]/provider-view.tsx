@@ -5,7 +5,7 @@ import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
-import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
 import { GrowthChart } from "@/app/components/growth-chart";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
@@ -218,7 +218,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport,
+  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [],
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -229,6 +229,7 @@ export function ProviderView({
   country: string;
   logo: string | null;
   subReport?: ProviderSubReport | null;
+  switches?: PaymentShift[];
 }) {
   const [copied, setCopied] = useState(false);
   const linkFor = (c: string) => {
@@ -339,6 +340,45 @@ export function ProviderView({
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Recent switches involving this provider — leads with WHAT changed; Paystack keeps
+            the Onsite vs redirect distinction, Stitch keeps Stitch vs WigWag. */}
+        {switches.length > 0 && (
+          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+            <div className="mb-1 flex items-baseline justify-between">
+              <h3 className="text-lg font-semibold text-cream">Recent switches</h3>
+              <span className="text-xs text-cream/40">latest stores adding or dropping {d.provider}</span>
+            </div>
+            <p className="mb-4 text-sm text-cream/45">Most recent gateway changes involving {d.provider}{subReport ? " — split by product where relevant" : ""}.</p>
+            <ul className="divide-y divide-cream/[0.06]">
+              {switches.slice(0, 12).map((s, i) => {
+                const swap = s.added.length === 1 && s.removed.length === 1;
+                return (
+                  <li key={i} className="py-3">
+                    <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                      {swap ? (
+                        <>
+                          <span className="text-orange/75 line-through decoration-orange/40">{s.removed[0]}</span>
+                          <span className="text-cream/30">→</span>
+                          <span className="font-semibold text-mint">{s.added[0]}</span>
+                        </>
+                      ) : (
+                        <>
+                          {s.added.map((a) => <span key={`a${a}`} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint">+ {a}</span>)}
+                          {s.removed.map((r) => <span key={`r${r}`} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange">− {r}</span>)}
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between gap-2 text-[11px] text-cream/35">
+                      <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="truncate font-mono hover:text-cream hover:underline">{s.domain}</a>
+                      <span className="shrink-0 tabular-nums">{s.changedAt}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
 
