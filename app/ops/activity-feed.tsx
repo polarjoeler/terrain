@@ -40,7 +40,7 @@ export function ActivityFeed() {
       }
     };
     poll();
-    const id = setInterval(poll, 3000);
+    const id = setInterval(poll, 6000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 

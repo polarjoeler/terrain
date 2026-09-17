@@ -93,6 +93,15 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS first_verified_live_at TIME
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS last_alive_at TIMESTAMPTZ;
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
+-- Analytics indexes — Insights/Ops filter the LIVE universe (country+platform+live_status) and
+-- recency on the checked_at/launched/created timestamps. Without these the pages full-scan 100k+
+-- rows per query and time out under worker write-load. (Added live 2026-09; kept here to persist.)
+CREATE INDEX IF NOT EXISTS idx_is_live_universe    ON imported_stores (country, platform, live_status) WHERE published;
+CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_checked_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_is_catalog_checked  ON imported_stores (catalog_checked_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_is_payments_checked ON imported_stores (payments_checked_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_is_launched         ON imported_stores (launched_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_is_created          ON imported_stores (created_at DESC NULLS LAST);
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.
