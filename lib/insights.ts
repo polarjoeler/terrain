@@ -25,9 +25,29 @@ export type InsightsData = {
   date: string;
   storesTotal: number;
   newThisWeek: number;
-  // Organic stores discovered within each trailing window (excludes imports) —
-  // powers the daily/weekly "increase" on the stores-tracked tile.
+  // Organic stores DISCOVERED (our coverage grew) within each trailing window — excludes bulk
+  // imports (discovered_at NULL). This is "we found them", NOT "they're new to the market".
   discoveredByPeriod: { day: number; week: number; month: number; quarter: number; year: number };
+  // Stores that genuinely LAUNCHED in each trailing window — keyed on real launch date
+  // (first product / launched_at), independent of when we discovered them. This is the true
+  // market-growth signal: brand-new businesses, not cert-renewal discovery floods.
+  launchedByPeriod: { day: number; week: number; month: number; quarter: number; year: number };
+  // Stores that actually CHURNED in each trailing window — real churn events from churn_log
+  // (by died_at, excluding undatable die-off). The true market-loss signal.
+  churnedByPeriod: { day: number; week: number; month: number; quarter: number; year: number };
+  // TRACK A — OUR COVERAGE (platform progress, not market movement). How complete + fresh our
+  // dataset is for the selected platform. Trends up as we enrich; shown in its own panel so
+  // "we verified a backlog store is dead" never looks like "the market lost a store this week".
+  coverage: {
+    tracked: number;       // all published stores for this platform (incl dead/migrated)
+    live: number;          // verified live (not dead/migrated)
+    dead: number;
+    migrated: number;
+    neverChecked: number;  // no liveness verdict yet
+    checked30d: number;    // liveness-verified within 30 days (scan freshness)
+    paymentPct: number;    // % of LIVE stores with payment data
+    launchPct: number;     // % of tracked stores with a known launch date
+  };
   plusTotal: number;
   plusNewThisWeek: number;
   paymentsVerifiedStores: number;
@@ -235,7 +255,21 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 7)::int    AS disc_week,
       COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 30)::int   AS disc_month,
       COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 91)::int   AS disc_quarter,
-      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 365)::int  AS disc_year
+      COUNT(*) FILTER (WHERE live AND discovered_at >= CURRENT_DATE - 365)::int  AS disc_year,
+      -- Real market births: stores whose LAUNCH date (first product / launched_at) falls in the
+      -- window, independent of when we discovered them.
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 1)::int      AS launched_day,
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 7)::int      AS launched_week,
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 30)::int     AS launched_month,
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 91)::int     AS launched_quarter,
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 365)::int    AS launched_year,
+      -- Track A (OUR COVERAGE): dataset completeness/freshness for this platform. The za flag =
+      -- every published store for the platform (incl dead/migrated); these gauge how mature our
+      -- data is, kept separate from market movement so dataset catch-up never reads as churn.
+      COUNT(*) FILTER (WHERE za AND live_status = 'migrated')::int               AS cov_migrated,
+      COUNT(*) FILTER (WHERE za AND live_checked_at IS NULL)::int                AS cov_never_checked,
+      COUNT(*) FILTER (WHERE za AND live_checked_at > now() - interval '30 days')::int AS cov_checked_30d,
+      COUNT(*) FILTER (WHERE za AND launch_date IS NOT NULL)::int                AS cov_has_launch
     FROM (
       SELECT *,
         (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
@@ -244,9 +278,30 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
         -- Use discovered_at (set only by the CT discovery feed), NOT created_at:
         -- created_at also fires on bulk imports, so a backfill of old stores would
         -- spike this misleadingly. Imports have discovered_at NULL → excluded.
-        (discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7) AS fresh
+        (discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7) AS fresh,
+        -- Real launch date: earliest product timestamp, else the recorded launched_at.
+        COALESCE(
+          (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+          launched_at
+        ) AS launch_date
       FROM imported_stores
     ) s`;
+
+  // Real churn per window — timed by the market's clock: died_at (our last-confirmed-live
+  // estimate of when the store actually died), NOT churned_at (when we happened to detect it).
+  // died_at IS NULL = undatable die-off (never confirmed live, or died before we tracked it) →
+  // excluded, so a one-off backlog sweep can't dump years of old deaths into "this week".
+  // churn_log has no platform column, so this is the country's market churn regardless of toggle.
+  const [ch] = await sql`
+    SELECT
+      count(*) FILTER (WHERE died_at >= CURRENT_DATE - 1)::int   AS day,
+      count(*) FILTER (WHERE died_at >= CURRENT_DATE - 7)::int   AS week,
+      count(*) FILTER (WHERE died_at >= CURRENT_DATE - 30)::int  AS month,
+      count(*) FILTER (WHERE died_at >= CURRENT_DATE - 91)::int  AS quarter,
+      count(*) FILTER (WHERE died_at >= CURRENT_DATE - 365)::int AS year
+    FROM churn_log
+    WHERE COALESCE(historic, false) = false AND died_at IS NOT NULL
+      AND UPPER(country) = ${country.toUpperCase()}`;
 
   const storesTotal = Number(t.stores_total);
   const themesKnown = Number(t.themes_known);
@@ -395,6 +450,24 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     discoveredByPeriod: {
       day: Number(t.disc_day), week: Number(t.disc_week), month: Number(t.disc_month),
       quarter: Number(t.disc_quarter), year: Number(t.disc_year),
+    },
+    launchedByPeriod: {
+      day: Number(t.launched_day), week: Number(t.launched_week), month: Number(t.launched_month),
+      quarter: Number(t.launched_quarter), year: Number(t.launched_year),
+    },
+    churnedByPeriod: {
+      day: Number(ch.day), week: Number(ch.week), month: Number(ch.month),
+      quarter: Number(ch.quarter), year: Number(ch.year),
+    },
+    coverage: {
+      tracked: Number(t.churn_total),
+      live: storesTotal,
+      dead: Number(t.churn_dead),
+      migrated: Number(t.cov_migrated),
+      neverChecked: Number(t.cov_never_checked),
+      checked30d: Number(t.cov_checked_30d),
+      paymentPct: pct(verified, storesTotal),
+      launchPct: pct(Number(t.cov_has_launch), Number(t.churn_total)),
     },
     plusTotal: Number(t.plus_total),
     plusNewThisWeek: Number(t.plus_new_week),

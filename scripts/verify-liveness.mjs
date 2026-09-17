@@ -118,6 +118,14 @@ async function classify(domain) {
         return { reachable: true, shopify: true, platform: "Shopify" };
     } catch { /* not json — fall through to homepage */ }
   }
+  // Shopify returns 402 Payment Required when a store is FROZEN for an unpaid Shopify bill: it's
+  // commercially churned (not accepting orders) even though its homepage usually still serves
+  // Shopify markers — which would otherwise read as "active" and hide the churn. Treat it as a
+  // non-live miss so the 2-miss rule churns it out. Self-correcting: if the merchant pays up, the
+  // next sweep sees products.json 200 → active again. (This is the bulk of the `no_variant` tail:
+  // the checkout probe couldn't cart a product precisely because the store is frozen.)
+  if (pj && pj.status === 402)
+    return { reachable: false, shopify: false, platform: null, frozen: true };
   // Otherwise decide via the homepage.
   const home = await get(`https://${domain}`);
   if (!home) {
@@ -128,6 +136,10 @@ async function classify(domain) {
       return { reachable: true, shopify: true, platform: "Shopify" };
     return { reachable: false, shopify: false, platform: null }; // resolves but HTTP-throttled
   }
+  // A homepage that 404s/410s is gone — route to the dead path (still 2-miss protected), not the
+  // ambiguous "reachable but unknown platform" path (which we now keep active to avoid false churn).
+  if (home.status === 404 || home.status === 410)
+    return { reachable: false, shopify: false, platform: null };
   let html = "";
   try { html = await home.text(); } catch { html = ""; }
   const headerBlob = [...home.headers.entries()].map(([k, v]) => `${k}:${v}`).join(" ");
@@ -136,16 +148,26 @@ async function classify(domain) {
   return { reachable: true, shopify: false, platform };
 }
 
-function nextStatus(old, miss, { reachable, shopify, dnsDead }) {
+function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }) {
   // A single bad check is not churn. A store can throw one timeout, one DNS blip, a
   // Cloudflare/WAF interstitial, or a maintenance page and still be perfectly alive — so
-  // BOTH terminal states now require DEAD_AFTER/MIGRATE_AFTER consecutive confirming misses
-  // before we log churn. Any healthy (reachable + Shopify) check resets the counter. The old
-  // code flipped "migrated" on the very first non-Shopify response (miss reset to 0), which
-  // logged ~2,300 false "migrated → unknown" churns and pulled those live stores out of the base.
+  // the reachable/migrated terminal states require DEAD_AFTER/MIGRATE_AFTER consecutive
+  // confirming misses before we log churn. Any healthy (reachable + Shopify) check resets the
+  // counter. The old code flipped "migrated" on the very first non-Shopify response (miss reset
+  // to 0), which logged ~2,300 false "migrated → unknown" churns and pulled live stores out.
   if (shopify) return { status: "active", miss: 0 };                       // healthy → reset
+  // EXCEPTION: a 402 "frozen" is Shopify itself suspending the store for a non-payment — a
+  // definitive commercial-churn signal, not a transient blip — so it flips on first confirmation.
+  // Self-correcting: if the merchant pays up, the next sweep sees products.json 200 → active.
+  if (frozen) return { status: "dead", miss: miss + 1 };
   if (dnsDead || !reachable) return { status: miss + 1 >= DEAD_AFTER ? "dead" : (old || "active"), miss: miss + 1 };
-  return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
+  // Reachable but not Shopify. Only call it a MIGRATION when we POSITIVELY identified the new
+  // platform (Woo/Wix/…). A reachable page with NO identifiable platform is ambiguous — most
+  // often a Cloudflare/WAF challenge or a parked/maintenance page masking a still-live Shopify
+  // store — so we must NOT churn it (that's the "migrated → unknown" false-positive that pulled
+  // ~640 live stores out of the base). Keep it active and wait for a clearer signal.
+  if (platform) return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
+  return { status: "active", miss: 0 };
 }
 
 async function main() {
@@ -155,14 +177,29 @@ async function main() {
     await sql.unsafe(readFileSync(new URL("../lib/schema.sql", import.meta.url), "utf8"));
 
     const cutoff = new Date(Date.now() - MIN_AGE_DAYS * 864e5).toISOString();
-    const rows = await sql`
-      SELECT domain, live_miss FROM imported_stores
-      WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
-        ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
-      ORDER BY estimated_monthly_sales DESC NULLS LAST
-      ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}
-    `;
-    console.log(`Verifying ${rows.length.toLocaleString()} stores (highest value first)…`);
+    // --from-file <path>: re-check exactly this domain list (one per line), ignoring the value-rank
+    // + min-age. Lets us aim a liveness pass at a specific bucket (e.g. the no_variant tail, to churn
+    // out the dead/frozen stores that are dragging down real coverage) instead of the whole base.
+    const fromFile = opt("--from-file", "");
+    let rows;
+    if (fromFile) {
+      const doms = readFileSync(fromFile, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+      rows = await sql`
+        SELECT domain, live_miss FROM imported_stores
+        WHERE domain = ANY(${doms})
+          ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
+        ORDER BY estimated_monthly_sales DESC NULLS LAST
+        ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
+      console.log(`Verifying ${rows.length.toLocaleString()} stores from ${fromFile}…`);
+    } else {
+      rows = await sql`
+        SELECT domain, live_miss FROM imported_stores
+        WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
+          ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
+        ORDER BY estimated_monthly_sales DESC NULLS LAST
+        ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
+      console.log(`Verifying ${rows.length.toLocaleString()} stores (highest value first)…`);
+    }
 
     const tally = { active: 0, migrated: 0, dead: 0 };
     let done = 0, i = 0;
@@ -179,7 +216,10 @@ async function main() {
             -- Stamp the first time we CONFIRM this store live (never overwrite it).
             -- This is the anchor that separates real churn from historic die-off.
             first_verified_live_at = CASE WHEN ${status} = 'active'
-              THEN COALESCE(first_verified_live_at, now()) ELSE first_verified_live_at END
+              THEN COALESCE(first_verified_live_at, now()) ELSE first_verified_live_at END,
+            -- Stamp the LAST time we confirm it live; on a dead/migrated check we leave it as-is,
+            -- so it holds the last-known-alive time = our death-date estimate for the churn below.
+            last_alive_at = CASE WHEN ${status} = 'active' THEN now() ELSE last_alive_at END
           WHERE domain = ${domain}`;
         // Snapshot into the churn log the moment a store is confirmed gone —
         // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
@@ -189,10 +229,13 @@ async function main() {
           await sql`
             INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
               discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus, historic)
+              shipping_providers, free_shipping, plus, historic, died_at)
             SELECT domain, name, country, ${status}, ${res.platform}, first_seen,
               discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL)
+              shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL),
+              -- Real death date estimate = last time we confirmed it live. NULL when we never
+              -- did (undatable die-off) → excluded from period churn on the market's clock.
+              last_alive_at
             FROM imported_stores WHERE domain = ${domain}
             ON CONFLICT (domain) DO NOTHING`;
         }

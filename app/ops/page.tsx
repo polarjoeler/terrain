@@ -3,6 +3,7 @@ import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { opsStatus, type Heartbeat } from "@/lib/ops";
 import { AutoRefresh } from "./auto-refresh";
+import { ActivityFeed } from "./activity-feed";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Terrain — Ops" };
@@ -68,6 +69,44 @@ export default async function OpsPage() {
         <section className="mt-5 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
           <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-cream/50">Machines</h2>
           {s.machines.map((m) => <MachineRow key={m.label} h={m} />)}
+        </section>
+
+        {/* Live activity feed — watch the swarm work in real time */}
+        <ActivityFeed />
+
+        {/* Two tracks per platform — Coverage (our progress) vs Market movement (best estimate) */}
+        <section className="mt-5 space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">Coverage &amp; market · by platform</h2>
+          {s.platforms.map((pf) => (
+            <div key={pf.label} className="rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-cream">{pf.label}</span>
+                <span className="text-[11px] text-cream/40">{pf.tracked.toLocaleString()} tracked</span>
+              </div>
+              {/* Track A — our coverage */}
+              <div className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-cyan">Our coverage</div>
+              <div className="mt-1 grid grid-cols-4 gap-2">
+                {[
+                  { n: pf.live.toLocaleString(), l: "live" },
+                  { n: `${pf.scanFreshPct}%`, l: "scan ≤30d" },
+                  { n: `${pf.paymentPct}%`, l: "payments" },
+                  { n: `${pf.launchPct}%`, l: "launch date" },
+                ].map((x) => (
+                  <div key={x.l}>
+                    <div className="font-display text-xl leading-none text-cream">{x.n}</div>
+                    <div className="mt-0.5 text-[10px] uppercase tracking-wide text-cream/40">{x.l}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Track B — market movement (last 30 days, real dates) */}
+              <div className="mt-3 text-[10px] font-semibold uppercase tracking-wide text-mint">Market · last 30d</div>
+              <div className="mt-1 flex items-center gap-5">
+                <div><span className="font-display text-xl text-mint">+{pf.launched30d.toLocaleString()}</span> <span className="text-[11px] text-cream/45">launched</span></div>
+                <div><span className="font-display text-xl text-orange">−{pf.churned30d.toLocaleString()}</span> <span className="text-[11px] text-cream/45">churned{pf.label === "WooCommerce" ? " (n/a yet)" : ""}</span></div>
+                <div className="ml-auto text-[11px] text-cream/40">net {pf.launched30d - pf.churned30d >= 0 ? "+" : "−"}{Math.abs(pf.launched30d - pf.churned30d).toLocaleString()}</div>
+              </div>
+            </div>
+          ))}
         </section>
 
         {/* Key metrics */}

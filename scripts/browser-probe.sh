@@ -23,8 +23,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 echo "===== browser probe $(date '+%F %T') ====="
 PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PY" ] && "$PY" -c "import playwright" 2>/dev/null; then
-  # Target the no_variant bucket first (biggest + highest-yield via a browser).
-  ( cd "$HOME/shopify-radar" && "$PY" checkout_probe_browser.py --note no_variant --limit 250 --concurrency 3 ) \
+  # Target the no_variant bucket first (biggest + highest-yield via a browser). Rotate the 100-IP
+  # Webshare pool (one IP per store) so the JS-checkout page loads don't get a single IP blocked,
+  # and run more contexts now that the pool removes the IP bottleneck.
+  ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
+      "$PY" checkout_probe_browser.py --note no_variant --limit 1000 --concurrency 6 ) \
     || echo "!! browser probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! checkout sync failed (continuing)"
 else

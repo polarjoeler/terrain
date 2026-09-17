@@ -86,6 +86,11 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL 
 -- real (forward) churn if this is set before it — otherwise the store was dead at
 -- first contact (e.g. a bulk-imported old site) and its death is HISTORIC, not churn.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS first_verified_live_at TIMESTAMPTZ;
+-- Last time a liveness check CONFIRMED this store live. Bounds when it died: a churn's real death
+-- lies in (last_alive_at, detected]; we attribute the death to last_alive_at (the last time we
+-- KNOW it was live) — the tightest honest death-date estimate, on the MARKET's clock not ours.
+-- A store dead before we ever confirmed it live has no last_alive_at → its death is UNDATED.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS last_alive_at TIMESTAMPTZ;
 -- Rank stores by value for prioritised payment scanning / enrichment.
 CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_monthly_sales DESC NULLS LAST);
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
@@ -136,6 +141,12 @@ CREATE TABLE IF NOT EXISTS churn_log (
   historic                BOOLEAN NOT NULL DEFAULT false
 );
 ALTER TABLE churn_log ADD COLUMN IF NOT EXISTS historic BOOLEAN NOT NULL DEFAULT false;
+-- Estimated REAL death date (= the store's last_alive_at at churn time): when the market lost it,
+-- not when we detected it (churned_at). NULL = undatable die-off (never confirmed live with a
+-- timestamp) → excluded from period-churn metrics so a backlog sweep can't dump old deaths into
+-- "this week". Period churn is counted by died_at; churned_at stays as the raw detection audit.
+ALTER TABLE churn_log ADD COLUMN IF NOT EXISTS died_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_churn_log_died ON churn_log(died_at DESC);
 CREATE INDEX IF NOT EXISTS idx_churn_log_churned ON churn_log(churned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_churn_log_status  ON churn_log(status);
 CREATE INDEX IF NOT EXISTS idx_churn_log_historic ON churn_log(historic);

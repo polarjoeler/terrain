@@ -13,22 +13,85 @@ const MK = ["AO", "BW", "CI", "CM", "DZ", "EG", "ET", "GH", "KE", "LS", "LY", "M
 const CORE = ["ZA", "KE", "NG"];
 
 export type Heartbeat = { label: string; ageMins: number | null; ok: boolean; detail: string };
+// Two tracks, per platform, over the CORE markets (ZA/KE/NG):
+//   Track A (coverage) — how complete/fresh OUR dataset is (progress, always improving).
+//   Track B (market)   — real movement on the market's clock (launched by launch date, churned
+//                        by estimated death date). Kept apart so catch-up never reads as a crash.
+export type PlatformTrack = {
+  label: string;
+  tracked: number; live: number; scanFreshPct: number; paymentPct: number; launchPct: number; // A
+  launched30d: number; churned30d: number;                                                     // B
+};
 export type OpsStatus = {
   at: string;
   discovery: { today: number; yesterday: number };
   payments: { coverage: number; backlog: number; probed12h: number };
   launched: { since: number; filled12h: number };
   woo: { total: number; cohortConfirmed: number; cohortReal: number };
+  platforms: PlatformTrack[];
   machines: Heartbeat[];
 };
 
 const mins = (d: Date | null): number | null => (d ? Math.round((Date.now() - new Date(d).getTime()) / 60000) : null);
 
+// A live activity event — a store the swarm touched in the last few minutes, labelled by which
+// timestamp moved most recently. Derived from the trail the workers already write (no worker
+// changes): created_at (discovered), live_checked_at (liveness), catalog_checked_at (launch date),
+// payments_checked_at (payments). Powers the /ops live feed.
+export type ActivityAction = "discovered" | "liveness" | "launch" | "payments";
+export type ActivityEvent = {
+  domain: string; country: string; platform: string | null;
+  action: ActivityAction; detail: string; ts: string; ageSecs: number;
+};
+
+export async function recentActivity(limit = 60): Promise<ActivityEvent[]> {
+  const sql = db();
+  const G = sql`GREATEST(
+    COALESCE(live_checked_at, 'epoch'::timestamptz),
+    COALESCE(catalog_checked_at, 'epoch'::timestamptz),
+    COALESCE(payments_checked_at, 'epoch'::timestamptz),
+    COALESCE(created_at, 'epoch'::timestamptz))`;
+  const rows = await sql<{
+    domain: string; country: string; platform: string | null; payments: string | null;
+    live_status: string | null; launched_at: Date | null;
+    live_checked_at: Date | null; catalog_checked_at: Date | null;
+    payments_checked_at: Date | null; created_at: Date | null; last_at: Date;
+  }[]>`
+    SELECT domain, country, platform, payments, live_status, launched_at,
+           live_checked_at, catalog_checked_at, payments_checked_at, created_at, ${G} AS last_at
+    FROM imported_stores
+    WHERE country = ANY(${MK}) AND ${G} > now() - interval '15 minutes'
+    ORDER BY last_at DESC
+    LIMIT ${limit}`;
+  const ms = (d: Date | null) => (d ? new Date(d).getTime() : 0);
+  return rows.map((r) => {
+    const last = ms(r.last_at);
+    let action: ActivityAction, detail: string;
+    if (last === ms(r.payments_checked_at)) {
+      action = "payments";
+      detail = r.payments ? r.payments.split(";").map((x) => x.trim()).filter(Boolean).slice(0, 3).join(", ") : "no gateway found";
+    } else if (last === ms(r.catalog_checked_at)) {
+      action = "launch";
+      detail = r.launched_at ? new Date(r.launched_at).toISOString().slice(0, 10) : "checked";
+    } else if (last === ms(r.live_checked_at)) {
+      action = "liveness";
+      detail = r.live_status ?? "checked";
+    } else {
+      action = "discovered";
+      detail = r.platform ?? "new store";
+    }
+    return {
+      domain: r.domain, country: r.country, platform: r.platform,
+      action, detail, ts: new Date(last).toISOString(), ageSecs: Math.max(0, Math.round((Date.now() - last) / 1000)),
+    };
+  });
+}
+
 export async function opsStatus(): Promise<OpsStatus> {
   const sql = db();
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
 
-  const [disc, pay, launch, woo, hb] = await Promise.all([
+  const [disc, pay, launch, woo, hb, platCov, mktChurn] = await Promise.all([
     sql<{ today: number; yest: number }[]>`
       SELECT count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE)::int today,
              count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE-1)::int yest
@@ -57,6 +120,23 @@ export async function opsStatus(): Promise<OpsStatus> {
         (SELECT max(created_at) FROM imported_stores WHERE source='ct_tail')                                vps_disc,
         (SELECT max(created_at) FROM imported_stores WHERE source='woo_ct')                                 lucy_woo,
         (SELECT max(catalog_checked_at) FROM imported_stores WHERE launched_source='earliest_product')      lucy_launch`,
+    // Track A + Track B per platform, over the CORE markets.
+    sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; has_launch: number; launched30d: number }[]>`
+      SELECT
+        CASE WHEN platform='woocommerce' THEN 'WooCommerce' ELSE 'Shopify' END AS plat,
+        count(*)::int tracked,
+        count(*) FILTER (WHERE live_status IS NULL OR live_status NOT IN ('dead','migrated'))::int live,
+        count(*) FILTER (WHERE live_checked_at > now()-interval '30 days')::int checked30d,
+        count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND payments IS NOT NULL AND payments<>'')::int cov_pay,
+        count(*) FILTER (WHERE launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}-')::int has_launch,
+        count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ${LAUNCH} >= CURRENT_DATE-30)::int launched30d
+      FROM imported_stores
+      WHERE published AND country = ANY(${CORE}) AND platform IN ('Shopify','woocommerce')
+      GROUP BY 1`,
+    // Market churn (last 30d) by ESTIMATED DEATH DATE — churn_log has no platform (Shopify liveness).
+    sql<{ churned30d: number }[]>`
+      SELECT count(*) FILTER (WHERE died_at >= CURRENT_DATE-30)::int churned30d
+      FROM churn_log WHERE COALESCE(historic,false)=false AND died_at IS NOT NULL AND country = ANY(${CORE})`,
   ]);
 
   const p = pay[0]; const h = hb[0];
@@ -64,6 +144,22 @@ export async function opsStatus(): Promise<OpsStatus> {
     const a = mins(d);
     return { label, ageMins: a, ok: a != null && a <= freshMins, detail };
   };
+  const pctOf = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
+  // Build the per-platform two-track rows. All CORE-market churn is attributed to Shopify (that's
+  // what churn_log tracks); WooCommerce market churn is not measured yet, shown as 0.
+  const churn30 = Number(mktChurn[0]?.churned30d ?? 0);
+  const order = ["Shopify", "WooCommerce"];
+  const platforms: PlatformTrack[] = platCov
+    .map((r) => ({
+      label: r.plat,
+      tracked: Number(r.tracked), live: Number(r.live),
+      scanFreshPct: pctOf(Number(r.checked30d), Number(r.tracked)),
+      paymentPct: pctOf(Number(r.cov_pay), Number(r.live)),
+      launchPct: pctOf(Number(r.has_launch), Number(r.tracked)),
+      launched30d: Number(r.launched30d),
+      churned30d: r.plat === "Shopify" ? churn30 : 0,
+    }))
+    .sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
 
   return {
     at: new Date().toISOString(),
@@ -71,6 +167,7 @@ export async function opsStatus(): Promise<OpsStatus> {
     payments: { coverage: p.live ? Math.round((100 * p.haspay) / p.live) : 0, backlog: Number(p.backlog), probed12h: Number(p.probed12h) },
     launched: { since: Number(launch[0].since), filled12h: Number(launch[0].filled12h) },
     woo: { total: Number(woo[0].total), cohortConfirmed: Number(woo[0].confirmed), cohortReal: Number(woo[0].real) },
+    platforms,
     machines: [
       beat("Chad · payments", h.chad_pay, 120, "checkout probing"),
       beat("Discovery · VPS → landing", h.vps_disc, 360, "CT-log landings (4h cadence)"),

@@ -42,7 +42,9 @@ export default async function Insights({
   const cohorts = [{ tag: "new", count: newCount }, ...tags];
   // Only accept a cohort that actually has stores.
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
-  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "all" ? sp.platform : "shopify";
+  // Default view is "all" — a combined Woo + Shopify (+ future platforms) growth picture per
+  // market, as the landing state. The Shopify / WooCommerce tabs then drill into one platform.
+  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" ? sp.platform : "all";
 
   const [data, baselineDate, momentum, shifts] = await Promise.all([
     computeInsights(country, tag, platform),
@@ -53,15 +55,20 @@ export default async function Insights({
     providerMomentum(country, "week").catch(() => []),
     recentPaymentShifts(40).catch(() => []),
   ]);
-  // Daily snapshots / trends are for the full ZA market only — not per-country
-  // or per-cohort (the snapshot table is single-series). MUST be the Shopify (default)
-  // view: a WooCommerce/all page view once overwrote the daily snapshot with Woo data
-  // (storesTotal 679, plus 0), showing as a fake drop in the Plus trend.
+  // Daily snapshots / trends are a single Shopify-only ZA series (the snapshot table is
+  // single-series): a WooCommerce/all page view once overwrote it with Woo data (storesTotal
+  // 679, plus 0), a fake Plus-trend drop. So we ALWAYS snapshot the Shopify computation on the
+  // ZA no-tag view — computing it explicitly when the view itself is all/Woo — and only hydrate
+  // comparison history for the matching Shopify view (all/Woo show live figures without period
+  // deltas, since a cross-platform delta vs a Shopify baseline would be apples-to-oranges).
   let history = [data];
-  if (country === "ZA" && !tag && platform === "shopify") {
-    await snapshotInsights(data).catch(() => {});
-    const h = await insightsHistory().catch(() => [data]);
-    if (h.length) history = h;
+  if (country === "ZA" && !tag) {
+    const snapData = platform === "shopify" ? data : await computeInsights(country, undefined, "shopify").catch(() => null);
+    if (snapData) await snapshotInsights(snapData).catch(() => {});
+    if (platform === "shopify") {
+      const h = await insightsHistory().catch(() => [data]);
+      if (h.length) history = h;
+    }
   }
 
   return (

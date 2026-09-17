@@ -18,6 +18,7 @@ const PERIOD_KEY: Record<Period, "day" | "week" | "month" | "quarter" | "year"> 
   { Day: "day", Week: "week", Month: "month", Quarter: "quarter", Year: "year" };
 const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
 const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
+const PERIOD_WORD: Record<Period, string> = { Day: "today", Week: "this week", Month: "this month", Quarter: "this quarter", Year: "this year" };
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
 
@@ -193,7 +194,7 @@ function WooSections({ woo }: { woo: NonNullable<InsightsData["woo"]> }) {
 
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
-  platform = "shopify", momentum = [], shifts = [],
+  platform = "all", momentum = [], shifts = [],
 }: {
   data: InsightsData;
   history: InsightsData[];
@@ -218,10 +219,15 @@ export function InsightsView({
     const qs = new URLSearchParams();
     if (c) qs.set("country", c);
     if (t) qs.set("tag", t);
-    if (pf && pf !== "shopify") qs.set("platform", pf);
+    if (pf && pf !== "all") qs.set("platform", pf);
     startTransition(() => router.push(`/insights?${qs.toString()}`));
   };
   const [period, setPeriod] = useState<Period>("Week");
+  // Report-wide custom date range. Drives the growth chart (real launch/churn over the range);
+  // the preset periods above still drive the tiles + distribution comparisons.
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+  const rangeActive = !!(rangeFrom || rangeTo);
 
   // Trends/comparisons only look back to the baseline (reset after a bulk import
   // so the batch doesn't skew growth or forward-churn).
@@ -263,22 +269,25 @@ export function InsightsView({
   const trackedBase = data.churn.active + fwdMigrated + fwdDead;
   const fwdSurvival = trackedBase > 0 ? Math.round((100 * data.churn.active) / trackedBase) : null;
 
-  const tiles = [
-    // Increase = organically DISCOVERED in the selected period (excludes bulk
-    // imports, which have no discovered_at). Live, so it shows without waiting for
-    // snapshot history — unlike the old snapshot delta, which counted imports.
-    { n: data.storesTotal.toLocaleString(), label: "stores tracked", abs: data.discoveredByPeriod[PERIOD_KEY[period]], pct: null, tone: "outline" },
-    { n: `+${data.newThisWeek}`, label: "new this week", abs: null, pct: null, tone: "mint" },
-    // WooCommerce shows real-store + hosting signals instead of Shopify Plus / payment coverage.
-    ...(platform === "woocommerce" && data.woo
-      ? [
-          { n: data.woo.statusTiers.filter((t) => ["selling", "active"].some((k) => t.label.toLowerCase().startsWith(k))).reduce((s, t) => s + t.count, 0).toLocaleString(), label: "selling / active", abs: null, pct: null, tone: "mint" },
-          { n: data.woo.hosting.length.toLocaleString(), label: "hosting providers", abs: null, pct: null, tone: "outline" },
-        ]
-      : [
-          { n: data.plusTotal.toLocaleString(), label: "Shopify Plus", ...metric("plusTotal"), tone: "lilac" },
-          { n: data.paymentsVerifiedStores.toLocaleString(), label: "with payment data", abs: null, pct: null, tone: "outline" },
-        ]),
+  const pk = PERIOD_KEY[period];
+  const pw = PERIOD_WORD[period];
+  const cov = data.coverage;
+  const covPctOf = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
+  // TRACK A — OUR COVERAGE: how complete + fresh OUR dataset is (progress, always improving).
+  const coverageTiles = [
+    { n: cov.tracked.toLocaleString(), label: "stores tracked", sub: "in our dataset" },
+    { n: cov.live.toLocaleString(), label: "verified live", sub: `${covPctOf(cov.live, cov.tracked)}% of tracked` },
+    { n: `${covPctOf(cov.checked30d, cov.tracked)}%`, label: "scan freshness", sub: "checked ≤ 30 days" },
+    { n: `${cov.paymentPct}%`, label: "payment coverage", sub: `of ${cov.live.toLocaleString()} live` },
+    { n: `${cov.launchPct}%`, label: "launch-date coverage", sub: "of tracked" },
+  ];
+  // TRACK B — MARKET MOVEMENT: real market on its own clock. Launches by launch date, churn by
+  // estimated death date (died_at); undatable backlog is excluded so it never fakes a crash.
+  const net = data.launchedByPeriod[pk] - data.churnedByPeriod[pk];
+  const marketTiles = [
+    { n: `+${data.launchedByPeriod[pk].toLocaleString()}`, label: `launched ${pw}`, tone: "mint" },
+    { n: `−${data.churnedByPeriod[pk].toLocaleString()}`, label: `churned ${pw}`, tone: "orange" },
+    { n: `${net >= 0 ? "+" : "−"}${Math.abs(net).toLocaleString()}`, label: `net ${pw}`, tone: net >= 0 ? "mint" : "orange" },
   ];
 
   return (
@@ -308,7 +317,7 @@ export function InsightsView({
               ? <>What the newest {marketAdjective(country)} stores are choosing — </>
               : tag
                 ? <>The {marketAdjective(country)} <b className="text-cream">{tagLabel(tag)}</b> — </>
-                : <>Where the {marketAdjective(country)} Shopify market is heading — </>}
+                : <>Where the {marketAdjective(country)} {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "ecommerce"} market is heading — </>}
             payment stacks, themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()}{" "}
             {tag === "new" ? "stores found in the last 90 days" : tag ? "stores in this cohort" : "live stores we track"}.
           </p>
@@ -384,24 +393,58 @@ export function InsightsView({
               {base ? `vs ${PERIOD_PREV[period]} · ${COMPARISON[period]}` : "comparisons build as daily snapshots accumulate"}
             </span>
           </div>
+          {/* Report-wide custom date range — applies to the growth chart (real launch/churn
+              over any window). A visible separator so it reads as its own control. */}
+          <div className="flex items-center gap-2 border-l border-cream/10 pl-6">
+            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Custom range</span>
+            <input type="date" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)}
+              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
+            <span className="text-cream/30">→</span>
+            <input type="date" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)}
+              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
+            {rangeActive && (
+              <button onClick={() => { setRangeFrom(""); setRangeTo(""); }}
+                className="text-xs text-cream/40 hover:text-cream">clear</button>
+            )}
+          </div>
         </div>
 
-        {/* stat tiles */}
-        <div className="mt-6 grid gap-4 md:grid-cols-4">
-          {tiles.map((s) => (
-            <div key={s.label} className={`rounded-3xl px-5 py-6 ${s.tone === "mint" ? "bg-mint text-ink" : s.tone === "lilac" ? "bg-lilac text-ink" : "border border-cream/12 text-cream"}`}>
-              <div className="font-display text-5xl leading-none">{s.n}</div>
-              <div className="mt-2 flex items-center justify-between">
-                <span className={`text-xs font-medium uppercase tracking-wide ${s.tone === "outline" ? "text-cream/45" : "opacity-70"}`}>{s.label}</span>
-                <span className="text-xs font-semibold"><TileDelta abs={s.abs} pct={s.pct} /></span>
+        {/* ── TRACK A · OUR COVERAGE — dataset progress, NOT market movement ─────────── */}
+        <div className="mt-7">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-cyan">Our coverage</h2>
+            <span className="text-xs text-cream/40">how complete &amp; fresh our dataset is — our platform&rsquo;s progress, not the market</span>
+          </div>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2 md:grid-cols-5">
+            {coverageTiles.map((s) => (
+              <div key={s.label} className="rounded-3xl border border-cream/12 px-5 py-5 text-cream">
+                <div className="font-display text-4xl leading-none">{s.n}</div>
+                <div className="mt-2 text-xs font-medium uppercase tracking-wide text-cream/45">{s.label}</div>
+                {s.sub && <div className="mt-0.5 text-[11px] text-cream/35">{s.sub}</div>}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        </div>
+
+        {/* ── TRACK B · MARKET MOVEMENT — best estimate from the stores we track ──────── */}
+        <div className="mt-8">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-mint">Market movement</h2>
+            <span className="text-xs text-cream/40">best estimate · launches by real launch date, churn by estimated death date{rangeActive ? " · custom range on chart" : ""}</span>
+          </div>
+          <div className="mt-3 grid gap-4 sm:grid-cols-3">
+            {marketTiles.map((s) => (
+              <div key={s.label} className={`rounded-3xl px-5 py-6 ${s.tone === "mint" ? "bg-mint text-ink" : s.tone === "orange" ? "bg-orange text-ink" : "border border-cream/12 text-cream"}`}>
+                <div className="font-display text-5xl leading-none">{s.n}</div>
+                <div className={`mt-2 text-xs font-medium uppercase tracking-wide ${s.tone === "outline" ? "text-cream/45" : "opacity-70"}`}>{s.label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
           {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
-          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
+          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
 
           {/* Shopify payment intelligence — hidden on the WooCommerce view (its own sections below) */}
           {platform !== "woocommerce" && (<>
@@ -460,7 +503,7 @@ export function InsightsView({
           {/* Provider momentum + live switch feed — the "internal shifts" view. Fills
               from daily snapshots (share/rank movement) and the 60-day re-probe cycle
               (per-store switches), so it deepens over time. */}
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 grid gap-5 md:grid-cols-1">
             <Card
               title="Provider momentum"
               subtitle={momentum.length ? `Which PSPs new stores are choosing — ${momentum[0].days === 1 ? "today vs yesterday" : "this week vs last week"}` : "Appears as newly-found stores are payment-verified"}

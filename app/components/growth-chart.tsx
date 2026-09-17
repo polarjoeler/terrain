@@ -15,14 +15,19 @@ const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter
  *  keyed to real launch date (first product / launched_at), not when we discovered the store —
  *  so cert-renewal discovery floods don't inflate it. Filterable by period + custom range.
  *  Fetches paid-gated /api/growth. */
-export function GrowthChart({ country, provider, platform, period: periodProp, title = "Shopify store growth" }: { country?: string; provider?: string; platform?: string; period?: string; title?: string }) {
+export function GrowthChart({ country, provider, platform, period: periodProp, from: fromProp, to: toProp, title = "Shopify store growth" }: { country?: string; provider?: string; platform?: string; period?: string; from?: string; to?: string; title?: string }) {
   // When `periodProp` is passed the parent's period control drives the chart (no duplicate
   // selector — the redundancy we're removing); standalone (provider pages) it keeps its own.
   const controlled = !!periodProp;
   const [period, setPeriod] = useState(periodProp ?? "month");
   useEffect(() => { if (periodProp) setPeriod(periodProp); }, [periodProp]);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  // Custom date range: when the parent supplies from/to (the one report-wide date filter) the
+  // chart follows it and hides its own picker; standalone it keeps its own range inputs.
+  const rangeControlled = fromProp !== undefined || toProp !== undefined;
+  const [fromState, setFrom] = useState("");
+  const [toState, setTo] = useState("");
+  const from = rangeControlled ? (fromProp ?? "") : fromState;
+  const to = rangeControlled ? (toProp ?? "") : toState;
   const [data, setData] = useState<Series | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -123,11 +128,14 @@ export function GrowthChart({ country, provider, platform, period: periodProp, t
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-cream/50">
-        <span>Range:</span>
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
-        <span>→</span>
-        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
-        {(from || to) && <button onClick={() => { setFrom(""); setTo(""); }} className="text-cream/40 hover:text-cream">clear</button>}
+        {!rangeControlled && (<>
+          <span>Range:</span>
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
+          <span>→</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
+          {(from || to) && <button onClick={() => { setFrom(""); setTo(""); }} className="text-cream/40 hover:text-cream">clear</button>}
+        </>)}
+        {rangeControlled && (from || to) && <span className="text-cream/45">Showing {from || "start"} → {to || "now"}</span>}
         <span className="ml-auto flex items-center gap-3">
           <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-cyan opacity-80" />launched</span>
           <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm bg-orange opacity-80" />churn</span>

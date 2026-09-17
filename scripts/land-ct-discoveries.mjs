@@ -73,16 +73,21 @@ async function main() {
       discovered_at: at,
       published: true,
       source: "ct_tail",
+      // ct_tail only surfaces Shopify (it tails Shopify CT certs), so the platform is known at
+      // landing. Stamping it here means fresh leads are classified the instant they land — no
+      // waiting on a probe — so insights counts + the "new this week" tile are honest immediately.
+      platform: "Shopify",
     }));
-    const cols = ["domain", "name", "country", "discovered_at", "published", "source"];
+    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform"];
     for (let i = 0; i < records.length; i += 400) {
       const batch = records.slice(i, i + 400);
-      // Insert new; for existing, only backfill discovered_at (never touch source /
-      // published / any enriched field — those belong to the record we already have).
+      // Insert new; for existing, only backfill discovered_at + platform-if-unset (never touch
+      // source / published / an already-classified platform — those belong to the record we have).
       await sql`
         INSERT INTO imported_stores ${sql(batch, ...cols)}
         ON CONFLICT (domain) DO UPDATE SET
-          discovered_at = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at)`;
+          discovered_at = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
+          platform      = COALESCE(imported_stores.platform, EXCLUDED.platform)`;
     }
 
     const overlap = seen.size - fresh.length;

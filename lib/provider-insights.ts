@@ -531,17 +531,20 @@ export async function growthSeries(opts: {
       ${to ? sql`AND ${LAUNCH} <= ${to}::date` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
 
-  // churn_log has no platform column and tracks Shopify liveness, so the Woo view has no churn.
+  // Churn plotted on the MARKET's clock: died_at (last-confirmed-live estimate of the real death),
+  // NOT churned_at (detection). died_at NULL = undatable die-off → excluded, so a backlog detection
+  // sweep never spikes a period. churn_log has no platform column (Shopify liveness), so Woo has none.
   const churned = opts.platform === "woocommerce" ? [] : await sql<{ b: string; n: number }[]>`
-    SELECT to_char(date_trunc(${period}::text, churned_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    SELECT to_char(date_trunc(${period}::text, died_at), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM churn_log
-    WHERE COALESCE(historic, false) = false ${ctry} ${prov}
-      ${from ? sql`AND churned_at >= ${from}::date` : sql``}
-      ${to ? sql`AND churned_at <= ${to}::date` : sql``}
+    WHERE COALESCE(historic, false) = false AND died_at IS NOT NULL ${ctry} ${prov}
+      ${from ? sql`AND died_at >= ${from}::date` : sql``}
+      ${to ? sql`AND died_at <= ${to}::date` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
 
   const [cf] = await sql<{ f: string | null }[]>`
-    SELECT to_char(MIN(churned_at), 'YYYY-MM-DD') f FROM churn_log WHERE COALESCE(historic, false) = false`.catch(() => [{ f: null }]);
+    SELECT to_char(MIN(died_at), 'YYYY-MM-DD') f FROM churn_log
+    WHERE COALESCE(historic, false) = false AND died_at IS NOT NULL`.catch(() => [{ f: null }]);
 
   // Current live store base — same definition as the "stores tracked" headline in insights
   // (published, live, not dead/migrated), so the two figures always match. Provider filter
