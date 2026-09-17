@@ -287,10 +287,13 @@ export function InsightsView({
   // TRACK B — MARKET MOVEMENT: real market on its own clock. Launches by launch date, churn by
   // estimated death date (died_at); undatable backlog is excluded so it never fakes a crash.
   const net = data.launchedByPeriod[pk] - data.churnedByPeriod[pk];
+  // Recent periods are still enriching (launch dates land days after discovery), so mark them
+  // incomplete rather than let "launched this week" read as a settled — and misleadingly low — number.
+  const filling = period === "Day" || period === "Week" || period === "Month";
   const marketTiles = [
-    { n: `+${data.launchedByPeriod[pk].toLocaleString()}`, label: `launched ${pw}`, tone: "mint" },
-    { n: `−${data.churnedByPeriod[pk].toLocaleString()}`, label: `churned ${pw}`, tone: "orange" },
-    { n: `${net >= 0 ? "+" : "−"}${Math.abs(net).toLocaleString()}`, label: `net ${pw}`, tone: net >= 0 ? "mint" : "orange" },
+    { n: `+${data.launchedByPeriod[pk].toLocaleString()}`, label: `launched ${pw}`, tone: "mint", sub: filling ? "so far — still dating recent stores" : undefined },
+    { n: `−${data.churnedByPeriod[pk].toLocaleString()}`, label: `churned ${pw}`, tone: "orange", sub: undefined },
+    { n: `${net >= 0 ? "+" : "−"}${Math.abs(net).toLocaleString()}`, label: `net ${pw}`, tone: net >= 0 ? "mint" : "orange", sub: undefined },
   ];
 
   return (
@@ -441,6 +444,7 @@ export function InsightsView({
               <div key={s.label} className={`rounded-3xl px-5 py-6 ${s.tone === "mint" ? "bg-mint text-ink" : s.tone === "orange" ? "bg-orange text-ink" : "border border-cream/12 text-cream"}`}>
                 <div className="font-display text-5xl leading-none">{s.n}</div>
                 <div className={`mt-2 text-xs font-medium uppercase tracking-wide ${s.tone === "outline" ? "text-cream/45" : "opacity-70"}`}>{s.label}</div>
+                {s.sub && <div className="mt-0.5 text-[10px] opacity-60">{s.sub}</div>}
               </div>
             ))}
           </div>
