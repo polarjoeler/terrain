@@ -228,6 +228,9 @@ export function InsightsView({
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const rangeActive = !!(rangeFrom || rangeTo);
+  // The payment "+N adoptions" column only shows once the user has ACTIVELY engaged the timeframe
+  // (picked a period or set a custom range) — not on the default load, where a bare "+N" is noise.
+  const [tfTouched, setTfTouched] = useState(false);
 
   // Trends/comparisons only look back to the baseline (reset after a bulk import
   // so the batch doesn't skew growth or forward-churn).
@@ -374,7 +377,7 @@ export function InsightsView({
               return (
                 <button
                   key={p}
-                  onClick={() => ok && setPeriod(p)}
+                  onClick={() => { if (ok) { setPeriod(p); setTfTouched(true); } }}
                   disabled={!ok}
                   title={ok ? `Compare vs ${PERIOD_DAYS[p]} days ago` : "Not enough history yet — builds daily"}
                   className={`rounded-full px-3.5 py-1.5 text-sm transition ${
@@ -397,10 +400,10 @@ export function InsightsView({
               over any window). A visible separator so it reads as its own control. */}
           <div className="flex items-center gap-2 border-l border-cream/10 pl-6">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Custom range</span>
-            <input type="date" value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value)}
+            <input type="date" value={rangeFrom} onChange={(e) => { setRangeFrom(e.target.value); setTfTouched(true); }}
               className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
             <span className="text-cream/30">→</span>
-            <input type="date" value={rangeTo} onChange={(e) => setRangeTo(e.target.value)}
+            <input type="date" value={rangeTo} onChange={(e) => { setRangeTo(e.target.value); setTfTouched(true); }}
               className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
             {rangeActive && (
               <button onClick={() => { setRangeFrom(""); setRangeTo(""); }}
@@ -477,7 +480,7 @@ export function InsightsView({
                         {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
                       </span>
                     </div>
-                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={data.paymentAdoptions[PERIOD_KEY[period]]} />
+                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.paymentAdoptions[PERIOD_KEY[period]] : undefined} />
                   </div>
                 ) : null,
               )}
@@ -496,7 +499,7 @@ export function InsightsView({
               </p>
             </Card>
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}`}>
-              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={data.paymentAdoptions[PERIOD_KEY[period]]} />
+              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.paymentAdoptions[PERIOD_KEY[period]] : undefined} />
             </Card>
           </div>
 
@@ -587,9 +590,14 @@ export function InsightsView({
           {platform === "woocommerce" && data.woo && <WooSections woo={data.woo} />}
 
           {platform !== "woocommerce" && (<>
+          {/* Cross-platform distributions — meaningful on the combined "all" view too. */}
           <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} />
+          {/* Themes + apps are SHOPIFY-specific (Shopify has no cross-platform equivalent), so they
+              only appear when the Shopify platform is selected — not on the combined "all" view. */}
+          {platform === "shopify" && (<>
           <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} />
           <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} />
+          </>)}
           <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}`} />
           <DistroCard
             title="Shipping providers"
