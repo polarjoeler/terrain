@@ -6,6 +6,7 @@
  */
 
 import postgres from "postgres";
+import { after } from "next/server";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS } from "./markets";
 
@@ -272,17 +273,16 @@ async function storeInsightsCache(country: string, tag: string, platform: Platfo
     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`.catch(() => {});
 }
 
-async function backgroundRefresh(country: string, tag: string, platform: PlatformSel): Promise<void> {
-  const run = async () => {
-    const data = await computeInsightsUncached(country, tag || undefined, platform).catch(() => null);
-    if (data) await storeInsightsCache(country, tag, platform, data);
-  };
+// Schedule a refresh AFTER the response is sent. Must be called SYNCHRONOUSLY during the render
+// (request scope) — deferring the after() call behind an await throws outside scope (that was
+// crashing /ops on its 60s auto-refresh). Outside a request scope (a script) we simply skip.
+function scheduleInsightsRefresh(country: string, tag: string, platform: PlatformSel): void {
   try {
-    const { after } = await import("next/server");   // schedule for after the response is sent
-    after(run);
-  } catch {
-    await run();                                      // no request context (e.g. a script) — inline
-  }
+    after(async () => {
+      const data = await computeInsightsUncached(country, tag || undefined, platform).catch(() => null);
+      if (data) await storeInsightsCache(country, tag, platform, data);
+    });
+  } catch { /* outside a request scope — skip */ }
 }
 
 /** Fast, shared Insights read. Serves the cached JSONB row when fresh; on a stale row, serves it
@@ -297,7 +297,7 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
   if (row) {
     const ageMs = Date.now() - new Date(row.computed_at).getTime();
     if (ageMs < CACHE_FRESH_MS) return row.data;                 // fresh → fast path
-    void backgroundRefresh(country, t, platform);               // stale → serve stale, refresh async
+    scheduleInsightsRefresh(country, t, platform);              // stale → serve stale, refresh in bg
     return row.data;
   }
   const data = await computeInsights(country, tag, platform);   // cold → compute live + store

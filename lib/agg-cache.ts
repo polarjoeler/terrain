@@ -7,6 +7,7 @@
  *  NOTE: values round-trip through JSONB, so Date fields come back as strings — only cache
  *  plain/JSON-safe shapes (numbers, strings, arrays, plain objects). */
 import postgres from "postgres";
+import { after } from "next/server";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -21,17 +22,16 @@ async function store(key: string, data: unknown): Promise<void> {
     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`.catch(() => {});
 }
 
-async function backgroundRefresh<T>(key: string, compute: () => Promise<T>): Promise<void> {
-  const run = async () => {
-    const data = await compute().catch(() => null);
-    if (data != null) await store(key, data);
-  };
+// Schedule a background refresh AFTER the response is sent. Must be called synchronously during the
+// render (request scope) — calling after() from a deferred microtask (post-await) throws. If we're
+// not in a request scope (e.g. a script), skip: the next read refreshes anyway.
+function scheduleRefresh<T>(key: string, compute: () => Promise<T>): void {
   try {
-    const { after } = await import("next/server"); // run after the response is sent
-    after(run);
-  } catch {
-    await run(); // no request context (script) — inline
-  }
+    after(async () => {
+      const data = await compute().catch(() => null);
+      if (data != null) await store(key, data);
+    });
+  } catch { /* outside a request scope — skip */ }
 }
 
 export async function cachedAgg<T>(key: string, freshMs: number, compute: () => Promise<T>): Promise<T> {
@@ -42,7 +42,7 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
   if (row) {
     const ageMs = Date.now() - new Date(row.computed_at).getTime();
     if (ageMs < freshMs) return row.data;          // fresh → fast
-    void backgroundRefresh(key, compute);          // stale → serve stale, refresh async
+    scheduleRefresh(key, compute);                 // stale → serve stale, refresh in background
     return row.data;
   }
   const data = await compute();                    // cold → compute + store
