@@ -115,7 +115,10 @@ async function classify(domain) {
     try {
       const j = await pj.json();
       if (Array.isArray(j.products) && j.products.length > 0)
-        return { reachable: true, shopify: true, platform: "Shopify" };
+        // `selling: true` = the ONLY genuine "confirmed live + selling" signal (a real product
+        // catalogue). Only this stamps last_alive_at, so a churn's died_at is dated to when the
+        // store was last actually SELLING — not merely when its homepage was up.
+        return { reachable: true, shopify: true, platform: "Shopify", selling: true };
     } catch { /* not json — fall through to homepage */ }
   }
   // Shopify returns 402 Payment Required when a store is FROZEN for an unpaid Shopify bill: it's
@@ -217,9 +220,10 @@ async function main() {
             -- This is the anchor that separates real churn from historic die-off.
             first_verified_live_at = CASE WHEN ${status} = 'active'
               THEN COALESCE(first_verified_live_at, now()) ELSE first_verified_live_at END,
-            -- Stamp the LAST time we confirm it live; on a dead/migrated check we leave it as-is,
-            -- so it holds the last-known-alive time = our death-date estimate for the churn below.
-            last_alive_at = CASE WHEN ${status} = 'active' THEN now() ELSE last_alive_at END
+            -- Stamp the LAST time we confirm it SELLING (products.json returned a catalogue) — not
+            -- merely homepage-up. On any other check we leave it as-is, so it holds the last-known-
+            -- selling time = our death-date estimate for the churn below (undatable when never sold).
+            last_alive_at = CASE WHEN ${res.selling === true} THEN now() ELSE last_alive_at END
           WHERE domain = ${domain}`;
         // Snapshot into the churn log the moment a store is confirmed gone —
         // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
