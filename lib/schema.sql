@@ -102,6 +102,17 @@ CREATE INDEX IF NOT EXISTS idx_is_catalog_checked  ON imported_stores (catalog_c
 CREATE INDEX IF NOT EXISTS idx_is_payments_checked ON imported_stores (payments_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_launched         ON imported_stores (launched_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_created          ON imported_stores (created_at DESC NULLS LAST);
+
+-- Shared pre-aggregation cache for the Insights pages — one JSONB row per (country,tag,platform)
+-- view, refreshed on a short cadence, so pages read a single indexed row instead of ~12 scans.
+CREATE TABLE IF NOT EXISTS insights_cache (
+  key         TEXT PRIMARY KEY,
+  country     TEXT NOT NULL,
+  tag         TEXT NOT NULL DEFAULT '',
+  platform    TEXT NOT NULL,
+  data        JSONB NOT NULL,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.

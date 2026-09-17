@@ -1,5 +1,5 @@
 import {
-  computeInsights,
+  cachedInsights,
   insightsHistory,
   snapshotInsights,
   getBaselineDate,
@@ -47,7 +47,7 @@ export default async function Insights({
   const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" ? sp.platform : "all";
 
   const [data, baselineDate, momentum, shifts] = await Promise.all([
-    computeInsights(country, tag, platform),
+    cachedInsights(country, tag, platform),
     getBaselineDate(),
     // Scope momentum to the SAME market as the rest of the page. Discovery-neutral,
     // week-over-week among newly-discovered stores (not snapshot counts, which the
@@ -63,7 +63,7 @@ export default async function Insights({
   // deltas, since a cross-platform delta vs a Shopify baseline would be apples-to-oranges).
   let history = [data];
   if (country === "ZA" && !tag) {
-    const snapData = platform === "shopify" ? data : await computeInsights(country, undefined, "shopify").catch(() => null);
+    const snapData = platform === "shopify" ? data : await cachedInsights(country, undefined, "shopify").catch(() => null);
     if (snapData) await snapshotInsights(snapData).catch(() => {});
     if (platform === "shopify") {
       const h = await insightsHistory().catch(() => [data]);

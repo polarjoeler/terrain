@@ -256,6 +256,72 @@ export async function computeInsights(country = "ZA", tag?: string, platform: Pl
   return inflight;
 }
 
+/* ---------------------------------------------------------------------------------------------
+ * SHARED DB-BACKED CACHE (pre-aggregation). Insights aggregates are identical for all viewers of
+ * a (country, tag, platform) and shift slowly, so we serve them from one JSONB row — a single
+ * indexed read that's fast even on a cold serverless start (no 12-query scan). Stale rows are
+ * refreshed in the background (Next `after()`), and a cold/missing key computes live once.
+ * ------------------------------------------------------------------------------------------- */
+const CACHE_FRESH_MS = 10 * 60 * 1000;
+const cacheKey = (country: string, tag: string, platform: PlatformSel) => `${country}|${tag}|${platform}`;
+
+async function storeInsightsCache(country: string, tag: string, platform: PlatformSel, data: InsightsData): Promise<void> {
+  await db()`
+    INSERT INTO insights_cache (key, country, tag, platform, data, computed_at)
+    VALUES (${cacheKey(country, tag, platform)}, ${country}, ${tag}, ${platform}, ${JSON.stringify(data)}::jsonb, now())
+    ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`.catch(() => {});
+}
+
+async function backgroundRefresh(country: string, tag: string, platform: PlatformSel): Promise<void> {
+  const run = async () => {
+    const data = await computeInsightsUncached(country, tag || undefined, platform).catch(() => null);
+    if (data) await storeInsightsCache(country, tag, platform, data);
+  };
+  try {
+    const { after } = await import("next/server");   // schedule for after the response is sent
+    after(run);
+  } catch {
+    await run();                                      // no request context (e.g. a script) — inline
+  }
+}
+
+/** Fast, shared Insights read. Serves the cached JSONB row when fresh; on a stale row, serves it
+ *  immediately and refreshes in the background; on a cold key, computes live once and stores it. */
+export async function cachedInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
+  const t = tag ?? "";
+  let row: { data: InsightsData; computed_at: Date } | undefined;
+  try {
+    [row] = await db()<{ data: InsightsData; computed_at: Date }[]>`
+      SELECT data, computed_at FROM insights_cache WHERE key = ${cacheKey(country, t, platform)}`;
+  } catch { /* table missing / db hiccup → fall through to live compute */ }
+  if (row) {
+    const ageMs = Date.now() - new Date(row.computed_at).getTime();
+    if (ageMs < CACHE_FRESH_MS) return row.data;                 // fresh → fast path
+    void backgroundRefresh(country, t, platform);               // stale → serve stale, refresh async
+    return row.data;
+  }
+  const data = await computeInsights(country, tag, platform);   // cold → compute live + store
+  await storeInsightsCache(country, t, platform, data);
+  return data;
+}
+
+/** Recompute + store every visible (market × platform) view — for the cron/warm job. */
+export async function refreshInsightsCache(): Promise<number> {
+  const platforms: PlatformSel[] = ["all", "shopify", "woocommerce"];
+  const combos: [string, string, PlatformSel][] = [];
+  for (const c of VISIBLE_MARKETS) for (const p of platforms) combos.push([c, "", p]);
+  combos.push(["ZA", "new", "shopify"], ["ZA", "new", "all"]);
+  let n = 0;
+  for (const [c, t, p] of combos) {
+    try {
+      const data = await computeInsightsUncached(c, t || undefined, p);
+      await storeInsightsCache(c, t, p, data);
+      n++;
+    } catch { /* skip a failed combo, keep warming the rest */ }
+  }
+  return n;
+}
+
 async function computeInsightsUncached(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
   const sql = db();
   // Cohort filter (Top 100, Brand New, …) applied inside the flag subquery.
