@@ -138,7 +138,7 @@ node --env-file=.env.local scripts/radar-domain-watch.mjs || echo "!! domain-wat
 # they don't drown the sold markets. Lightweight HTTP (products.json), residential IP (Mac);
 # datacenter/VPS IPs get rate-limited by Shopify's edge and would false-positive.
 echo "--- 7/7 liveness re-check ---"
-node --env-file=.env.local scripts/verify-liveness.mjs --country "$MARKETS" --min-age-days 30 --limit 600 --concurrency 10 \
+node --env-file=.env.local scripts/verify-liveness.mjs --country "$MARKETS" --min-age-days 7 --limit 1000 --concurrency 10 \
   || echo "!! liveness step failed (continuing)"
 
 # Trigger the daily market-insights snapshot (the page computes + upserts it).
