@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { africaOverview, type PlatformSel } from "@/lib/insights";
+import { cachedAgg } from "@/lib/agg-cache";
 import { marketLabel } from "@/lib/markets";
 import { AfricaMap } from "./africa-map";
 
@@ -27,7 +28,7 @@ export default async function AfricaOverview({
 
   const sp = await searchParams;
   const platform: PlatformSel = sp.platform === "shopify" || sp.platform === "woocommerce" ? sp.platform : "all";
-  const data = await africaOverview(platform).catch(() => ({}));
+  const data = await cachedAgg(`africa:${platform}`, 10 * 60 * 1000, () => africaOverview(platform)).catch(() => ({} as Record<string, { stores: number; launched30d: number }>));
   const ranked = Object.entries(data)
     .map(([iso2, s]) => ({ iso2, ...s }))
     .sort((a, b) => b.stores - a.stores);

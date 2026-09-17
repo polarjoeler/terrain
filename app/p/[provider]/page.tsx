@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, providerSwitches, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
+import { cachedAgg } from "@/lib/agg-cache";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { matchesProviderSlug, providerSlug, slugToTitle } from "@/lib/provider-slug";
 import { ProviderView } from "./provider-view";
@@ -55,17 +56,26 @@ export default async function ProviderPage({
   const countries = await providerCountries(canonical).catch((): string[] => []);
   const country = countryParam && countries.includes(countryParam.toUpperCase()) ? countryParam.toUpperCase() : undefined;
 
-  const [data, history, subReport, switches] = await Promise.all([
-    providerInsights(canonical, country),
-    providerHistory(canonical, country ?? "ALL"),
-    providerSubReport(canonical, country),   // Paystack → Onsite/redirect, Stitch → Stitch/WigWag
-    providerSwitches(canonical, country),    // recent switches involving this provider
-  ]);
-  // Share-of-new-stores series at each granularity, so the chart's Day/Week/Month/
-  // Quarter/Year toggle is instant (no re-fetch).
+  // Share-of-new-stores series at each granularity, so the chart's Day/Week/Month/Quarter/Year
+  // toggle is instant (no re-fetch).
   const periods: NewSharePeriod[] = ["day", "week", "month", "quarter", "year"];
-  const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country).catch(() => [])));
-  const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
+  // Whole provider bundle (all ~9 aggregate queries) cached per provider×country — one row read
+  // instead of recomputing on every view. Returns are JSON-safe (dates are pre-stringified).
+  const { data, history, subReport, switches, newShare } = await cachedAgg(
+    `provider:${canonical}:${country ?? "ALL"}`,
+    10 * 60 * 1000,
+    async () => {
+      const [data, history, subReport, switches] = await Promise.all([
+        providerInsights(canonical, country),
+        providerHistory(canonical, country ?? "ALL"),
+        providerSubReport(canonical, country),
+        providerSwitches(canonical, country),
+      ]);
+      const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country).catch(() => [])));
+      const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
+      return { data, history, subReport, switches, newShare };
+    },
+  );
 
   // Admins see the shareable link; a token viewer already has theirs.
   const shareToken = admin ? signProviderToken(canonical) : (t ?? "");

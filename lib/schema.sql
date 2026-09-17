@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS insights_cache (
   data        JSONB NOT NULL,
   computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Generic pre-aggregation cache (lib/agg-cache.ts) — /ops, /insights/africa, provider pages.
+CREATE TABLE IF NOT EXISTS agg_cache (
+  key         TEXT PRIMARY KEY,
+  data        JSONB NOT NULL,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.
