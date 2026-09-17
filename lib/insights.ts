@@ -137,6 +137,41 @@ const LIVE = (country: string, tag?: string, platform: PlatformSel = "shopify") 
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
        ${cohortFilter(tag)} ${platformClause(db(), platform)}`;
 
+// The 54 African ISO2 codes — the map + overview are Africa-only (our DB also holds many global
+// stores from CT discovery, which must NOT show on an "African eCommerce" page).
+const AFRICA_ISO2 = [
+  "DZ", "AO", "BJ", "BW", "BF", "BI", "CM", "CV", "CF", "TD", "KM", "CG", "CD", "CI", "DJ", "EG",
+  "GQ", "ER", "SZ", "ET", "GA", "GM", "GH", "GN", "GW", "KE", "LS", "LR", "LY", "MG", "MW", "ML",
+  "MR", "MU", "MA", "MZ", "NA", "NE", "NG", "RW", "ST", "SN", "SC", "SL", "SO", "ZA", "SS", "SD",
+  "TZ", "TG", "TN", "UG", "EH", "ZM", "ZW",
+];
+
+/** Per-country rollup for the Africa overview map — live store count + real launches in the last
+ *  30 days, per ISO2, respecting the platform toggle. Africa-only. Keyed by UPPER(country). */
+export async function africaOverview(
+  platform: PlatformSel = "all",
+): Promise<Record<string, { stores: number; launched30d: number }>> {
+  const sql = db();
+  const rows = await sql<{ country: string; stores: number; launched30d: number }[]>`
+    SELECT UPPER(country) AS country,
+      COUNT(*) FILTER (WHERE live)::int AS stores,
+      COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 30)::int AS launched30d
+    FROM (
+      SELECT country,
+        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${platformClause(sql, platform)}) AS live,
+        COALESCE(
+          (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+          launched_at
+        ) AS launch_date
+      FROM imported_stores
+      WHERE UPPER(country) = ANY(${AFRICA_ISO2})
+    ) s
+    GROUP BY 1`;
+  const out: Record<string, { stores: number; launched30d: number }> = {};
+  for (const r of rows) if (Number(r.stores) > 0) out[r.country] = { stores: Number(r.stores), launched30d: Number(r.launched30d) };
+  return out;
+}
+
 /** Count of stores in a dynamic/curated cohort for a market — for the selector. */
 export async function cohortCount(country: string, tag: string): Promise<number> {
   const [r] = await db()`SELECT COUNT(*)::int n FROM imported_stores WHERE ${LIVE(country, tag)}`;

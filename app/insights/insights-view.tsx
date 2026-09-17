@@ -307,6 +307,7 @@ export function InsightsView({
           <Link href="/"><Wordmark size="text-xl" /></Link>
           <div className="flex items-center gap-3">
             <Link href="/dashboard" className="text-sm text-cream/60 hover:text-cream">← Dashboard</Link>
+            <Link href="/insights/africa" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-sm font-medium text-cyan hover:bg-cyan/20">🌍 Africa map</Link>
             <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
               Live data
             </span>
