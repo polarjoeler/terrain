@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { opsStatus, type Heartbeat, type OpsStatus } from "@/lib/ops";
-import { cachedAgg } from "@/lib/agg-cache";
+import { opsStatus, type Heartbeat } from "@/lib/ops";
 import { AutoRefresh } from "./auto-refresh";
 import { ActivityFeed } from "./activity-feed";
 
@@ -48,10 +47,10 @@ export default async function OpsPage() {
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  // Cache the (heavy) summary rollups for 45s — the page auto-refreshes every 60s and the live
-  // activity feed stays uncached, so the "is it running" glance stays fresh enough. On a cold key
-  // it computes live once. (Heartbeat ages are as-of the cache write, at most ~45s stale.)
-  const s = await cachedAgg<OpsStatus>("ops", 45 * 1000, () => opsStatus()).catch(() => null);
+  // Ops reads live (not cached): it auto-refreshes every 60s and needs fresh heartbeats, and with
+  // the analytics indexes the rollup queries are fast enough. The heavier, slower-changing pages
+  // (insights/africa/provider) are the ones on the shared cache.
+  const s = await opsStatus().catch(() => null);
   if (!s) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load status.</main>;
 
   const allOk = s.machines.every((m) => m.ok);

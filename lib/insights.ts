@@ -6,7 +6,6 @@
  */
 
 import postgres from "postgres";
-import { after } from "next/server";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS } from "./markets";
 
@@ -273,20 +272,9 @@ async function storeInsightsCache(country: string, tag: string, platform: Platfo
     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`.catch(() => {});
 }
 
-// Schedule a refresh AFTER the response is sent. Must be called SYNCHRONOUSLY during the render
-// (request scope) — deferring the after() call behind an await throws outside scope (that was
-// crashing /ops on its 60s auto-refresh). Outside a request scope (a script) we simply skip.
-function scheduleInsightsRefresh(country: string, tag: string, platform: PlatformSel): void {
-  try {
-    after(async () => {
-      const data = await computeInsightsUncached(country, tag || undefined, platform).catch(() => null);
-      if (data) await storeInsightsCache(country, tag, platform, data);
-    });
-  } catch { /* outside a request scope — skip */ }
-}
-
-/** Fast, shared Insights read. Serves the cached JSONB row when fresh; on a stale row, serves it
- *  immediately and refreshes in the background; on a cold key, computes live once and stores it. */
+/** Fast, shared Insights read. Serves the cached JSONB row when fresh (one indexed read, fast even
+ *  on a cold serverless start); otherwise recomputes inline and stores. computeInsights has its own
+ *  in-process cache + inflight guard, so a stale recompute is cheap on a warm instance. */
 export async function cachedInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
   const t = tag ?? "";
   let row: { data: InsightsData; computed_at: Date } | undefined;
@@ -294,15 +282,15 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
     [row] = await db()<{ data: InsightsData; computed_at: Date }[]>`
       SELECT data, computed_at FROM insights_cache WHERE key = ${cacheKey(country, t, platform)}`;
   } catch { /* table missing / db hiccup → fall through to live compute */ }
-  if (row) {
-    const ageMs = Date.now() - new Date(row.computed_at).getTime();
-    if (ageMs < CACHE_FRESH_MS) return row.data;                 // fresh → fast path
-    scheduleInsightsRefresh(country, t, platform);              // stale → serve stale, refresh in bg
-    return row.data;
+  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) return row.data;
+  try {
+    const data = await computeInsights(country, tag, platform);
+    await storeInsightsCache(country, t, platform, data);
+    return data;
+  } catch (e) {
+    if (row) return row.data;   // recompute failed but we have a stale row — serve it
+    throw e;
   }
-  const data = await computeInsights(country, tag, platform);   // cold → compute live + store
-  await storeInsightsCache(country, t, platform, data);
-  return data;
 }
 
 /** Recompute + store every visible (market × platform) view — for the cron/warm job. */
