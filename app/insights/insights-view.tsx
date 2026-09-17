@@ -433,7 +433,7 @@ export function InsightsView({
         <div className="mt-8">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-mint">Market movement</h2>
-            <span className="text-xs text-cream/40">best estimate · launches by real launch date, churn by estimated death date{rangeActive ? " · custom range on chart" : ""}</span>
+            <span className="text-xs text-cream/40">best estimate · recent launches fill in as we enrich · churn accrues forward from clean monitoring · raw counts in Ops{rangeActive ? " · custom range on chart" : ""}</span>
           </div>
           <div className="mt-3 grid gap-4 sm:grid-cols-3">
             {marketTiles.map((s) => (

@@ -109,6 +109,28 @@ export default async function OpsPage() {
           ))}
         </section>
 
+        {/* Raw operations — what the pipeline actually did (our clock), always accurate. The
+            honest counterpart to Insights' market estimate: a detection wave shows up HERE, not
+            as market churn. */}
+        <section className="mt-5 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-cream/50">Raw operations · last 7 days</h2>
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+            {[
+              { n: s.rawOps.discovered, l: "discovered", c: "text-cyan" },
+              { n: s.rawOps.checked, l: "liveness-checked", c: "text-cream" },
+              { n: s.rawOps.paymentsProbed, l: "payments probed", c: "text-mint" },
+              { n: s.rawOps.foundDead, l: "found dead", c: "text-orange" },
+              { n: s.rawOps.foundMigrated, l: "found migrated", c: "text-orange" },
+            ].map((x) => (
+              <div key={x.l}>
+                <div className={`font-display text-2xl leading-none ${x.c}`}>{x.n.toLocaleString()}</div>
+                <div className="mt-0.5 text-[10px] uppercase tracking-wide text-cream/40">{x.l}</div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-cream/35">Detections on our clock — &ldquo;found dead&rdquo; is us catching up on stores that died earlier, not the market moving now.</p>
+        </section>
+
         {/* Key metrics */}
         <section className="mt-5 grid grid-cols-2 gap-3">
           <Stat n={s.woo.total.toLocaleString()} label="Woo confirmed" sub={`${s.woo.cohortReal.toLocaleString()} real in 2019 cohort`} tone="cyan" />

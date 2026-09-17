@@ -29,6 +29,9 @@ export type OpsStatus = {
   launched: { since: number; filled12h: number };
   woo: { total: number; cohortConfirmed: number; cohortReal: number };
   platforms: PlatformTrack[];
+  // RAW OPERATIONS (last 7d, our clock) — detection/operational counts, always accurate. Kept
+  // separate from the market estimate so a backlog-detection wave never reads as a market crash.
+  rawOps: { discovered: number; checked: number; foundDead: number; foundMigrated: number; paymentsProbed: number };
   machines: Heartbeat[];
 };
 
@@ -91,7 +94,7 @@ export async function opsStatus(): Promise<OpsStatus> {
   const sql = db();
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
 
-  const [disc, pay, launch, woo, hb, platCov, mktChurn] = await Promise.all([
+  const [disc, pay, launch, woo, hb, platCov, mktChurn, rawStores, rawChurn] = await Promise.all([
     sql<{ today: number; yest: number }[]>`
       SELECT count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE)::int today,
              count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE-1)::int yest
@@ -137,6 +140,19 @@ export async function opsStatus(): Promise<OpsStatus> {
     sql<{ churned30d: number }[]>`
       SELECT count(*) FILTER (WHERE died_at >= CURRENT_DATE-30)::int churned30d
       FROM churn_log WHERE COALESCE(historic,false)=false AND died_at IS NOT NULL AND country = ANY(${CORE})`,
+    // RAW OPERATIONS (last 7d) — what the pipeline actually DID, by our clock (created_at /
+    // checked_at / detection). Always accurate; the honest counterpart to the market estimate.
+    sql<{ discovered: number; checked: number; probed: number }[]>`
+      SELECT
+        count(*) FILTER (WHERE source='ct_tail' AND created_at > now()-interval '7 days')::int discovered,
+        count(*) FILTER (WHERE live_checked_at > now()-interval '7 days')::int checked,
+        count(*) FILTER (WHERE payments_checked_at > now()-interval '7 days')::int probed
+      FROM imported_stores WHERE country = ANY(${MK})`,
+    sql<{ dead: number; migrated: number }[]>`
+      SELECT
+        count(*) FILTER (WHERE status='dead' AND churned_at > now()-interval '7 days')::int dead,
+        count(*) FILTER (WHERE status='migrated' AND churned_at > now()-interval '7 days')::int migrated
+      FROM churn_log WHERE country = ANY(${MK})`,
   ]);
 
   const p = pay[0]; const h = hb[0];
@@ -168,6 +184,13 @@ export async function opsStatus(): Promise<OpsStatus> {
     launched: { since: Number(launch[0].since), filled12h: Number(launch[0].filled12h) },
     woo: { total: Number(woo[0].total), cohortConfirmed: Number(woo[0].confirmed), cohortReal: Number(woo[0].real) },
     platforms,
+    rawOps: {
+      discovered: Number(rawStores[0]?.discovered ?? 0),
+      checked: Number(rawStores[0]?.checked ?? 0),
+      paymentsProbed: Number(rawStores[0]?.probed ?? 0),
+      foundDead: Number(rawChurn[0]?.dead ?? 0),
+      foundMigrated: Number(rawChurn[0]?.migrated ?? 0),
+    },
     machines: [
       beat("Chad · payments", h.chad_pay, 120, "checkout probing"),
       beat("Discovery · VPS → landing", h.vps_disc, 360, "CT-log landings (4h cadence)"),
