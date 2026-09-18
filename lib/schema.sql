@@ -133,7 +133,8 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS platform TEXT;
 -- Own-sourced (never set by imports) — the fields safe to show customers, so the
 -- sellable surfaces stay clean across future vendor imports.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS launched_at DATE;            -- our launch date (earliest product / CT / WHOIS)
-ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS launched_source TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS launched_source TEXT;        -- 'earliest_product' | 'cert' | …
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ; -- last crt.sh cert-date attempt (scripts/cert-launch.mjs)
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS est_revenue_usd NUMERIC;     -- our revenue estimate
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_email TEXT;          -- scraped from the store's own site
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_phone TEXT;
