@@ -36,6 +36,7 @@ const TYPE: Record<string, PayType> = {
   "Shop Pay": "APM", "Apple Pay": "APM", "Google Pay": "APM", "Amazon Pay": "APM",
   Ozow: "APM", SnapScan: "APM", Zapper: "APM", "Capitec Pay": "APM", "M-Pesa": "APM",
   "Bank Deposit": "APM", "Cash on Delivery": "APM", "Credit Card": "APM",
+  "Bank Transfer": "APM", "Cheque": "APM",
   Visa: "APM", Mastercard: "APM", Amex: "APM",
   "Absa Pay": "APM", "Instant EFT": "APM", PayShap: "APM",
   ChipIn: "APM",
