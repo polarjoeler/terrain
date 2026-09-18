@@ -222,7 +222,7 @@ export function InsightsView({
     if (pf && pf !== "all") qs.set("platform", pf);
     startTransition(() => router.push(`/insights?${qs.toString()}`));
   };
-  const [period, setPeriod] = useState<Period>("Week");
+  const [period, setPeriod] = useState<Period>("Month");
   // Report-wide custom date range. Drives the growth chart (real launch/churn over the range);
   // the preset periods above still drive the tiles + distribution comparisons.
   const [rangeFrom, setRangeFrom] = useState("");
