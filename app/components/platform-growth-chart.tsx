@@ -43,7 +43,18 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
     return () => ac.abort();
   }, [country]);
 
-  const pts = useMemo(() => data?.points ?? [], [data]);
+  // Default to the recent, readable window (2022+); expand to the full vintage arc (back to 2013,
+  // where launch dates begin) on demand. The API always returns the full series, so this is a pure
+  // client-side slice — the cumulative y-values already run to the current total either way.
+  const [expanded, setExpanded] = useState(false);
+  const allPts = useMemo(() => data?.points ?? [], [data]);
+  const COLLAPSE_FROM = "2022-01-01";
+  const pts = useMemo(
+    () => (expanded ? allPts : allPts.filter((p) => p.date >= COLLAPSE_FROM)),
+    [allPts, expanded],
+  );
+  const canExpand = allPts.length > 0 && allPts[0].date < COLLAPSE_FROM;
+  const startYear = pts[0]?.date?.slice(0, 4) ?? (expanded ? "2013" : "2022");
   // A platform gets a trajectory line only if we have launch dates for ENOUGH of its live base for
   // the growth slope to be representative (dated in-window launches ≥ 20% of the current live total).
   // The line itself ends at the current total (it starts from a baseline), so we gate on the DATED
@@ -166,8 +177,18 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
         )}
       </div>
 
+      {canExpand && (
+        <div className="mt-3 flex justify-center">
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="rounded-full border border-cream/15 px-3.5 py-1 text-xs text-cream/60 transition hover:border-cream/40 hover:text-cream"
+          >
+            {expanded ? "↕ Collapse to 2022+" : "↔ Show full history (since 2013)"}
+          </button>
+        </div>
+      )}
       <p className="mt-3 text-xs text-cream/35">
-        Each line starts from the stores already live at {data?.since?.slice(0, 4) ?? "2022"} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current live total — the slope is the observed growth. Hover a legend chip for the live selling/active/dormant split.
+        Each line starts from the stores already live at {startYear} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current live total — the slope is the observed growth. {expanded ? <>Older cohorts use StoreLeads&rsquo; store-creation date as a launch proxy (approximate); recent months use our own product/cert dates. </> : null}Hover a legend chip for the live selling/active/dormant split.
         {data && !wooHasData && <span className="text-orange/70"> WooCommerce launch-dating is still being built, so only its current total &amp; status split show for now — the Shopify trajectory is live.</span>}
       </p>
     </div>

@@ -643,7 +643,11 @@ export async function platformGrowthSeries(country?: string): Promise<PlatformGr
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
-  const SINCE = "2022-01-01";
+  // Show the FULL vintage arc, not just recent years — live stores date back to ~2012. Pre-2013 is
+  // negligible (<20/yr), so 2013 is a clean left edge without a decade of near-flat tail. Caveat
+  // (surfaced in the chart footnote): older cohorts lean on StoreLeads' store-creation date as a
+  // launch proxy; recent months use our own product/cert dates — early vintage is approximate.
+  const SINCE = "2013-01-01";
 
   // Monthly launches of currently-live stores, split by platform → cumulative in JS.
   const rows = await sql<{ b: string; woo: number; shop: number }[]>`
