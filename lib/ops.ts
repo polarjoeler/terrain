@@ -37,6 +37,16 @@ export type OpsStatus = {
 
 const mins = (d: Date | null): number | null => (d ? Math.round((Date.now() - new Date(d).getTime()) / 60000) : null);
 
+// Per-machine worker heartbeats — each worker stamps (machine, task) at the start of every run
+// (scripts/heartbeat.mjs on Chad, worker/heartbeat.py on Lucy), so we can SEE which machine is
+// actually running what, instead of guessing from shared DB writes.
+export type AgentBeat = { machine: string; task: string; ageMins: number | null; note: string };
+export async function agentHeartbeats(): Promise<AgentBeat[]> {
+  const rows = await db()<{ machine: string; task: string; last_run: Date; note: string | null }[]>`
+    SELECT machine, task, last_run, note FROM agent_heartbeat ORDER BY machine, last_run DESC`.catch(() => []);
+  return rows.map((r) => ({ machine: r.machine, task: r.task, ageMins: mins(r.last_run), note: r.note ?? "" }));
+}
+
 // A live activity event — a store the swarm touched in the last few minutes, labelled by which
 // timestamp moved most recently. Derived from the trail the workers already write (no worker
 // changes): created_at (discovered), live_checked_at (liveness), catalog_checked_at (launch date),

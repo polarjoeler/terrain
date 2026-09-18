@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { opsStatus, type Heartbeat } from "@/lib/ops";
+import { opsStatus, agentHeartbeats, type Heartbeat } from "@/lib/ops";
 import { AutoRefresh } from "./auto-refresh";
 import { ActivityFeed } from "./activity-feed";
 
@@ -50,10 +50,18 @@ export default async function OpsPage() {
   // Ops reads live (not cached): it auto-refreshes every 60s and needs fresh heartbeats, and with
   // the analytics indexes the rollup queries are fast enough. The heavier, slower-changing pages
   // (insights/africa/provider) are the ones on the shared cache.
-  const s = await opsStatus().catch(() => null);
+  const [s, beats] = await Promise.all([opsStatus().catch(() => null), agentHeartbeats().catch(() => [])]);
   if (!s) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load status.</main>;
 
   const allOk = s.machines.every((m) => m.ok);
+
+  // Group worker heartbeats by machine so /ops shows who actually ran what, most-recent first.
+  const byMachine = new Map<string, typeof beats>();
+  for (const b of beats) {
+    const list = byMachine.get(b.machine) ?? [];
+    list.push(b);
+    byMachine.set(b.machine, list);
+  }
 
   return (
     <main className="min-h-screen px-4 py-6">
@@ -73,6 +81,31 @@ export default async function OpsPage() {
           <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-cream/50">Machines</h2>
           {s.machines.map((m) => <MachineRow key={m.label} h={m} />)}
         </section>
+
+        {/* Per-machine worker heartbeats — each worker stamps (machine, task) at the start of every
+            run, so this turns "seems like Lucy didn't do much" into a number you can watch. */}
+        {byMachine.size > 0 && (
+          <section className="mt-5 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-cream/50">Workers · by machine</h2>
+            {[...byMachine.entries()].map(([machine, tasks]) => (
+              <div key={machine} className="border-b border-cream/[0.07] py-3 last:border-0">
+                <div className="text-sm font-semibold capitalize text-cream/85">{machine}</div>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  {tasks.map((t) => {
+                    const stale = t.ageMins == null || t.ageMins > 60 * 24;
+                    return (
+                      <span key={t.task} className="text-[11px]">
+                        <span className="text-cream/70">{t.task}</span>{" "}
+                        <span className={stale ? "text-orange tabular-nums" : "text-cream/40 tabular-nums"}>{ago(t.ageMins)}</span>
+                        {t.note && <span className="text-cream/30"> · {t.note}</span>}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
 
         {/* Live activity feed — watch the swarm work in real time */}
         <ActivityFeed />

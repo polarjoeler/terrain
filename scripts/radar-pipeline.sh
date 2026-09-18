@@ -15,6 +15,7 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 cd /Users/joel/storepulse || exit 1
+node --env-file=.env.local scripts/heartbeat.mjs pipeline >/dev/null 2>&1 || true
 # Target markets for the budget-consuming enrichment steps (AI enrich, checkout probes).
 # ct-tail is TLD-agnostic and lands the whole global CT firehose, so without this scope
 # those steps would burn Haiku credits + checkout probes on global stores we don't sell to.
