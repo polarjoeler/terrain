@@ -26,7 +26,10 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
   try {
     [row] = await db()<{ data: T; computed_at: Date }[]>`SELECT data, computed_at FROM agg_cache WHERE key = ${key}`;
   } catch { /* table missing / db hiccup → compute live */ }
-  if (row && Date.now() - new Date(row.computed_at).getTime() < freshMs) return row.data; // fresh → fast
+  // postgres.js can return a jsonb column as a raw JSON string — parse defensively so callers always
+  // get a real object, never a string.
+  const parse = (d: T | string): T => (typeof d === "string" ? (JSON.parse(d) as T) : d);
+  if (row && Date.now() - new Date(row.computed_at).getTime() < freshMs) return parse(row.data); // fresh → fast
   // Stale or cold → recompute inline (no after()/background work, so no request-scope pitfalls).
   // If the recompute fails but we have a stale row, serve it rather than error the page.
   try {
@@ -34,7 +37,7 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
     await store(key, data);
     return data;
   } catch (e) {
-    if (row) return row.data;
+    if (row) return parse(row.data);
     throw e;
   }
 }

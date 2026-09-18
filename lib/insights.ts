@@ -282,13 +282,16 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
     [row] = await db()<{ data: InsightsData; computed_at: Date }[]>`
       SELECT data, computed_at FROM insights_cache WHERE key = ${cacheKey(country, t, platform)}`;
   } catch { /* table missing / db hiccup → fall through to live compute */ }
-  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) return row.data;
+  // postgres.js can hand a jsonb column back as a raw JSON string — parse defensively so we always
+  // return a real InsightsData object, never a string (which crashed the page reading data.*).
+  const parse = (d: InsightsData | string): InsightsData => (typeof d === "string" ? JSON.parse(d) : d);
+  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) return parse(row.data);
   try {
     const data = await computeInsights(country, tag, platform);
     await storeInsightsCache(country, t, platform, data);
     return data;
   } catch (e) {
-    if (row) return row.data;   // recompute failed but we have a stale row — serve it
+    if (row) return parse(row.data);   // recompute failed but we have a stale row — serve it
     throw e;
   }
 }
