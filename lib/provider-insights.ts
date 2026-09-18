@@ -638,9 +638,15 @@ export type PlatformGrowth = {
  *  any not yet launch-dated) and adds each month's dated launches, so it ENDS at each platform's
  *  real current total — the observed growth is the slope on top of the baseline. Paired with a
  *  current selling/active/dormant status split per platform for the hover breakdown. */
-export async function platformGrowthSeries(country?: string): Promise<PlatformGrowth> {
+export async function platformGrowthSeries(country?: string, provider?: string): Promise<PlatformGrowth> {
   const sql = db();
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  // Optional provider scope — cohorts, totals and status become that gateway's MERCHANTS (stores
+  // with the provider at checkout), so the same chart shows a payment provider's growth by platform.
+  const variants = provider ? providerVariants(provider) : null;
+  const prov = variants
+    ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
+    : sql``;
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
   // Show the FULL vintage arc, not just recent years — live stores date back to ~2012. Pre-2013 is
@@ -655,7 +661,7 @@ export async function platformGrowthSeries(country?: string): Promise<PlatformGr
       COUNT(*) FILTER (WHERE platform = 'woocommerce')::int woo,
       COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop
     FROM imported_stores
-    WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry}
+    WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry} ${prov}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
   let cw = 0, cs = 0;
   const rawPoints = rows.map((r) => {
@@ -679,7 +685,7 @@ export async function platformGrowthSeries(country?: string): Promise<PlatformGr
       COUNT(*) FILTER (WHERE platform = 'woocommerce' AND (activity_tier IS NULL OR activity_tier NOT IN ('selling','active','dormant')))::int woo_other,
       COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop_total,
       COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce' AND payments IS NOT NULL AND payments <> '')::int shop_paid
-    FROM imported_stores WHERE ${LIVE} ${ctry}`.catch(() => [{
+    FROM imported_stores WHERE ${LIVE} ${ctry} ${prov}`.catch(() => [{
       woo_total: 0, woo_selling: 0, woo_active: 0, woo_dormant: 0, woo_other: 0, shop_total: 0, shop_paid: 0,
     }]);
   const n = (v: number) => Number(v ?? 0);

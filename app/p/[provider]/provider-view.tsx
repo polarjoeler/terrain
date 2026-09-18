@@ -8,6 +8,7 @@ import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
 import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
 import { GrowthChart } from "@/app/components/growth-chart";
+import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alt. methods" };
 const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "lilac" };
@@ -318,6 +319,13 @@ export function ProviderView({
 
           {/* Retroactive merchant growth for this provider — launches per period + churn */}
           <GrowthChart provider={d.provider} country={country || undefined} title={`${d.provider} merchant growth`} />
+
+          {/* Cumulative merchant growth split by platform (Shopify vs WooCommerce) — where the
+              provider is winning over time. Defaults to South Africa when no country is picked
+              (most providers span multiple markets); follows the country dropdown otherwise. */}
+          <div className="mt-6">
+            <PlatformGrowthChart provider={d.provider} country={country || "ZA"} />
+          </div>
         </div>
 
         {/* Sub-brand breakdown — only for providers with distinct products (Paystack Onsite vs

@@ -19,12 +19,13 @@ const fmtMonth = (iso: string) => { const [y, m] = iso.split("-").map(Number); r
  *  growing faster. Legend chips reveal the current selling/active/dormant split on hover (the Woo
  *  breakdown the user asked for; Shopify shows a paid-vs-rest split, its nearest equivalent).
  *  Renders only on the "all" platform view. Fetches paid-gated /api/platform-growth. */
-export function PlatformGrowthChart({ country }: { country?: string }) {
+export function PlatformGrowthChart({ country, provider }: { country?: string; provider?: string }) {
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [hover, setHover] = useState<number | null>(null);
   const [legend, setLegend] = useState<null | "shopify" | "woo">(null);
+  const noun = provider ? "merchants" : "stores";
 
   useEffect(() => {
     const ac = new AbortController();
@@ -32,6 +33,7 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
       setLoading(true); setErr(null);
       const p = new URLSearchParams();
       if (country) p.set("country", country);
+      if (provider) p.set("provider", provider);
       try {
         const r = await fetch(`/api/platform-growth?${p.toString()}`, { signal: ac.signal });
         if (!r.ok) throw new Error(r.status === 403 ? "Subscribers only" : "Couldn't load");
@@ -41,7 +43,7 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
       } finally { setLoading(false); }
     })();
     return () => ac.abort();
-  }, [country]);
+  }, [country, provider]);
 
   // Default to the recent, readable window (2022+); expand to the full vintage arc (back to 2013,
   // where launch dates begin) on demand. The API always returns the full series, so this is a pure
@@ -107,8 +109,8 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-semibold">Platform growth · Shopify vs WooCommerce</h3>
-          <p className="mt-1 text-sm text-cream/45">Cumulative live stores by launch cohort — who&rsquo;s growing faster.</p>
+          <h3 className="text-lg font-semibold">{provider ? `${provider} growth · Shopify vs WooCommerce` : "Platform growth · Shopify vs WooCommerce"}</h3>
+          <p className="mt-1 text-sm text-cream/45">{provider ? `Cumulative ${provider} merchants by platform — where it's winning.` : "Cumulative live stores by launch cohort — who's growing faster."}</p>
         </div>
         {/* legend chips — hover to reveal each platform's live-status split */}
         <div className="flex gap-2">
@@ -133,7 +135,7 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
         ) : err ? (
           <div className="grid h-64 place-items-center text-sm text-orange">{err}</div>
         ) : !shopHasData && !wooHasData ? (
-          <div className="grid h-64 place-items-center text-sm text-cream/40">Not enough dated stores yet to chart growth.</div>
+          <div className="grid h-64 place-items-center text-sm text-cream/40">Not enough dated {noun} yet to chart growth.</div>
         ) : (
           <>
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
@@ -188,7 +190,7 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
         </div>
       )}
       <p className="mt-3 text-xs text-cream/35">
-        Each line starts from the stores already live at {startYear} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current live total — the slope is the observed growth. {expanded ? <>Older cohorts use StoreLeads&rsquo; store-creation date as a launch proxy (approximate); recent months use our own product/cert dates. </> : null}Hover a legend chip for the live selling/active/dormant split.
+        Each line starts from the {noun} already live at {startYear} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current total — the slope is the observed growth. {expanded ? <>Older cohorts use StoreLeads&rsquo; store-creation date as a launch proxy (approximate); recent months use our own product/cert dates. </> : null}Hover a legend chip for the live selling/active/dormant split.
         {data && !wooHasData && <span className="text-orange/70"> WooCommerce launch-dating is still being built, so only its current total &amp; status split show for now — the Shopify trajectory is live.</span>}
       </p>
     </div>
