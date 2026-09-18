@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Cert-transparency launch-date fallback. For live target-market stores that have NO product-based
- * launch date (first_product_at / launched_at both null — usually because products.json was blocked
- * or the store's catalog is empty), estimate the launch date from the domain's EARLIEST SSL cert via
- * crt.sh: a Shopify store gets a cert at setup, so min(not_before) ≈ when the store went live.
+ * Cert-transparency launch-date fallback (ALL platforms — Shopify AND WooCommerce). For live
+ * target-market stores that have NO product-based launch date (first_product_at / launched_at both
+ * null — a blocked/empty catalog for Shopify, or ALWAYS for WooCommerce, whose probe reads no
+ * catalog timestamps), estimate the launch date from the domain's EARLIEST SSL cert via crt.sh: a
+ * store gets a cert at setup, so min(not_before) ≈ when the store went live. This is the only
+ * launch-dating path Woo has, and it's what fills the Woo line on the combined growth chart.
  *
  *   node --env-file=.env.local scripts/cert-launch.mjs [--limit 500] [--concurrency 3]
  *
@@ -48,12 +50,18 @@ async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 4), idle_timeout: 20 });
   try {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ`;
+    // ALL platforms, not just Shopify: WooCommerce stores never get a product-based launch date
+    // (the Woo probe reads no catalog timestamps), so crt.sh is their ONLY launch-dating path and
+    // this is what lights up the Woo trajectory on the combined growth chart. Stores with NO usable
+    // product date at all (every Woo store) are ordered FIRST, so the Woo backlog gets dated ahead
+    // of Shopify stores that already have a first_product_at date (those still get a launched_at
+    // filled for reports that read the column directly, just at lower priority).
     const rows = await sql`
       SELECT domain FROM imported_stores
-      WHERE published AND platform = 'Shopify' AND UPPER(country) = ANY(${MARKETS})
+      WHERE published AND UPPER(country) = ANY(${MARKETS})
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND launched_at IS NULL AND cert_checked_at IS NULL
-      ORDER BY discovered_at DESC NULLS LAST
+      ORDER BY (first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}') ASC NULLS FIRST, discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;
     console.log(`cert-dating ${rows.length} undated stores (concurrency ${CONC})…`);
     let dated = 0, nocert = 0, failed = 0, i = 0;
