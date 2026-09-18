@@ -200,7 +200,7 @@ function WooSections({ woo }: { woo: NonNullable<InsightsData["woo"]> }) {
 
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
-  platform = "all", momentum = [], shifts = [],
+  platform = "all", momentumByPeriod, shifts = [],
 }: {
   data: InsightsData;
   history: InsightsData[];
@@ -210,7 +210,7 @@ export function InsightsView({
   cohorts?: { tag: string; count: number }[];
   tag?: string;
   platform?: "shopify" | "woocommerce" | "all";
-  momentum?: ProviderMomentum[];
+  momentumByPeriod?: Record<"day" | "week" | "month" | "quarter" | "year", ProviderMomentum[]>;
   shifts?: PaymentShift[];
 }) {
   // Soft-navigate (keeps the current data on screen, dimmed, while the new data loads) and mark
@@ -283,6 +283,9 @@ export function InsightsView({
 
   const pk = PERIOD_KEY[period];
   const pw = PERIOD_WORD[period];
+  // Provider momentum follows the timeframe selector: newly-launched stores this period vs the
+  // previous period of the same length.
+  const momentum = momentumByPeriod?.[pk] ?? [];
   const cov = data.coverage;
   const covPctOf = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
   // TRACK A — OUR COVERAGE: how complete + fresh OUR dataset is (progress, always improving).
@@ -531,9 +534,13 @@ export function InsightsView({
           <div className="mt-4 grid gap-5 md:grid-cols-1">
             <Card
               title="Provider momentum"
-              subtitle={momentum.length ? `Which PSPs new stores are choosing — ${momentum[0].days === 1 ? "today vs yesterday" : "this week vs last week"}` : "Appears as newly-found stores are payment-verified"}
+              subtitle={`Which PSPs newly-launched stores are choosing — ${pw} vs ${PERIOD_PREV[period]}`}
               reportHref={`/insights/payments?country=${country}`}
             >
+              {/* Say exactly what's compared — this follows the Timeframe selector above. */}
+              <div className="mb-4 rounded-xl bg-cream/[0.04] px-3 py-2 text-[11px] leading-relaxed text-cream/55">
+                Comparing stores <b className="text-cream/85">launched in the last {PERIOD_DAYS[period]} days</b> against the <b className="text-cream/85">previous {PERIOD_DAYS[period]} days</b>. <span className="text-cream/70">Δ share</span> = the change in each gateway&rsquo;s share of those new stores. Change the <b className="text-cream/85">Timeframe</b> above to compare other windows.
+              </div>
               {momentum.length ? (
                 <div>
                   {/* labelled columns so the numbers read without hovering */}
@@ -560,10 +567,10 @@ export function InsightsView({
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-3 text-[11px] text-cream/35">Share of newly-discovered stores choosing each gateway, and how that share moved vs the previous period.</p>
+                  <p className="mt-3 text-[11px] text-cream/35">&ldquo;New&rdquo; = stores that launched in the window with each gateway. Share is of all payment-verified stores launched in the window.</p>
                 </div>
               ) : (
-                <p className="text-sm text-cream/40">Not enough newly-discovered, payment-verified stores yet — builds as vetting reaches new finds.</p>
+                <p className="text-sm text-cream/40">Not enough stores launched in this window yet — try a longer timeframe (recent launches also lag until each store is payment-verified).</p>
               )}
             </Card>
             <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/switches?country=${country}`}>

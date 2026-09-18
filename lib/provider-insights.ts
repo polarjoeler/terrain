@@ -437,6 +437,54 @@ export async function providerMomentum(country = "ALL", period: "day" | "week" =
   return out.sort((a, b) => Math.abs(b.shareDelta) - Math.abs(a.shareDelta) || b.total - a.total);
 }
 
+export type MomentumPeriodKey = "day" | "week" | "month" | "quarter" | "year";
+
+/** Provider ADOPTION momentum among NEWLY-LAUNCHED stores, computed for EVERY timeframe at once so
+ *  the card follows the insights timeframe selector. For each period P: the share of stores that
+ *  LAUNCHED in the last P days that chose each gateway, and how that share moved vs stores launched
+ *  in the PRIOR P days (the two windows compared). Launch-keyed (real launch date, not discovered_at)
+ *  so it's consistent with the rest of insights and backfilling old stores can't move it. One
+ *  2-year fetch, bucketed in JS per period. */
+export async function providerMomentumByPeriod(country = "ALL"): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+  const sql = db();
+  const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const rows = await sql<{ launch_date: Date; payments: string }[]>`
+    SELECT ${LAUNCH} AS launch_date, payments FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND payments IS NOT NULL AND payments <> ''
+      AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= CURRENT_DATE - 730 ${AND_C}`.catch(() => []);
+
+  const PERIODS: [MomentumPeriodKey, number][] = [["day", 1], ["week", 7], ["month", 30], ["quarter", 91], ["year", 365]];
+  const out = {} as Record<MomentumPeriodKey, ProviderMomentum[]>;
+  const now = Date.now();
+  for (const [pk, P] of PERIODS) {
+    const recentCut = now - P * 864e5, priorCut = now - 2 * P * 864e5;
+    let recentTotal = 0, priorTotal = 0;
+    const recent = new Map<string, number>(), prior = new Map<string, number>();
+    for (const r of rows) {
+      const t = new Date(r.launch_date).getTime();
+      if (t < priorCut) continue;
+      const isRecent = t >= recentCut;
+      if (isRecent) recentTotal++; else priorTotal++;
+      const provs = new Set(cleanPayments(String(r.payments).split(";")).map((g) => canonicalProvider(g)).filter(Boolean) as string[]);
+      for (const p of provs) { const m = isRecent ? recent : prior; m.set(p, (m.get(p) ?? 0) + 1); }
+    }
+    const arr: ProviderMomentum[] = [];
+    for (const name of new Set<string>([...recent.keys(), ...prior.keys()])) {
+      const rc = recent.get(name) ?? 0, pc = prior.get(name) ?? 0;
+      const rShare = recentTotal ? (rc / recentTotal) * 100 : 0;
+      const pShare = priorTotal ? (pc / priorTotal) * 100 : 0;
+      arr.push({
+        provider: name, share: Math.round(rShare * 10) / 10, shareDelta: Math.round((rShare - pShare) * 10) / 10,
+        rank: 0, rankDelta: 0, total: rc, totalDelta: rc - pc, days: P,
+      });
+    }
+    out[pk] = arr.sort((a, b) => Math.abs(b.shareDelta) - Math.abs(a.shareDelta) || b.total - a.total);
+  }
+  return out;
+}
+
 export type PaymentShift = {
   domain: string; changedAt: string;
   added: string[]; removed: string[];
@@ -575,8 +623,10 @@ export async function growthSeries(opts: {
 export type PlatformStatus = { selling: number; active: number; dormant: number; other: number; total: number };
 export type PlatformGrowthPoint = { date: string; shopify: number; woo: number };
 export type PlatformGrowth = {
-  points: PlatformGrowthPoint[];      // MONTHLY CUMULATIVE live-store count by launch cohort, per platform
-  shopifyNow: number; wooNow: number; // current live totals (all live stores, incl. undated)
+  points: PlatformGrowthPoint[];      // MONTHLY CUMULATIVE live-store count, per platform — starts at a
+                                      // baseline (pre-window + undated) so it ENDS at the current total
+  shopifyNow: number; wooNow: number; // current live totals (all live stores, incl. undated) = line ends here
+  shopifyDated: number; wooDated: number; // dated launches in-window (the observed-growth slope; drives the draw gate)
   shopifyStatus: PlatformStatus;      // current selling/active/dormant split (for the hover)
   wooStatus: PlatformStatus;
   since: string;                      // first cohort month shown
@@ -584,8 +634,9 @@ export type PlatformGrowth = {
 
 /** Cumulative platform-growth series for the combined ("all") insights view: how the LIVE store
  *  base has grown month-by-month, split Shopify vs WooCommerce, so a viewer can see which platform
- *  is growing faster. Built from launch cohorts (currently-live stores by real launch date) from
- *  2022 on — dated stores only, so it's a clean trajectory, not the exact base — and paired with a
+ *  is growing faster. The line starts from a baseline (stores already live before the window, plus
+ *  any not yet launch-dated) and adds each month's dated launches, so it ENDS at each platform's
+ *  real current total — the observed growth is the slope on top of the baseline. Paired with a
  *  current selling/active/dormant status split per platform for the hover breakdown. */
 export async function platformGrowthSeries(country?: string): Promise<PlatformGrowth> {
   const sql = db();
@@ -603,10 +654,11 @@ export async function platformGrowthSeries(country?: string): Promise<PlatformGr
     WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
   let cw = 0, cs = 0;
-  const points: PlatformGrowthPoint[] = rows.map((r) => {
+  const rawPoints = rows.map((r) => {
     cs += Number(r.shop); cw += Number(r.woo);
-    return { date: r.b, shopify: cs, woo: cw };
+    return { date: r.b, shop: cs, woo: cw };
   });
+  const shopDated = cs, wooDated = cw; // dated launches in-window = the observed-growth portion
 
   // Current live totals (ALL live stores, dated or not) + status split. Woo carries a real
   // activity_tier (selling/active/dormant/not_a_store); Shopify has no equivalent tier, so its
@@ -635,9 +687,19 @@ export async function platformGrowthSeries(country?: string): Promise<PlatformGr
     selling: n(st.shop_paid), active: n(st.shop_total) - n(st.shop_paid), dormant: 0,
     other: 0, total: n(st.shop_total),
   };
+  // Baseline = live stores NOT in the dated in-window cohorts (launched before SINCE, or not yet
+  // launch-dated). Start the cumulative there so the line climbs to TODAY's real total instead of
+  // stopping at the dated-since-2022 slice — otherwise the Shopify line ends well short of its own
+  // headline number. The observed growth is the slope ON TOP of that baseline.
+  const shopBase = Math.max(0, n(st.shop_total) - shopDated);
+  const wooBase = Math.max(0, n(st.woo_total) - wooDated);
+  const points: PlatformGrowthPoint[] = rawPoints.map((p) => ({
+    date: p.date, shopify: shopBase + p.shop, woo: wooBase + p.woo,
+  }));
   return {
     points, since: SINCE,
     shopifyNow: n(st.shop_total), wooNow: n(st.woo_total),
+    shopifyDated: shopDated, wooDated: wooDated,
     shopifyStatus, wooStatus,
   };
 }

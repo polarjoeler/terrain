@@ -6,6 +6,7 @@ type Status = { selling: number; active: number; dormant: number; other: number;
 type Point = { date: string; shopify: number; woo: number };
 type Data = {
   points: Point[]; shopifyNow: number; wooNow: number;
+  shopifyDated: number; wooDated: number;
   shopifyStatus: Status; wooStatus: Status; since: string;
 };
 
@@ -44,14 +45,13 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
 
   const pts = useMemo(() => data?.points ?? [], [data]);
   // A platform gets a trajectory line only if we have launch dates for ENOUGH of its live base for
-  // the cohort curve to be representative (final cumulative ≥ 20% of the current live total). Woo
-  // launch-dating is still being built (BuiltWith gave us discovery, not birth dates), so it falls
-  // below that bar — drawing its handful of dated stores would sit flat at zero and mislead. Omit
-  // the line and lean on the chip total + status split instead.
-  const last = pts.length ? pts[pts.length - 1] : null;
-  const cover = (cum: number, now?: number) => (now && now > 0 ? cum / now : 0);
-  const shopHasData = pts.length > 1 && cover(last?.shopify ?? 0, data?.shopifyNow) >= 0.2;
-  const wooHasData = pts.length > 1 && cover(last?.woo ?? 0, data?.wooNow) >= 0.2;
+  // the growth slope to be representative (dated in-window launches ≥ 20% of the current live total).
+  // The line itself ends at the current total (it starts from a baseline), so we gate on the DATED
+  // portion, not the endpoint. Woo launch-dating is still being built, so it falls below that bar —
+  // drawing it would be a near-flat line that misleads. Omit it; lean on the chip total + status split.
+  const cover = (dated?: number, now?: number) => (now && now > 0 ? (dated ?? 0) / now : 0);
+  const shopHasData = pts.length > 1 && cover(data?.shopifyDated, data?.shopifyNow) >= 0.2;
+  const wooHasData = pts.length > 1 && cover(data?.wooDated, data?.wooNow) >= 0.2;
   const W = 760, H = 280, padL = 46, padR = 16, padB = 34, padT = 16;
   const iw = W - padL - padR, ih = H - padT - padB;
   const max = Math.max(1, ...pts.map((p) => Math.max(shopHasData ? p.shopify : 0, wooHasData ? p.woo : 0)));
@@ -167,7 +167,7 @@ export function PlatformGrowthChart({ country }: { country?: string }) {
       </div>
 
       <p className="mt-3 text-xs text-cream/35">
-        Cumulative count of currently-live stores by their real launch month (dated stores, from {data?.since?.slice(0, 4) ?? "2022"} on) — a clean growth trajectory, not the exact base. Hover a legend chip for the live selling/active/dormant split.
+        Each line starts from the stores already live at {data?.since?.slice(0, 4) ?? "2022"} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current live total — the slope is the observed growth. Hover a legend chip for the live selling/active/dormant split.
         {data && !wooHasData && <span className="text-orange/70"> WooCommerce launch-dating is still being built, so only its current total &amp; status split show for now — the Shopify trajectory is live.</span>}
       </p>
     </div>

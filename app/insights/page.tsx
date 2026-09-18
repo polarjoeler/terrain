@@ -8,7 +8,7 @@ import {
   type PlatformSel,
 } from "@/lib/insights";
 import { tagCounts } from "@/lib/tags";
-import { providerMomentum, recentPaymentShifts } from "@/lib/provider-insights";
+import { providerMomentumByPeriod, recentPaymentShifts } from "@/lib/provider-insights";
 import { InsightsView } from "./insights-view";
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
@@ -46,13 +46,13 @@ export default async function Insights({
   // market, as the landing state. The Shopify / WooCommerce tabs then drill into one platform.
   const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" ? sp.platform : "all";
 
-  const [data, baselineDate, momentum, shifts] = await Promise.all([
+  const [data, baselineDate, momentumByPeriod, shifts] = await Promise.all([
     cachedInsights(country, tag, platform),
     getBaselineDate(),
-    // Scope momentum to the SAME market as the rest of the page. Discovery-neutral,
-    // week-over-week among newly-discovered stores (not snapshot counts, which the
-    // payment backfill inflated).
-    providerMomentum(country, "week").catch(() => []),
+    // Momentum for EVERY timeframe (the card follows the selector client-side), scoped to this
+    // market, launch-keyed among newly-launched stores (not discovered_at / snapshot counts, which
+    // the payment backfill inflated). Empty maps on failure so the page still renders.
+    providerMomentumByPeriod(country).catch(() => ({ day: [], week: [], month: [], quarter: [], year: [] })),
     // Recent switches scoped to the selected market (falls back to the core African markets
     // ZA/KE/NG if somehow no single market resolves) — a global feed drowned the local signal.
     recentPaymentShifts(40, country ? [country] : ["ZA", "KE", "NG"]).catch(() => []),
@@ -83,7 +83,7 @@ export default async function Insights({
       cohorts={cohorts}
       tag={tag ?? ""}
       platform={platform}
-      momentum={momentum}
+      momentumByPeriod={momentumByPeriod}
       shifts={shifts}
     />
   );
