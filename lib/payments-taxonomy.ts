@@ -14,6 +14,9 @@ const TYPE: Record<string, PayType> = {
   // PSP — gateways/acquirers
   PayFast: "PSP", Yoco: "PSP", "Peach Payments": "PSP", PayGate: "PSP",
   Stripe: "PSP", Adyen: "PSP", Paystack: "PSP",
+  // WooCommerce-side gateways (from Woo payment plugins): WooPayments is Woo's own embedded
+  // (Stripe-backed) gateway; TradeSafe/iVeri/WalletDoc/HelloPay are SA Woo gateways.
+  WooPayments: "PSP", TradeSafe: "PSP", iVeri: "PSP", WalletDoc: "PSP", HelloPay: "PSP",
   Flutterwave: "PSP", PayPal: "PSP", PayU: "PSP", Stitch: "PSP", iKhokha: "PSP",
   "Shopify Payments": "PSP", Pesapal: "PSP", DPO: "PSP", IntaSend: "PSP",
   OPay: "PSP", Nomba: "PSP", Paga: "PSP", Interswitch: "PSP", "Adumo Online": "PSP",
@@ -26,7 +29,7 @@ const TYPE: Record<string, PayType> = {
   // BNPL — instalment credit
   Payflex: "BNPL", Mobicred: "BNPL", Float: "BNPL", Klarna: "BNPL",
   Afterpay: "BNPL", Affirm: "BNPL", Zip: "BNPL",
-  PayJustNow: "BNPL", "Happy Pay": "BNPL", RCS: "BNPL",
+  PayJustNow: "BNPL", "Happy Pay": "BNPL", RCS: "BNPL", Layup: "BNPL",
   Clearpay: "BNPL", Tabby: "BNPL", Koko: "BNPL", Mintpay: "BNPL", in3: "BNPL",
   FeverTree: "BNPL",
   // APM — wallets, bank rails, mobile money, cards, cash
