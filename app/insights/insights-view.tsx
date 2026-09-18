@@ -10,6 +10,7 @@ import { marketLabel, marketAdjective } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
 import type { InsightsData, InsightItem } from "@/lib/insights";
 import { GrowthChart } from "@/app/components/growth-chart";
+import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
@@ -117,7 +118,7 @@ function drillHref(param: string, label: string, country?: string): string {
 }
 
 function DistroCard({
-  title, subtitle, data, baseline, tone = "orange", drillParam, country, reportHref,
+  title, subtitle, data, baseline, tone = "orange", drillParam, country, reportHref, adopt, adoptWord,
 }: {
   title: string;
   subtitle: string;
@@ -127,27 +128,32 @@ function DistroCard({
   drillParam?: string;
   country?: string;
   reportHref?: string;
+  // When given (a timeframe is active) the change column shows how many stores LAUNCHED in the
+  // selected window with each value — real market movement — instead of the snapshot delta.
+  adopt?: Record<string, number>;
+  adoptWord?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
   const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
+  const showChange = adopt ? true : !!bmap;
 
   return (
     <Card title={title} subtitle={subtitle} reportHref={reportHref}>
       <div className={`space-y-3 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
         {shown.map((i) => {
           const prev = bmap?.get(i.label);
-          const cdel = prev != null ? i.count - prev : null;
+          const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
           const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
           const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
           return (
-            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${drillParam ? " — click to view stores" : ""}`}>
+            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {bmap && <div className="w-16 shrink-0 text-right text-xs tabular-nums">{<CountDelta v={cdel} />}</div>}
+              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}>{<CountDelta v={cdel} />}</div>}
             </RowTag>
           );
         })}
@@ -236,14 +242,17 @@ export function InsightsView({
   // so the batch doesn't skew growth or forward-churn).
   const effHistory = baselineDate ? history.filter((h) => h.date >= baselineDate) : history;
 
-  // A period is available only if we have a snapshot at least that far back.
+  // A snapshot at least this far back powers the over-time COMPARISON deltas (tiles' vs-last-period
+  // numbers). It's no longer a gate on selecting the period: the timeframe now also drives the
+  // launch-date breakdowns (always computed fresh), so every period is selectable — the comparison
+  // just fills in once enough daily snapshots exist.
   const baselineFor = (p: Period): InsightsData | null => {
     const want = PERIOD_DAYS[p];
     const older = effHistory.filter((h) => h.date !== data.date && daysAgo(h.date) >= want);
     return older.length ? older[older.length - 1] : null;
   };
-  const available = (p: Period) => baselineFor(p) !== null;
-  const base = available(period) ? baselineFor(period) : null;
+  const hasComparison = (p: Period) => baselineFor(p) !== null;
+  const base = hasComparison(period) ? baselineFor(period) : null;
   // Absolute + % change of a metric vs the selected period's baseline.
   const metric = (key: keyof InsightsData): { abs: number | null; pct: number | null } => {
     const b = base && typeof base[key] === "number" ? (base[key] as number) : null;
@@ -377,19 +386,16 @@ export function InsightsView({
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Timeframe</span>
             {PERIODS.map((p) => {
-              const ok = available(p);
+              const cmp = hasComparison(p);
               return (
                 <button
                   key={p}
-                  onClick={() => { if (ok) { setPeriod(p); setTfTouched(true); } }}
-                  disabled={!ok}
-                  title={ok ? `Compare vs ${PERIOD_DAYS[p]} days ago` : "Not enough history yet — builds daily"}
+                  onClick={() => { setPeriod(p); setTfTouched(true); }}
+                  title={cmp ? `Stores launched in the last ${PERIOD_DAYS[p]} days · compares vs ${PERIOD_DAYS[p]} days ago` : `Stores launched in the last ${PERIOD_DAYS[p]} days`}
                   className={`rounded-full px-3.5 py-1.5 text-sm transition ${
-                    !ok
-                      ? "cursor-not-allowed border border-cream/8 text-cream/25"
-                      : period === p
-                        ? "bg-orange text-cream"
-                        : "border border-cream/15 text-cream/60 hover:border-cream/40"
+                    period === p
+                      ? "bg-orange text-cream"
+                      : "border border-cream/15 text-cream/60 hover:border-cream/40"
                   }`}
                 >
                   {p}
@@ -397,7 +403,9 @@ export function InsightsView({
               );
             })}
             <span className="ml-1 text-xs text-cream/40">
-              {base ? `vs ${PERIOD_PREV[period]} · ${COMPARISON[period]}` : "comparisons build as daily snapshots accumulate"}
+              {tfTouched
+                ? base ? `launched ${PERIOD_WORD[period]} · vs ${PERIOD_PREV[period]} (${COMPARISON[period]})` : `showing what launched ${PERIOD_WORD[period]}`
+                : "pick a timeframe to see what launched then"}
             </span>
           </div>
           {/* Report-wide custom date range — applies to the growth chart (real launch/churn
@@ -451,8 +459,13 @@ export function InsightsView({
         </div>
 
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          {/* Retroactive Shopify growth — new launches per period + cumulative + churn */}
-          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "" : "Shopify"} store growth`.replace(/\s+/g, " ")} />
+          {/* New launches vs churn per period (diverging bars). On the combined "all" view this is
+              all-ecommerce; the cumulative Shopify-vs-Woo trajectory sits beside it below. */}
+          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "all-ecommerce" : "Shopify"} launches & churn`.replace(/\s+/g, " ")} />
+
+          {/* Combined view only: cumulative growth split by platform, so you can see whether Woo or
+              Shopify is growing faster (hover a legend chip for its selling/active/dormant split). */}
+          {platform === "all" && <PlatformGrowthChart country={country} />}
 
           {/* Shopify payment intelligence — hidden on the WooCommerce view (its own sections below) */}
           {platform !== "woocommerce" && (<>
@@ -485,7 +498,7 @@ export function InsightsView({
                         {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
                       </span>
                     </div>
-                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.paymentAdoptions[PERIOD_KEY[period]] : undefined} />
+                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].payments : undefined} adoptWord={pw} />
                   </div>
                 ) : null,
               )}
@@ -493,6 +506,9 @@ export function InsightsView({
           </Card>
 
           <div className="space-y-5">
+            {/* Shopify Plus is a Shopify-only concept — hide it on the combined "all" view (there it
+                would mix an enterprise-Shopify signal into an all-ecommerce dashboard). */}
+            {platform === "shopify" && (
             <Card title="Shopify Plus adoption" subtitle="Cumulative total over time" reportHref={`/dashboard?plus=true&country=${country}`}>
               {plusTrend ? <TrendLine data={plusTrend} /> : (
                 <div className="grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-sm text-cream/40">
@@ -503,8 +519,9 @@ export function InsightsView({
                 {data.plusNewThisWeek} new this week · {data.plusTotal} total.
               </p>
             </Card>
+            )}
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}`}>
-              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.paymentAdoptions[PERIOD_KEY[period]] : undefined} />
+              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].leading : undefined} adoptWord={pw} />
             </Card>
           </div>
 
@@ -596,14 +613,14 @@ export function InsightsView({
 
           {platform !== "woocommerce" && (<>
           {/* Cross-platform distributions — meaningful on the combined "all" view too. */}
-          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} />
+          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].categories : undefined} adoptWord={pw} />
           {/* Themes + apps are SHOPIFY-specific (Shopify has no cross-platform equivalent), so they
               only appear when the Shopify platform is selected — not on the combined "all" view. */}
           {platform === "shopify" && (<>
-          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} />
-          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} />
+          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].themes : undefined} adoptWord={pw} />
+          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].apps : undefined} adoptWord={pw} />
           </>)}
-          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}`} />
+          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].cities : undefined} adoptWord={pw} />
           <DistroCard
             title="Shipping providers"
             subtitle={`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`}
@@ -613,6 +630,8 @@ export function InsightsView({
             drillParam="shipping"
             country={country}
             reportHref={`/insights/shipping?country=${country}`}
+            adopt={tfTouched ? data.launchedDistro[pk].shipping : undefined}
+            adoptWord={pw}
           />
           </>)}
         </div>
@@ -677,7 +696,7 @@ export function InsightsView({
  *  change column shows GENUINE ADOPTIONS this period (discovery-neutral) instead of the
  *  snapshot delta — so enrichment/vetting of old stores never inflates it. */
 function DrillList({
-  data, baseline, tone, showBaseline, drillParam, country, adopt,
+  data, baseline, tone, showBaseline, drillParam, country, adopt, adoptWord,
 }: {
   data: InsightItem[];
   baseline: InsightItem[] | null;
@@ -685,7 +704,9 @@ function DrillList({
   showBaseline: boolean;
   drillParam?: string;
   country?: string;
+  // stores that LAUNCHED in the selected window with each provider (real market movement)
   adopt?: Record<string, number>;
+  adoptWord?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
@@ -701,12 +722,12 @@ function DrillList({
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
           const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
           return (
-            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${drillParam ? " — click to view stores" : ""}`}>
+            <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
               <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
               <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? "genuine adoptions this period" : undefined}><CountDelta v={cdel} /></div>}
+              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}><CountDelta v={cdel} /></div>}
             </RowTag>
           );
         })}

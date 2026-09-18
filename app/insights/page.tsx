@@ -53,7 +53,9 @@ export default async function Insights({
     // week-over-week among newly-discovered stores (not snapshot counts, which the
     // payment backfill inflated).
     providerMomentum(country, "week").catch(() => []),
-    recentPaymentShifts(40).catch(() => []),
+    // Recent switches scoped to the selected market (falls back to the core African markets
+    // ZA/KE/NG if somehow no single market resolves) — a global feed drowned the local signal.
+    recentPaymentShifts(40, country ? [country] : ["ZA", "KE", "NG"]).catch(() => []),
   ]);
   // Daily snapshots / trends are a single Shopify-only ZA series (the snapshot table is
   // single-series): a WooCommerce/all page view once overwrote it with Woo data (storesTotal

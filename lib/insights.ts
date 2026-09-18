@@ -21,6 +21,9 @@ function db() {
 
 export type InsightItem = { label: string; count: number; pct: number };
 
+// The report dimensions that carry a per-period "launched in window" breakdown.
+export type DistroKey = "payments" | "leading" | "themes" | "categories" | "cities" | "apps" | "shipping";
+
 export type InsightsData = {
   date: string;
   storesTotal: number;
@@ -56,6 +59,13 @@ export type InsightsData = {
   // stores in the window + switches to/from). Keyed provider label → count. Powers the
   // Payment Intelligence change numbers so enrichment/backfill never inflates them.
   paymentAdoptions: Record<PeriodKey, Record<string, number>>;
+  // LAUNCH-DATE distribution per period: of the stores that genuinely LAUNCHED in each window
+  // (keyed on real launch date, not when we found or enriched them), what tech did they choose?
+  // One label→count map per dimension, so every report section's "change" column can answer the
+  // real question — "of stores launched in this timeframe, how did the tech move" — instead of
+  // showing an enrichment/backfill artefact. Labels match the all-time distributions exactly so
+  // the +N lines up with the right row.
+  launchedDistro: Record<PeriodKey, Record<DistroKey, Record<string, number>>>;
   paymentsByType: Record<PayType, InsightItem>;
   firstProvider: InsightItem[];
   themes: InsightItem[];
@@ -99,6 +109,9 @@ const prettyApp = (s: string) =>
 // WordPress plugin slug → readable name ("woocommerce-gateway-stripe" → "Woocommerce Gateway Stripe").
 const prettyPlugin = (s: string) =>
   s.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+// Title Case a raw value the SAME way mergeVariants displays it — so the launch-date breakdown's
+// labels match the all-time theme/city rows exactly (and the +N lines up with the right row).
+const titleCase = (s: string) => s.trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 const items = (rows: { label: string; n: number }[], denom: number): InsightItem[] =>
   rows.filter((r) => r.label).map((r) => ({ label: r.label, count: r.n, pct: pct(r.n, denom) }));
 
@@ -285,13 +298,19 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
   // postgres.js can hand a jsonb column back as a raw JSON string — parse defensively so we always
   // return a real InsightsData object, never a string (which crashed the page reading data.*).
   const parse = (d: InsightsData | string): InsightsData => (typeof d === "string" ? JSON.parse(d) : d);
-  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) return parse(row.data);
+  // A cached row from an OLDER schema (before a new field was added) must not be served — reading
+  // the missing field crashes the page. Treat it as stale so it recomputes with the current shape.
+  const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro;
+  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) {
+    const parsed = parse(row.data);
+    if (currentSchema(parsed)) return parsed;
+  }
   try {
     const data = await computeInsights(country, tag, platform);
     await storeInsightsCache(country, t, platform, data);
     return data;
   } catch (e) {
-    if (row) return parse(row.data);   // recompute failed but we have a stale row — serve it
+    if (row) { const p = parse(row.data); if (currentSchema(p)) return p; }  // serve stale only if same shape
     throw e;
   }
 }
@@ -489,6 +508,56 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     paymentAdoptions[pk] = Object.fromEntries(m);
   }
 
+  // LAUNCH-DATE breakdown per period — the answer to "of the stores that actually LAUNCHED in the
+  // selected timeframe, what tech did they choose?". Keyed on real launch date (first product /
+  // launched_at), so a past timeframe pulls in the stores that launched THEN and the numbers move
+  // with the filter — never inflated by enrichment/backfill of the existing base (the old
+  // discovered_at-based adoption count's failure mode). One query, bucketed in JS per window.
+  const launchDistRows = await sql<{
+    launch_date: Date; payments: string | null; theme: string | null; category: string | null;
+    city: string | null; apps: string | null; shipping_providers: string | null;
+  }[]>`
+    SELECT launch_date, payments, theme, category, city, apps, shipping_providers FROM (
+      SELECT payments, theme, category, city, apps, shipping_providers,
+        COALESCE(
+          (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+          launched_at
+        ) AS launch_date
+      FROM imported_stores
+      WHERE published AND country = ${country} ${inTag} ${platClause}
+        AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+    ) s WHERE launch_date IS NOT NULL AND launch_date >= CURRENT_DATE - 365`.catch(() => []);
+  const LDIST_PERIODS: [PeriodKey, number][] = [["day", 1], ["week", 7], ["month", 30], ["quarter", 91], ["year", 365]];
+  const emptyDistro = (): Record<DistroKey, Record<string, number>> =>
+    ({ payments: {}, leading: {}, themes: {}, categories: {}, cities: {}, apps: {}, shipping: {} });
+  const launchedDistro = {} as Record<PeriodKey, Record<DistroKey, Record<string, number>>>;
+  const bump = (o: Record<string, number>, k: string) => { o[k] = (o[k] ?? 0) + 1; };
+  for (const [pk, P] of LDIST_PERIODS) {
+    const cut = Date.now() - P * 864e5;
+    const d = emptyDistro();
+    for (const r of launchDistRows) {
+      if (new Date(r.launch_date).getTime() < cut) continue;
+      // Payments + leading provider — same cleanPayments tokens the all-time distribution uses.
+      if (r.payments) {
+        const gws = cleanPayments(String(r.payments).split(";"));
+        if (gws.length) {
+          bump(d.leading, gws[0]);
+          for (const g of new Set(gws)) bump(d.payments, g);
+        }
+      }
+      if (r.theme && r.theme.trim()) bump(d.themes, titleCase(r.theme));
+      if (r.category && r.category.trim()) bump(d.categories, r.category.trim());
+      if (r.city && r.city.trim()) bump(d.cities, titleCase(r.city));
+      if (r.apps) for (const a of new Set(String(r.apps).split(";").map((x) => prettyApp(x.trim())).filter(Boolean))) bump(d.apps, a);
+      if (r.shipping_providers) {
+        const seen = new Set<string>();
+        for (const raw of String(r.shipping_providers).split(";")) { const n = normalizeCarrier(raw.trim()); if (n) seen.add(n); }
+        for (const n of seen) bump(d.shipping, n);
+      }
+    }
+    launchedDistro[pk] = d;
+  }
+
   // Where migrating stores went — the platform they now run (Shopify → WooCommerce / Wix / …).
   // This is the switch-intel signal; keyed on live_platform (see churn_migrated note above).
   const migratedRows = await sql<{ platform: string; n: number }[]>`
@@ -538,6 +607,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
     paymentAdoptions,
+    launchedDistro,
     newThisWeek: Number(t.new_week),
     discoveredByPeriod: {
       day: Number(t.disc_day), week: Number(t.disc_week), month: Number(t.disc_month),
@@ -789,13 +859,16 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
   const trendDates = [...new Set(rows.map((r) => iso(r.date)))].sort().slice(-14);
   const vIso = iso(viewDate), pIso = priorDate ? iso(priorDate) : null;
 
-  // "New" = stores that ACTUALLY LAUNCHED (were discovered) within [viewDate-P, viewDate] using each
-  // provider — NOT the snapshot count delta, which also jumps when we backfill/enrich old stores.
+  // "New" = stores that ACTUALLY LAUNCHED within [viewDate-P, viewDate] using each provider —
+  // keyed on real LAUNCH date (first product / launched_at), NOT discovered_at (which counts old
+  // stores we merely re-saw) and NOT the snapshot delta (which jumps when we backfill/enrich the
+  // existing base). So the period number answers "how the tech moved among stores born then".
   const winStart = iso(new Date(ms(viewDate) - P * MS));
   const newRows = await sql<{ payments: string }[]>`SELECT payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND UPPER(country) = ${cc} AND payments IS NOT NULL AND payments <> ''
-      AND discovered_at > ${winStart} AND discovered_at <= ${vIso}`.catch(() => []);
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) > ${winStart}::date
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) <= ${vIso}::date`.catch(() => []);
   const newBy = new Map<string, number>();
   for (const r of newRows) {
     const seen = new Set<string>();
@@ -836,8 +909,13 @@ export async function sectionReport(section: string, country = "ZA", period: Per
   if (section === "payments") return paymentSnapshotReport(country, period, back);
 
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const rows = await sql<{ val: string; discovered_at: Date | null }[]>`
-    SELECT ${sql(cfg.column)} AS val, discovered_at FROM imported_stores
+  // Period counts are keyed on real LAUNCH date (first product / launched_at), not discovered_at —
+  // so a selected timeframe reflects the tech chosen by stores BORN in that window (and pulls in
+  // past launches), never an artefact of enrichment catching up on the existing base.
+  const rows = await sql<{ val: string; launch_date: Date | null }[]>`
+    SELECT ${sql(cfg.column)} AS val,
+      COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch_date
+    FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}`;
 
@@ -852,7 +930,7 @@ export async function sectionReport(section: string, country = "ZA", period: Per
     if (cfg.firstOnly) vals = vals.slice(0, 1); // just the primary/leading value
     if (!vals.length) continue;
     allTimeStores++;
-    const isNew = r.discovered_at != null && new Date(r.discovered_at).getTime() >= cut;
+    const isNew = r.launch_date != null && new Date(r.launch_date).getTime() >= cut;
     if (isNew) periodStores++;
     for (const v of vals) {
       total.set(v, (total.get(v) ?? 0) + 1);

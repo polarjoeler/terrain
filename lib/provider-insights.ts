@@ -446,19 +446,24 @@ export type PaymentShift = {
 
 /** Recent per-store payment-provider shifts from the payment_changes log — a live feed
  *  of stores adding/dropping a gateway. ONE row per store (its latest change), and only
- *  genuine gateway changes (add/drop), so a single flapping store can't flood the feed. */
-export async function recentPaymentShifts(limit = 40): Promise<PaymentShift[]> {
+ *  genuine gateway changes (add/drop), so a single flapping store can't flood the feed.
+ *  Scoped to `countries` (ISO2) — the selected market — via a join to imported_stores;
+ *  omit for all markets. Callers pass the core African markets (ZA/KE/NG) for the combined view. */
+export async function recentPaymentShifts(limit = 40, countries?: string[]): Promise<PaymentShift[]> {
   const sql = db();
+  const cc = countries?.length ? countries.map((c) => c.toUpperCase()) : null;
   const rows = await sql<{
     domain: string; changed_at: Date; added: string[] | null; removed: string[] | null;
     old_primary: string | null; new_primary: string | null; reordered: boolean;
   }[]>`
     SELECT domain, changed_at, added, removed, old_primary, new_primary, reordered
     FROM (
-      SELECT DISTINCT ON (domain) domain, changed_at, added, removed, old_primary, new_primary, reordered
-      FROM payment_changes
-      WHERE COALESCE(array_length(added, 1), 0) > 0 OR COALESCE(array_length(removed, 1), 0) > 0
-      ORDER BY domain, changed_at DESC
+      SELECT DISTINCT ON (pc.domain) pc.domain, pc.changed_at, pc.added, pc.removed, pc.old_primary, pc.new_primary, pc.reordered
+      FROM payment_changes pc
+      ${cc ? sql`JOIN imported_stores i ON i.domain = pc.domain` : sql``}
+      WHERE (COALESCE(array_length(pc.added, 1), 0) > 0 OR COALESCE(array_length(pc.removed, 1), 0) > 0)
+        ${cc ? sql`AND UPPER(i.country) = ANY(${cc})` : sql``}
+      ORDER BY pc.domain, pc.changed_at DESC
     ) latest
     ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
   // Filter sub-rail / card-brand noise on read too, so even older rows render clean;
@@ -563,6 +568,78 @@ export async function growthSeries(opts: {
   const totalNew = [...foundMap.values()].reduce((s, n) => s + n, 0);
   const totalChurn = [...churnMap.values()].reduce((s, n) => s + n, 0);
   return { period, points, churnTrackedFrom: cf?.f ?? null, totalNew, totalChurn, currentTotal };
+}
+
+/* ---------------------------------------------------- cumulative platform growth --- */
+
+export type PlatformStatus = { selling: number; active: number; dormant: number; other: number; total: number };
+export type PlatformGrowthPoint = { date: string; shopify: number; woo: number };
+export type PlatformGrowth = {
+  points: PlatformGrowthPoint[];      // MONTHLY CUMULATIVE live-store count by launch cohort, per platform
+  shopifyNow: number; wooNow: number; // current live totals (all live stores, incl. undated)
+  shopifyStatus: PlatformStatus;      // current selling/active/dormant split (for the hover)
+  wooStatus: PlatformStatus;
+  since: string;                      // first cohort month shown
+};
+
+/** Cumulative platform-growth series for the combined ("all") insights view: how the LIVE store
+ *  base has grown month-by-month, split Shopify vs WooCommerce, so a viewer can see which platform
+ *  is growing faster. Built from launch cohorts (currently-live stores by real launch date) from
+ *  2022 on — dated stores only, so it's a clean trajectory, not the exact base — and paired with a
+ *  current selling/active/dormant status split per platform for the hover breakdown. */
+export async function platformGrowthSeries(country?: string): Promise<PlatformGrowth> {
+  const sql = db();
+  const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const SINCE = "2022-01-01";
+
+  // Monthly launches of currently-live stores, split by platform → cumulative in JS.
+  const rows = await sql<{ b: string; woo: number; shop: number }[]>`
+    SELECT to_char(date_trunc('month', ${LAUNCH}), 'YYYY-MM-DD') b,
+      COUNT(*) FILTER (WHERE platform = 'woocommerce')::int woo,
+      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop
+    FROM imported_stores
+    WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry}
+    GROUP BY 1 ORDER BY 1`.catch(() => []);
+  let cw = 0, cs = 0;
+  const points: PlatformGrowthPoint[] = rows.map((r) => {
+    cs += Number(r.shop); cw += Number(r.woo);
+    return { date: r.b, shopify: cs, woo: cw };
+  });
+
+  // Current live totals (ALL live stores, dated or not) + status split. Woo carries a real
+  // activity_tier (selling/active/dormant/not_a_store); Shopify has no equivalent tier, so its
+  // "selling" ≈ has verified payments, the rest counted as active — enough for an at-a-glance split.
+  const [st] = await sql<{
+    woo_total: number; woo_selling: number; woo_active: number; woo_dormant: number; woo_other: number;
+    shop_total: number; shop_paid: number;
+  }[]>`
+    SELECT
+      COUNT(*) FILTER (WHERE platform = 'woocommerce')::int woo_total,
+      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'selling')::int woo_selling,
+      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'active')::int woo_active,
+      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'dormant')::int woo_dormant,
+      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND (activity_tier IS NULL OR activity_tier NOT IN ('selling','active','dormant')))::int woo_other,
+      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop_total,
+      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce' AND payments IS NOT NULL AND payments <> '')::int shop_paid
+    FROM imported_stores WHERE ${LIVE} ${ctry}`.catch(() => [{
+      woo_total: 0, woo_selling: 0, woo_active: 0, woo_dormant: 0, woo_other: 0, shop_total: 0, shop_paid: 0,
+    }]);
+  const n = (v: number) => Number(v ?? 0);
+  const wooStatus: PlatformStatus = {
+    selling: n(st.woo_selling), active: n(st.woo_active), dormant: n(st.woo_dormant),
+    other: n(st.woo_other), total: n(st.woo_total),
+  };
+  const shopifyStatus: PlatformStatus = {
+    selling: n(st.shop_paid), active: n(st.shop_total) - n(st.shop_paid), dormant: 0,
+    other: 0, total: n(st.shop_total),
+  };
+  return {
+    points, since: SINCE,
+    shopifyNow: n(st.shop_total), wooNow: n(st.woo_total),
+    shopifyStatus, wooStatus,
+  };
 }
 
 const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",
