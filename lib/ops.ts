@@ -100,41 +100,75 @@ export async function recentActivity(limit = 60): Promise<ActivityEvent[]> {
   });
 }
 
+// Run an array of query-thunks at most `n` at a time, preserving result order. The postgres.js
+// pool is max:3, so firing all of opsStatus's full-table aggregates at once exhausts it — the
+// overflow queues and stalls under write load, which is what made /ops crawl. 2-at-a-time keeps a
+// connection free (e.g. for the live heartbeat read) and is still fast.
+async function mapLimit<T extends readonly unknown[]>(
+  thunks: readonly [...{ [K in keyof T]: () => Promise<T[K]> }],
+  n: number,
+): Promise<T> {
+  const out: unknown[] = new Array(thunks.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, thunks.length) }, async () => {
+    while (i < thunks.length) { const idx = i++; out[idx] = await (thunks[idx] as () => Promise<unknown>)(); }
+  }));
+  return out as unknown as T;
+}
+
+// /ops auto-refreshes every 60s and can have several viewers, and each opsStatus() is ~9 full-table
+// aggregate scans — so serve it from a short in-process cache (with an in-flight guard) instead of
+// recomputing on every request. Heartbeats are read separately + uncached, so "is Lucy alive" stays
+// live even while these rollups are cached.
+type CachedOps = { at: number; data: OpsStatus };
+const OPS_TTL_MS = 30 * 1000;
+let _opsCache: CachedOps | null = null;
+let _opsInflight: Promise<OpsStatus> | null = null;
 export async function opsStatus(): Promise<OpsStatus> {
+  if (_opsCache && Date.now() - _opsCache.at < OPS_TTL_MS) return _opsCache.data;
+  if (!_opsInflight) {
+    _opsInflight = opsStatusUncached()
+      .then((d) => { _opsCache = { at: Date.now(), data: d }; _opsInflight = null; return d; })
+      .catch((e) => { _opsInflight = null; if (_opsCache) return _opsCache.data; throw e; });
+  }
+  return _opsInflight;
+}
+
+async function opsStatusUncached(): Promise<OpsStatus> {
   const sql = db();
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
 
-  const [disc, pay, launch, woo, hb, platCov, mktChurn, rawStores, rawChurn] = await Promise.all([
-    sql<{ today: number; yest: number }[]>`
+  const [disc, pay, launch, woo, hb, platCov, mktChurn, rawStores, rawChurn] = await mapLimit([
+    () => sql<{ today: number; yest: number }[]>`
       SELECT count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE)::int today,
              count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE-1)::int yest
       FROM imported_stores`,
-    sql<{ live: number; haspay: number; backlog: number; probed12h: number }[]>`
+    () => sql<{ live: number; haspay: number; backlog: number; probed12h: number }[]>`
       SELECT count(*)::int live,
              count(*) FILTER (WHERE payments IS NOT NULL AND payments<>'')::int haspay,
              count(*) FILTER (WHERE payments_checked_at IS NULL)::int backlog,
              count(*) FILTER (WHERE payments_checked_at > now()-interval '12 hours')::int probed12h
       FROM imported_stores WHERE published AND platform='Shopify'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND country = ANY(${CORE})`,
-    sql<{ since: number; filled12h: number }[]>`
+    () => sql<{ since: number; filled12h: number }[]>`
       SELECT count(*) FILTER (WHERE country='ZA' AND platform IS DISTINCT FROM 'woocommerce' AND ${LAUNCH} >= '2026-07-30'::date)::int since,
              count(*) FILTER (WHERE launched_source='earliest_product' AND catalog_checked_at > now()-interval '12 hours')::int filled12h
       FROM imported_stores`,
-    sql<{ total: number; confirmed: number; real: number }[]>`
+    () => sql<{ total: number; confirmed: number; real: number }[]>`
       SELECT count(*) FILTER (WHERE platform='woocommerce')::int total,
              count(*) FILTER (WHERE platform='woocommerce' AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int confirmed,
              count(*) FILTER (WHERE platform='woocommerce' AND activity_tier IN ('selling','active','dormant') AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int real
       FROM imported_stores`,
     // heartbeats: last activity TIMESTAMP per machine role (created_at = row-insert time, a real
     // timestamptz — discovered_at is only a DATE so it can't heartbeat).
-    sql<{ chad_pay: Date | null; vps_disc: Date | null; lucy_woo: Date | null; lucy_launch: Date | null }[]>`
+    () => sql<{ chad_pay: Date | null; vps_disc: Date | null; lucy_woo: Date | null; lucy_launch: Date | null }[]>`
       SELECT
         (SELECT max(payments_checked_at) FROM imported_stores)                                              chad_pay,
         (SELECT max(created_at) FROM imported_stores WHERE source='ct_tail')                                vps_disc,
         (SELECT max(created_at) FROM imported_stores WHERE source='woo_ct')                                 lucy_woo,
         (SELECT max(catalog_checked_at) FROM imported_stores WHERE launched_source='earliest_product')      lucy_launch`,
     // Track A + Track B per platform, over the CORE markets.
-    sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; has_launch: number; launched30d: number }[]>`
+    () => sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; has_launch: number; launched30d: number }[]>`
       SELECT
         CASE WHEN platform='woocommerce' THEN 'WooCommerce' ELSE 'Shopify' END AS plat,
         count(*)::int tracked,
@@ -147,23 +181,23 @@ export async function opsStatus(): Promise<OpsStatus> {
       WHERE published AND country = ANY(${CORE}) AND platform IN ('Shopify','woocommerce')
       GROUP BY 1`,
     // Market churn (last 30d) by ESTIMATED DEATH DATE — churn_log has no platform (Shopify liveness).
-    sql<{ churned30d: number }[]>`
+    () => sql<{ churned30d: number }[]>`
       SELECT count(*) FILTER (WHERE died_at >= CURRENT_DATE-30)::int churned30d
       FROM churn_log WHERE COALESCE(historic,false)=false AND died_at IS NOT NULL AND country = ANY(${CORE})`,
     // RAW OPERATIONS (last 7d) — what the pipeline actually DID, by our clock (created_at /
     // checked_at / detection). Always accurate; the honest counterpart to the market estimate.
-    sql<{ discovered: number; checked: number; probed: number }[]>`
+    () => sql<{ discovered: number; checked: number; probed: number }[]>`
       SELECT
         count(*) FILTER (WHERE source='ct_tail' AND created_at > now()-interval '7 days')::int discovered,
         count(*) FILTER (WHERE live_checked_at > now()-interval '7 days')::int checked,
         count(*) FILTER (WHERE payments_checked_at > now()-interval '7 days')::int probed
       FROM imported_stores WHERE country = ANY(${MK})`,
-    sql<{ dead: number; migrated: number }[]>`
+    () => sql<{ dead: number; migrated: number }[]>`
       SELECT
         count(*) FILTER (WHERE status='dead' AND churned_at > now()-interval '7 days')::int dead,
         count(*) FILTER (WHERE status='migrated' AND churned_at > now()-interval '7 days')::int migrated
       FROM churn_log WHERE country = ANY(${MK})`,
-  ]);
+  ], 2);
 
   const p = pay[0]; const h = hb[0];
   const beat = (label: string, d: Date | null, freshMins: number, detail: string): Heartbeat => {
