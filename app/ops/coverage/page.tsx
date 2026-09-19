@@ -34,15 +34,19 @@ function PlatCount({ p, color }: { p: PlatCoverage | null; color: string }) {
   );
 }
 
+const OTHER = "#8fb0c4";
 function CountryRow({ r }: { r: CoverageRow }) {
   return (
     <tr className={`border-b border-cream/[0.06] ${r.focus ? "bg-cream/[0.03]" : ""}`}>
       <td className="py-2.5 pl-3 pr-2">
-        <span className="text-sm text-cream/85">{countryEmoji(r.country)} {countryName(r.country)}</span>
+        <Link href={`/ops/coverage/${r.country}`} className="text-sm text-cream/85 hover:text-cyan hover:underline" title="See every CMS in this country">
+          {countryEmoji(r.country)} {countryName(r.country)}
+        </Link>
         {r.focus && <span className="ml-2 rounded-full border border-mint/25 bg-mint/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-mint">focus</span>}
       </td>
       <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.shopify} color={SHOP} /></td>
       <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.woo} color={WOO} /></td>
+      <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.other} color={OTHER} /></td>
       <td className="py-2.5 pr-3 text-right text-sm tabular-nums" title="Unconfirmed candidates (platform not yet verified, unpublished) — the Woo worker probes these and publishes the real ones">
         {r.pending > 0 ? <span className="text-cream/40">{r.pending.toLocaleString()}</span> : <span className="text-cream/20">—</span>}
       </td>
@@ -101,9 +105,10 @@ export default async function CoveragePage() {
         </div>
 
         {/* Grand totals per platform */}
-        <section className="mt-5 grid gap-3 sm:grid-cols-2">
+        <section className="mt-5 grid gap-3 sm:grid-cols-3">
           <GrandCard label="Shopify" color={SHOP} p={m.grand.shopify} />
           <GrandCard label="WooCommerce" color={WOO} p={m.grand.woo} />
+          <GrandCard label="Other CMS" color={OTHER} p={m.grand.other} />
         </section>
 
         {/* What the numbers mean */}
@@ -114,9 +119,10 @@ export default async function CoveragePage() {
             <li><span className="text-mint">■</span> <b className="text-cream/80">Payments</b> — % of tracked stores with ≥1 payment gateway verified at checkout (Shopify checkout probe; Woo Store API / plugins).</li>
             <li><span className="text-cyan">■</span> <b className="text-cream/80">Launch date</b> — % with a real launch date on record (earliest product, StoreLeads launch, or first SSL cert).</li>
             <li><span className="text-lilac">■</span> <b className="text-cream/80">Liveness</b> — % with a liveness check on record (we&rsquo;ve confirmed alive/dead status at least once).</li>
+            <li><b className="text-cream/80">Other</b> — every CMS that isn&rsquo;t Shopify or Woo (Wix, Squarespace, Magento, BigCommerce, Webflow, PrestaShop, Odoo, Ecwid…), rolled up. Captured but not yet surfaced in insights.</li>
             <li><b className="text-cream/80">Pending</b> — candidate domains we&rsquo;ve imported but not yet confirmed (platform unverified, unpublished). The Woo worker probes these and publishes the real ones, moving them into the Woo column.</li>
           </ul>
-          <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched.</p>
+          <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched. <b className="text-cream/70">Click any country</b> to see every CMS in it.</p>
         </section>
 
         {/* Region sections */}
@@ -130,12 +136,13 @@ export default async function CoveragePage() {
                 <span className="text-[11px] text-cream/35">{rows.length} countries · {tracked.toLocaleString()} tracked</span>
               </div>
               <div className="overflow-x-auto rounded-2xl border border-cream/12 bg-cream/[0.02]">
-                <table className="w-full min-w-[680px] border-collapse">
+                <table className="w-full min-w-[760px] border-collapse">
                   <thead>
                     <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
                       <th className="py-2 pl-3 pr-2 text-left">Country</th>
                       <th className="py-2 pr-3 text-right">Shopify</th>
                       <th className="py-2 pr-3 text-right">Woo</th>
+                      <th className="py-2 pr-3 text-right">Other</th>
                       <th className="py-2 pr-3 text-right">Pending</th>
                       <th className="py-2 pr-3 text-right">Payments</th>
                       <th className="py-2 pr-3 text-right">Launch</th>

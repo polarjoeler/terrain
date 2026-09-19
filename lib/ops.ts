@@ -262,12 +262,13 @@ export type PlatCoverage = {
 export type CoverageRow = {
   country: string; region: string; discovered: number; tracked: number; focus: boolean;
   shopify: PlatCoverage | null; woo: PlatCoverage | null;
+  other: PlatCoverage | null;  // every CMS that isn't Shopify/Woo (Wix/Squarespace/Magento/…) — aggregated
   pending: number;          // unconfirmed candidates (platform unknown, unpublished) awaiting a probe
-  combined: PlatCoverage;   // both confirmed platforms together — the one-line coverage for the country
+  combined: PlatCoverage;   // all confirmed platforms together — the one-line coverage for the country
 };
 export type CoverageMatrix = {
   discovered: number; tracked: number; pending: number; totalCountries: number;
-  grand: { shopify: PlatCoverage; woo: PlatCoverage };
+  grand: { shopify: PlatCoverage; woo: PlatCoverage; other: PlatCoverage };
   rows: CoverageRow[];
 };
 
@@ -288,6 +289,28 @@ export async function coverageMatrix(): Promise<CoverageMatrix> {
   return cachedAgg("coverage:matrix", 10 * 60 * 1000, computeCoverageMatrix);
 }
 
+// One row per ACTUAL platform (Shopify / WooCommerce / Wix / Magento / Squarespace / …) for a single
+// country — the full scope behind the coverage page's rolled-up columns, for the drill-in.
+export type CmsCoverage = PlatCoverage & { platform: string };
+export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
+  return cachedAgg(`coverage:country:${country.toUpperCase()}`, 10 * 60 * 1000, async () => {
+    const sql = db();
+    const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+    const rows = await sql<{ platform: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
+      SELECT COALESCE(NULLIF(platform, ''), '(unconfirmed)') platform,
+        count(*)::int discovered,
+        count(*) FILTER (WHERE ${TRACKED})::int tracked,
+        count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
+        count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
+        count(*) FILTER (WHERE ${TRACKED} AND live_checked_at IS NOT NULL)::int checked
+      FROM imported_stores WHERE UPPER(country) = ${country.toUpperCase()}
+      GROUP BY 1 ORDER BY discovered DESC`;
+    // Normalise the display name (woocommerce → WooCommerce) and shape as PlatCoverage.
+    const label = (p: string) => (p === "woocommerce" ? "WooCommerce" : p);
+    return rows.map((r) => ({ platform: label(r.platform), ...toPlat({ discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) }) }));
+  });
+}
+
 async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const sql = db();
   // Coverage numerators are scoped to TRACKED (published & live) stores — the set we enrich — so a
@@ -296,8 +319,9 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const rows = await sql<{ country: string; plat: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
     SELECT UPPER(country) country,
       CASE WHEN platform = 'woocommerce' THEN 'woo'
+           WHEN platform = 'Shopify' OR (platform IS NULL AND published) THEN 'shopify'
            WHEN platform IS NULL AND NOT published THEN 'pending'
-           ELSE 'shopify' END plat,
+           ELSE 'other' END plat,
       count(*)::int discovered,
       count(*) FILTER (WHERE ${TRACKED})::int tracked,
       count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
@@ -308,15 +332,16 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
     GROUP BY 1, 2`;
 
   const byCountry = new Map<string, { raw: Raw; row: CoverageRow }>();
-  const gShop = emptyRaw(), gWoo = emptyRaw();
+  const gShop = emptyRaw(), gWoo = emptyRaw(), gOther = emptyRaw();
   let gPending = 0;
   for (const r of rows) {
     const raw: Raw = { discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) };
     const c = r.country;
-    if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, pending: 0, combined: toPlat(emptyRaw()) } });
+    if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, other: null, pending: 0, combined: toPlat(emptyRaw()) } });
     const entry = byCountry.get(c)!;
     if (r.plat === "pending") { entry.row.pending += raw.discovered; gPending += raw.discovered; }
     else if (r.plat === "woo") { addRaw(entry.raw, raw); entry.row.woo = toPlat(raw); addRaw(gWoo, raw); }
+    else if (r.plat === "other") { addRaw(entry.raw, raw); entry.row.other = toPlat(raw); addRaw(gOther, raw); }
     else { addRaw(entry.raw, raw); entry.row.shopify = toPlat(raw); addRaw(gShop, raw); }
   }
   const list = [...byCountry.values()].map(({ raw, row }) => {
@@ -328,7 +353,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
     tracked: list.reduce((s, r) => s + r.tracked, 0),
     pending: gPending,
     totalCountries: list.length,
-    grand: { shopify: toPlat(gShop), woo: toPlat(gWoo) },
+    grand: { shopify: toPlat(gShop), woo: toPlat(gWoo), other: toPlat(gOther) },
     rows: list,
   };
 }
