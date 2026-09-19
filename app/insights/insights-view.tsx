@@ -193,8 +193,63 @@ function WooSections({ woo }: { woo: NonNullable<InsightsData["woo"]> }) {
       <DistroCard title="WooCommerce version" subtitle="Which WooCommerce release these stores run" data={woo.wooVersions} baseline={null} tone="lilac" />
       <DistroCard title="WordPress version" subtitle="Which WordPress version these stores run" data={woo.wpVersions} baseline={null} tone="orange" />
       <DistroCard title="Top plugins" subtitle="Most-installed WordPress plugins across these stores" data={woo.plugins} baseline={null} tone="mint" />
-      <DistroCard title="Payment gateways" subtitle="Woo payment plugins detected at these stores" data={woo.paymentPlugins} baseline={null} tone="cyan" />
+      {/* Payment gateways now render via the segmented PSP/BNPL/APM PaymentIntelligenceCard above
+          (checkout-verified), replacing the old flat plugin-derived list. */}
     </>
+  );
+}
+
+/** Payment intelligence — providers split into PSP / BNPL / APM, each drillable, with the
+ *  headline BNPL/PSP signals. Used on BOTH the Shopify and WooCommerce views (Woo now has real
+ *  checkout-verified payment data), so a payment company sees the same breakdown per platform. */
+function PaymentIntelligenceCard({
+  data, provByType, baseProvByType, base, tfTouched, pk, pw, country, subtitle,
+}: {
+  data: InsightsData;
+  provByType: Record<PayType, InsightItem[]>;
+  baseProvByType: Record<PayType, InsightItem[]> | null;
+  base: InsightsData | null;
+  tfTouched: boolean;
+  pk: "day" | "week" | "month" | "quarter" | "year";
+  pw: string;
+  country: string;
+  subtitle?: string;
+}) {
+  return (
+    <Card
+      title="Payment intelligence"
+      subtitle={subtitle ?? `Checkout-verified across ${data.paymentsVerifiedStores.toLocaleString()} of ${data.storesTotal.toLocaleString()} stores (${Math.round((100 * data.paymentsVerifiedStores) / Math.max(data.storesTotal, 1))}% and growing)`}
+      reportHref={`/insights/payments?country=${country}`}
+    >
+      {/* Headline signals for payment-company subscribers */}
+      <div className="mb-6 grid grid-cols-3 gap-3">
+        {[
+          { n: `${data.paymentsByType.BNPL.pct}%`, l: "offer BNPL" },
+          { n: (data.paymentsVerifiedStores - data.paymentsByType.BNPL.count).toLocaleString(), l: "no BNPL yet" },
+          { n: `${data.paymentsByType.PSP.pct}%`, l: "use a PSP" },
+        ].map((s) => (
+          <div key={s.l} className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-3 text-center">
+            <div className="font-display text-2xl text-cream">{s.n}</div>
+            <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">{s.l}</div>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-7">
+        {PAY_TYPES.map((t) =>
+          provByType[t].length ? (
+            <div key={t}>
+              <div className="mb-3 flex flex-wrap items-baseline gap-x-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
+                <span className="text-[11px] text-cream/40">
+                  {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
+                </span>
+              </div>
+              <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].payments : undefined} adoptWord={pw} />
+            </div>
+          ) : null,
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -470,43 +525,16 @@ export function InsightsView({
               Shopify is growing faster (hover a legend chip for its selling/active/dormant split). */}
           {platform === "all" && <PlatformGrowthChart country={country} />}
 
+          {/* WooCommerce now has real checkout-verified payment data — show the SAME PSP/BNPL/APM
+              breakdown as Shopify (its own Woo sections still follow below). */}
+          {platform === "woocommerce" && (
+            <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} tfTouched={tfTouched} pk={pk} pw={pw} country={country} />
+          )}
+
           {/* Shopify payment intelligence — hidden on the WooCommerce view (its own sections below) */}
           {platform !== "woocommerce" && (<>
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
-          <Card
-            title="Payment intelligence"
-            subtitle={`Checkout-verified across ${data.paymentsVerifiedStores.toLocaleString()} of ${data.storesTotal.toLocaleString()} stores (${Math.round((100 * data.paymentsVerifiedStores) / Math.max(data.storesTotal, 1))}% and growing)`}
-            reportHref={`/insights/payments?country=${country}`}
-          >
-            {/* Headline signals for payment-company subscribers */}
-            <div className="mb-6 grid grid-cols-3 gap-3">
-              {[
-                { n: `${data.paymentsByType.BNPL.pct}%`, l: "offer BNPL" },
-                { n: (data.paymentsVerifiedStores - data.paymentsByType.BNPL.count).toLocaleString(), l: "no BNPL yet" },
-                { n: `${data.paymentsByType.PSP.pct}%`, l: "use a PSP" },
-              ].map((s) => (
-                <div key={s.l} className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-3 text-center">
-                  <div className="font-display text-2xl text-cream">{s.n}</div>
-                  <div className="mt-0.5 text-[11px] uppercase tracking-wide text-cream/45">{s.l}</div>
-                </div>
-              ))}
-            </div>
-            <div className="space-y-7">
-              {PAY_TYPES.map((t) =>
-                provByType[t].length ? (
-                  <div key={t}>
-                    <div className="mb-3 flex flex-wrap items-baseline gap-x-2">
-                      <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
-                      <span className="text-[11px] text-cream/40">
-                        {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
-                      </span>
-                    </div>
-                    <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].payments : undefined} adoptWord={pw} />
-                  </div>
-                ) : null,
-              )}
-            </div>
-          </Card>
+          <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} tfTouched={tfTouched} pk={pk} pw={pw} country={country} />
 
           <div className="space-y-5">
             {/* Shopify Plus is a Shopify-only concept — hide it on the combined "all" view (there it
