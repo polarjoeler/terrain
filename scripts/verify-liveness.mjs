@@ -79,8 +79,10 @@ const PLATFORMS = {
   Wix: ["wixstatic.com", "parastorage.com", "_wixcssimports"],
   Squarespace: ["squarespace.com", "static1.squarespace"],
   BigCommerce: ["bigcommerce.com", "stencil-utils"],
-  Magento: ["/pub/static/version", "data-mage-init"],
+  Magento: ["/pub/static/version", "data-mage-init"],   // Adobe Commerce
   Webflow: ["webflow.com", "assets.website-files.com"],
+  PrestaShop: ["prestashop", "/modules/ps_", "id_product_attribute", "prestashop-"],
+  Odoo: ["data-oe-model", "web.assets_frontend", "/web/static/lib", "odoo.define"],
   Ecwid: ["app.ecwid.com"],
   "Square Online": ["squareup.com", "weeblycloud"],
 };
