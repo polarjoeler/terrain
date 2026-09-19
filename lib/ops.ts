@@ -1,6 +1,7 @@
 /** Live operations status — the numbers + machine heartbeats behind the /ops dashboard.
  *  Read fresh on every request (no cache) so it's a real-time cross-device status page. */
 import postgres from "postgres";
+import { cachedAgg } from "./agg-cache";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -240,5 +241,93 @@ async function opsStatusUncached(): Promise<OpsStatus> {
       beat("Discovery · VPS → landing", h.vps_disc, 360, "CT-log landings (4h cadence)"),
       beat("Lucy · launch dates", h.lucy_launch, 180, "fresh-IP launch enrichment"),
     ],
+  };
+}
+
+/* ------------------------------------------------------- enrichment coverage matrix --- */
+
+// The whole store universe (~126k across 170 countries) is far wider than the visible markets.
+// This is the honest "what have we got, and how enriched is it" view, by country × platform.
+const FOCUS_MARKETS = new Set([...CORE, "JP"]);
+
+export type PlatCoverage = {
+  total: number; published: number; live: number;
+  payPct: number; launchPct: number; checkedPct: number;
+};
+export type CoverageRow = { country: string; total: number; focus: boolean; shopify: PlatCoverage | null; woo: PlatCoverage | null };
+export type CoverageMatrix = {
+  totalStores: number; totalCountries: number;
+  grand: { shopify: PlatCoverage; woo: PlatCoverage };
+  rows: CoverageRow[];
+};
+
+const pctOfC = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
+const emptyPlat = (): PlatCoverage => ({ total: 0, published: 0, live: 0, payPct: 0, launchPct: 0, checkedPct: 0 });
+
+/** Per-country × platform store counts + enrichment coverage (payments / launch date / liveness).
+ *  Cached (slow-moving, one heavy GROUP BY over the whole table). */
+export async function coverageMatrix(): Promise<CoverageMatrix> {
+  return cachedAgg("coverage:matrix", 10 * 60 * 1000, computeCoverageMatrix);
+}
+
+async function computeCoverageMatrix(): Promise<CoverageMatrix> {
+  const sql = db();
+  const rows = await sql<{
+    country: string; plat: string; total: number; published: number; live: number;
+    has_pay: number; has_launch: number; checked: number;
+  }[]>`
+    SELECT UPPER(country) country,
+      CASE WHEN platform = 'woocommerce' THEN 'woo' ELSE 'shopify' END plat,
+      count(*)::int total,
+      count(*) FILTER (WHERE published)::int published,
+      count(*) FILTER (WHERE live_status IS NULL OR live_status NOT IN ('dead','migrated'))::int live,
+      count(*) FILTER (WHERE payments IS NOT NULL AND payments <> '')::int has_pay,
+      count(*) FILTER (WHERE launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}')::int has_launch,
+      count(*) FILTER (WHERE live_checked_at IS NOT NULL)::int checked
+    FROM imported_stores
+    WHERE country IS NOT NULL AND country <> ''
+    GROUP BY 1, 2`;
+
+  const toPlat = (r: (typeof rows)[number]): PlatCoverage => ({
+    total: Number(r.total), published: Number(r.published), live: Number(r.live),
+    payPct: pctOfC(Number(r.has_pay), Number(r.total)),
+    launchPct: pctOfC(Number(r.has_launch), Number(r.total)),
+    checkedPct: pctOfC(Number(r.checked), Number(r.total)),
+  });
+
+  const byCountry = new Map<string, CoverageRow>();
+  const gShop = emptyPlat(), gWoo = emptyPlat();
+  const addGrand = (g: PlatCoverage, r: (typeof rows)[number], p: PlatCoverage) => {
+    g.total += p.total; g.published += p.published; g.live += p.live;
+    // accumulate raw numerators for grand %s (re-derived below)
+    (g as unknown as { _pay: number })._pay = ((g as unknown as { _pay?: number })._pay ?? 0) + Number(r.has_pay);
+    (g as unknown as { _launch: number })._launch = ((g as unknown as { _launch?: number })._launch ?? 0) + Number(r.has_launch);
+    (g as unknown as { _chk: number })._chk = ((g as unknown as { _chk?: number })._chk ?? 0) + Number(r.checked);
+  };
+
+  for (const r of rows) {
+    const c = r.country;
+    if (!byCountry.has(c)) byCountry.set(c, { country: c, total: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null });
+    const row = byCountry.get(c)!;
+    const plat = toPlat(r);
+    row.total += plat.total;
+    if (r.plat === "woo") { row.woo = plat; addGrand(gWoo, r, plat); }
+    else { row.shopify = plat; addGrand(gShop, r, plat); }
+  }
+  const finishGrand = (g: PlatCoverage) => {
+    const raw = g as unknown as { _pay?: number; _launch?: number; _chk?: number };
+    g.payPct = pctOfC(raw._pay ?? 0, g.total);
+    g.launchPct = pctOfC(raw._launch ?? 0, g.total);
+    g.checkedPct = pctOfC(raw._chk ?? 0, g.total);
+    delete raw._pay; delete raw._launch; delete raw._chk;
+    return g;
+  };
+
+  const list = [...byCountry.values()].sort((a, b) => Number(b.focus) - Number(a.focus) || b.total - a.total);
+  return {
+    totalStores: list.reduce((s, r) => s + r.total, 0),
+    totalCountries: list.length,
+    grand: { shopify: finishGrand(gShop), woo: finishGrand(gWoo) },
+    rows: list,
   };
 }

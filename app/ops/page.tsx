@@ -74,7 +74,10 @@ export default async function OpsPage() {
             {allOk ? "All systems live" : "Needs attention"}
           </span>
         </div>
-        <p className="mt-1 text-xs text-cream/35">Live · refreshes every 60s · {new Date(s.at).toLocaleTimeString()}</p>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <p className="text-xs text-cream/35">Live · refreshes every 60s · {new Date(s.at).toLocaleTimeString()}</p>
+          <Link href="/ops/coverage" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-medium text-cyan hover:bg-cyan/20">📊 Coverage by country</Link>
+        </div>
 
         {/* Machine heartbeats — the "is everything running" glance */}
         <section className="mt-5 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
