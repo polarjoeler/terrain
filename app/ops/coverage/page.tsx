@@ -1,9 +1,8 @@
-import { Fragment } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { coverageMatrix, type PlatCoverage } from "@/lib/ops";
-import { marketLabel } from "@/lib/markets";
+import { coverageMatrix, type CoverageRow, type PlatCoverage } from "@/lib/ops";
+import { countryEmoji, countryName, regionOf, REGION_ORDER } from "@/lib/countries";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Terrain — Coverage" };
@@ -23,21 +22,30 @@ function Cov({ pct, tone }: { pct: number; tone: string }) {
   );
 }
 
-function PlatRow({ country, label, color, p, focus }: { country: string; label: string; color: string; p: PlatCoverage; focus: boolean }) {
+// One store count per platform: tracked (bold) with discovered dimmed beneath.
+function PlatCount({ p, color }: { p: PlatCoverage | null; color: string }) {
+  if (!p || p.discovered === 0) return <span className="text-cream/20">—</span>;
   return (
-    <tr className={`border-b border-cream/[0.06] ${focus ? "bg-cream/[0.03]" : ""}`}>
+    <span className="inline-flex items-center gap-1.5" title={`${p.tracked.toLocaleString()} tracked · ${p.discovered.toLocaleString()} discovered`}>
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+      <span className="tabular-nums text-cream/85">{p.tracked.toLocaleString()}</span>
+      {p.discovered !== p.tracked && <span className="tabular-nums text-[10px] text-cream/30">/{p.discovered.toLocaleString()}</span>}
+    </span>
+  );
+}
+
+function CountryRow({ r }: { r: CoverageRow }) {
+  return (
+    <tr className={`border-b border-cream/[0.06] ${r.focus ? "bg-cream/[0.03]" : ""}`}>
       <td className="py-2.5 pl-3 pr-2">
-        <span className="text-sm text-cream/85">{marketLabel(country)}</span>
-        {focus && <span className="ml-2 rounded-full border border-mint/25 bg-mint/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-mint">focus</span>}
+        <span className="text-sm text-cream/85">{countryEmoji(r.country)} {countryName(r.country)}</span>
+        {r.focus && <span className="ml-2 rounded-full border border-mint/25 bg-mint/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-mint">focus</span>}
       </td>
-      <td className="py-2.5 pr-2">
-        <span className="flex items-center gap-1.5 text-xs text-cream/70"><span className="h-2 w-2 rounded-full" style={{ background: color }} />{label}</span>
-      </td>
-      <td className="py-2.5 pr-3 text-right font-display text-base tabular-nums text-cream">{p.total.toLocaleString()}</td>
-      <td className="py-2.5 pr-3 text-right text-xs tabular-nums text-cream/45">{p.live.toLocaleString()}</td>
-      <td className="py-2.5 pr-3"><Cov pct={p.payPct} tone="mint" /></td>
-      <td className="py-2.5 pr-3"><Cov pct={p.launchPct} tone="cyan" /></td>
-      <td className="py-2.5 pr-3"><Cov pct={p.checkedPct} tone="lilac" /></td>
+      <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.shopify} color={SHOP} /></td>
+      <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.woo} color={WOO} /></td>
+      <td className="py-2.5 pr-3"><Cov pct={r.combined.payPct} tone="mint" /></td>
+      <td className="py-2.5 pr-3"><Cov pct={r.combined.launchPct} tone="cyan" /></td>
+      <td className="py-2.5 pr-3"><Cov pct={r.combined.checkedPct} tone="lilac" /></td>
     </tr>
   );
 }
@@ -50,22 +58,26 @@ export default async function CoveragePage() {
   const m = await coverageMatrix().catch(() => null);
   if (!m) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load coverage.</main>;
 
-  const focus = m.rows.filter((r) => r.focus);
-  const rest = m.rows.filter((r) => !r.focus);
-  const grandTotal = m.grand.shopify.total + m.grand.woo.total;
+  // Group rows by region, in REGION_ORDER; keep the focus-first / size ordering inside each.
+  const byRegion = new Map<string, CoverageRow[]>();
+  for (const r of m.rows) {
+    const reg = regionOf(r.country);
+    (byRegion.get(reg) ?? byRegion.set(reg, []).get(reg)!).push(r);
+  }
 
   const GrandCard = ({ label, color, p }: { label: string; color: string; p: PlatCoverage }) => (
     <div className="rounded-2xl border border-cream/12 bg-cream/[0.02] p-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-baseline gap-2">
         <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
         <span className="text-sm font-semibold text-cream">{label}</span>
-        <span className="ml-auto font-display text-2xl tabular-nums text-cream">{p.total.toLocaleString()}</span>
+        <span className="ml-auto font-display text-2xl tabular-nums text-cream">{p.tracked.toLocaleString()}</span>
+        <span className="text-[11px] text-cream/35">tracked</span>
       </div>
       <div className="mt-3 space-y-2">
-        {[["Payments", p.payPct, "mint"], ["Launch date", p.launchPct, "cyan"], ["Liveness checked", p.checkedPct, "lilac"]].map(([l, v, t]) => (
-          <div key={l as string} className="flex items-center gap-2 text-[11px] text-cream/50">
-            <span className="w-24">{l}</span>
-            <Cov pct={v as number} tone={t as string} />
+        {([["Payments", p.payPct, "mint"], ["Launch date", p.launchPct, "cyan"], ["Liveness", p.checkedPct, "lilac"]] as const).map(([l, v, t]) => (
+          <div key={l} className="flex items-center gap-2 text-[11px] text-cream/50">
+            <span className="w-20">{l}</span>
+            <Cov pct={v} tone={t} />
           </div>
         ))}
       </div>
@@ -78,7 +90,9 @@ export default async function CoveragePage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="font-display text-2xl text-cream">Enrichment Coverage</h1>
-            <p className="mt-1 text-xs text-cream/40">{grandTotal.toLocaleString()} stores · {m.totalCountries} countries · what we hold and how enriched it is, by country &amp; platform</p>
+            <p className="mt-1 text-xs text-cream/40">
+              {m.discovered.toLocaleString()} discovered · {m.tracked.toLocaleString()} tracked · {m.totalCountries} countries
+            </p>
           </div>
           <Link href="/ops" className="rounded-full border border-cream/15 px-3 py-1 text-sm text-cream/60 hover:text-cream">← Ops</Link>
         </div>
@@ -89,35 +103,48 @@ export default async function CoveragePage() {
           <GrandCard label="WooCommerce" color={WOO} p={m.grand.woo} />
         </section>
 
-        <p className="mt-4 text-[11px] text-cream/35">
-          Focus markets (ZA · KE · NG · JP) are the ones we actively enrich; the rest of the world is discovered &amp; banked but only lightly enriched.
-          Coverage is % of stores in that country/platform with payments verified · a real launch date · a liveness check on record.
-        </p>
-
-        {/* Matrix */}
-        <section className="mt-4 overflow-x-auto rounded-3xl border border-cream/12 bg-cream/[0.02]">
-          <table className="w-full min-w-[640px] border-collapse">
-            <thead>
-              <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
-                <th className="py-2.5 pl-3 pr-2 text-left">Country</th>
-                <th className="py-2.5 pr-2 text-left">Platform</th>
-                <th className="py-2.5 pr-3 text-right">Stores</th>
-                <th className="py-2.5 pr-3 text-right">Live</th>
-                <th className="py-2.5 pr-3 text-right">Payments</th>
-                <th className="py-2.5 pr-3 text-right">Launch</th>
-                <th className="py-2.5 pr-3 text-right">Liveness</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...focus, ...rest].map((r) => (
-                <Fragment key={r.country}>
-                  {r.shopify && <PlatRow country={r.country} label="Shopify" color={SHOP} p={r.shopify} focus={r.focus} />}
-                  {r.woo && <PlatRow country={r.country} label="Woo" color={WOO} p={r.woo} focus={r.focus} />}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
+        {/* What the numbers mean */}
+        <section className="mt-4 rounded-2xl border border-cream/10 bg-cream/[0.02] p-4 text-[11px] leading-relaxed text-cream/55">
+          <div className="mb-1.5 font-semibold uppercase tracking-wide text-cream/40">How to read this</div>
+          <ul className="space-y-1">
+            <li><b className="text-cream/80">Stores</b> — the bold number is <b className="text-cream/80">tracked</b> (published &amp; live — the set we present and enrich, and what Insights counts); the dim <span className="text-cream/40">/number</span> is everything <b className="text-cream/80">discovered</b> (incl. unpublished imports and stores we&rsquo;ve since confirmed dead or migrated off-platform).</li>
+            <li><span className="text-mint">■</span> <b className="text-cream/80">Payments</b> — % of tracked stores with ≥1 payment gateway verified at checkout (Shopify checkout probe; Woo Store API / plugins).</li>
+            <li><span className="text-cyan">■</span> <b className="text-cream/80">Launch date</b> — % with a real launch date on record (earliest product, StoreLeads launch, or first SSL cert).</li>
+            <li><span className="text-lilac">■</span> <b className="text-cream/80">Liveness</b> — % with a liveness check on record (we&rsquo;ve confirmed alive/dead status at least once).</li>
+          </ul>
+          <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched.</p>
         </section>
+
+        {/* Region sections */}
+        {REGION_ORDER.filter((reg) => byRegion.has(reg)).map((reg) => {
+          const rows = byRegion.get(reg)!;
+          const tracked = rows.reduce((s, r) => s + r.tracked, 0);
+          return (
+            <section key={reg} className="mt-6">
+              <div className="mb-2 flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/60">{reg}</h2>
+                <span className="text-[11px] text-cream/35">{rows.length} countries · {tracked.toLocaleString()} tracked</span>
+              </div>
+              <div className="overflow-x-auto rounded-2xl border border-cream/12 bg-cream/[0.02]">
+                <table className="w-full min-w-[600px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
+                      <th className="py-2 pl-3 pr-2 text-left">Country</th>
+                      <th className="py-2 pr-3 text-right">Shopify</th>
+                      <th className="py-2 pr-3 text-right">Woo</th>
+                      <th className="py-2 pr-3 text-right">Payments</th>
+                      <th className="py-2 pr-3 text-right">Launch</th>
+                      <th className="py-2 pr-3 text-right">Liveness</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => <CountryRow key={r.country} r={r} />)}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          );
+        })}
       </div>
     </main>
   );
