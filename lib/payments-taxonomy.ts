@@ -17,6 +17,7 @@ const TYPE: Record<string, PayType> = {
   // WooCommerce-side gateways (from Woo payment plugins): WooPayments is Woo's own embedded
   // (Stripe-backed) gateway; TradeSafe/iVeri/WalletDoc/HelloPay are SA Woo gateways.
   WooPayments: "PSP", TradeSafe: "PSP", iVeri: "PSP", WalletDoc: "PSP", HelloPay: "PSP",
+  CallPay: "PSP", iPay: "PSP",
   Flutterwave: "PSP", PayPal: "PSP", PayU: "PSP", Stitch: "PSP", iKhokha: "PSP",
   "Shopify Payments": "PSP", Pesapal: "PSP", DPO: "PSP", IntaSend: "PSP",
   OPay: "PSP", Nomba: "PSP", Paga: "PSP", Interswitch: "PSP", "Adumo Online": "PSP",
