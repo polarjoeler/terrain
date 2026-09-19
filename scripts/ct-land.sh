@@ -7,8 +7,8 @@
 # Idempotent (ON CONFLICT COALESCE), so overlapping with the pipeline's own landing call is safe.
 set -u
 cd "$HOME/storepulse" || exit 1
-node --env-file=.env.local scripts/heartbeat.mjs discovery >/dev/null 2>&1 || true
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+node --env-file=.env.local scripts/heartbeat.mjs discovery >/dev/null 2>&1 || true
 
 echo "===== ct-land $(date '+%F %T') ====="
 node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed"

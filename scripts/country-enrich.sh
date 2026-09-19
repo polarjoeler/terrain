@@ -5,8 +5,8 @@
 # each run short and country_checked_at marks attempts so it never redoes work.
 set -u
 cd "$HOME/storepulse" || exit 1
-node --env-file=.env.local scripts/heartbeat.mjs country >/dev/null 2>&1 || true
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+node --env-file=.env.local scripts/heartbeat.mjs country >/dev/null 2>&1 || true
 echo "===== country-enrich $(date '+%F %T') ====="
 node --env-file=.env.local scripts/country-enrich.mjs --null-country --limit 800 --concurrency 10 || echo "!! country-enrich failed (continuing)"
 echo "===== country-enrich done $(date '+%F %T') ====="

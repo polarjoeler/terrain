@@ -4,8 +4,8 @@
 # IP needed (crt.sh is a different host), so it runs independently of the residential-IP probes.
 set -u
 cd "$HOME/storepulse" || exit 1
-node --env-file=.env.local scripts/heartbeat.mjs cert >/dev/null 2>&1 || true
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+node --env-file=.env.local scripts/heartbeat.mjs cert >/dev/null 2>&1 || true
 echo "===== cert-launch $(date '+%F %T') ====="
 node --env-file=.env.local scripts/cert-launch.mjs --limit 500 --concurrency 3 || echo "!! cert-launch failed (continuing)"
 echo "===== cert-launch done $(date '+%F %T') ====="
