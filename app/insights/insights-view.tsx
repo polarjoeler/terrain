@@ -351,17 +351,6 @@ export function InsightsView({
     { n: `${cov.paymentPct}%`, label: "payment coverage", sub: `of ${cov.live.toLocaleString()} live` },
     { n: `${cov.launchPct}%`, label: "launch-date coverage", sub: "of tracked" },
   ];
-  // TRACK B — MARKET MOVEMENT: real market on its own clock. Launches by launch date, churn by
-  // estimated death date (died_at); undatable backlog is excluded so it never fakes a crash.
-  const net = data.launchedByPeriod[pk] - data.churnedByPeriod[pk];
-  // Recent periods are still enriching (launch dates land days after discovery), so mark them
-  // incomplete rather than let "launched this week" read as a settled — and misleadingly low — number.
-  const filling = period === "Day" || period === "Week" || period === "Month";
-  const marketTiles = [
-    { n: `+${data.launchedByPeriod[pk].toLocaleString()}`, label: `launched ${pw}`, tone: "mint", sub: filling ? "so far — still dating recent stores" : undefined },
-    { n: `−${data.churnedByPeriod[pk].toLocaleString()}`, label: `churned ${pw}`, tone: "orange", sub: undefined },
-    { n: `${net >= 0 ? "+" : "−"}${Math.abs(net).toLocaleString()}`, label: `net ${pw}`, tone: net >= 0 ? "mint" : "orange", sub: undefined },
-  ];
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -499,24 +488,10 @@ export function InsightsView({
           </div>
         </div>
 
-        {/* ── TRACK B · MARKET MOVEMENT — best estimate from the stores we track ──────── */}
-        <div className="mt-8">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-mint">Market movement</h2>
-            <span className="text-xs text-cream/40">best estimate · recent launches fill in as we enrich · churn accrues forward from clean monitoring · raw counts in Ops{rangeActive ? " · custom range on chart" : ""}</span>
-          </div>
-          <div className="mt-3 grid gap-4 sm:grid-cols-3">
-            {marketTiles.map((s) => (
-              <div key={s.label} className={`rounded-3xl px-5 py-6 ${s.tone === "mint" ? "bg-mint text-ink" : s.tone === "orange" ? "bg-orange text-ink" : "border border-cream/12 text-cream"}`}>
-                <div className="font-display text-5xl leading-none">{s.n}</div>
-                <div className={`mt-2 text-xs font-medium uppercase tracking-wide ${s.tone === "outline" ? "text-cream/45" : "opacity-70"}`}>{s.label}</div>
-                {s.sub && <div className="mt-0.5 text-[10px] opacity-60">{s.sub}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* The old "Market movement" tiles were removed — redundant with the Launches & churn chart
+            below, which shows the same launch/churn on the market's clock, over time. */}
 
-        <div className="mt-6 grid gap-5 md:grid-cols-2">
+        <div className="mt-8 grid gap-5 md:grid-cols-2">
           {/* New launches vs churn per period (diverging bars). On the combined "all" view this is
               all-ecommerce; the cumulative Shopify-vs-Woo trajectory sits beside it below. */}
           <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "all-ecommerce" : "Shopify"} launches & churn`.replace(/\s+/g, " ")} />

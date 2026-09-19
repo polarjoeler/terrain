@@ -103,7 +103,7 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-cream">Share of new stores choosing {provider}</h3>
-          <p className="mt-1 text-xs text-cream/45">Of newly-discovered stores with a verified checkout, the % that picked {provider} — the acquisition curve.</p>
+          <p className="mt-1 text-xs text-cream/45">Of stores that <b className="text-cream/70">launched</b> in each period with a verified checkout, the % that picked {provider} — the acquisition curve. (Keyed on real launch date, so an enrichment wave can&rsquo;t inflate it.)</p>
         </div>
         <div className="flex gap-1 rounded-full border border-cream/12 p-1">
           {NS_PERIODS.map((p) => (
@@ -128,7 +128,7 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
           ))}
         </div>
       ) : (
-        <p className="mt-5 text-sm text-cream/40">Not enough new-store data at this granularity yet — it fills in as discovery and checkout coverage grow. (Later, a good place to also show stores switching to or from {provider}.)</p>
+        <p className="mt-5 text-sm text-cream/40">Not enough newly-launched stores with payment data at this granularity yet — it fills in as launch-dating and checkout coverage grow. (Later, a good place to also show stores switching to or from {provider}.)</p>
       )}
     </div>
   );

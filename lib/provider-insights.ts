@@ -268,9 +268,12 @@ const NEW_SHARE_CFG: Record<NewSharePeriod, { trunc: string; window: string }> =
   year: { trunc: "year", window: "6 years" },
 };
 
-/** Share of NEWLY-DISCOVERED stores that chose this provider, bucketed by period —
- *  the acquisition curve a payment company watches. Denominator is new stores WITH
- *  verified payment data (so "chose you" is knowable). Sparse until coverage grows. */
+/** Share of stores that LAUNCHED in each period that chose this provider — the acquisition curve a
+ *  payment company watches. Keyed on real LAUNCH date (first product / launched_at), NOT
+ *  discovered_at: an enrichment/discovery wave (e.g. a Woo re-probe) can add thousands of OLD stores
+ *  to a month by when we FOUND them, which massively inflated the denominator (Sept read ~6,600
+ *  discovered vs ~107 truly launched). Denominator is stores launched in the window WITH verified
+ *  payment data (so "chose you" is knowable). Sparse for recent months until dating catches up. */
 export async function providerNewShareSeries(
   provider: string, period: NewSharePeriod = "month", country?: string,
 ): Promise<NewShareBucket[]> {
@@ -280,15 +283,16 @@ export async function providerNewShareSeries(
   const variants = providerVariants(provider);
   const cfg = NEW_SHARE_CFG[period] ?? NEW_SHARE_CFG.month;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
   const rows = await sql<{ b: Date; total: number; mine: number }[]>`
-    SELECT date_trunc(${cfg.trunc}, discovered_at)::date AS b,
+    SELECT date_trunc(${cfg.trunc}, ${LAUNCH})::date AS b,
            COUNT(*)::int AS total,
            COUNT(*) FILTER (WHERE EXISTS (
              SELECT 1 FROM unnest(string_to_array(payments, ';')) g
              WHERE lower(btrim(g)) = ANY(${variants}::text[])))::int AS mine
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${AND_C}
-      AND discovered_at IS NOT NULL AND discovered_at >= now() - ${cfg.window}::interval
+      AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= (now() - ${cfg.window}::interval)::date
       AND payments IS NOT NULL AND payments <> ''
     GROUP BY 1 ORDER BY 1`;
   return rows.map((r) => ({
