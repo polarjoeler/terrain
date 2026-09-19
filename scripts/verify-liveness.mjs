@@ -80,6 +80,9 @@ const PLATFORMS = {
   Squarespace: ["squarespace.com", "static1.squarespace"],
   BigCommerce: ["bigcommerce.com", "stencil-utils"],
   Magento: ["/pub/static/version", "data-mage-init"],   // Adobe Commerce
+  "Salesforce Commerce Cloud": ["/on/demandware.store", "demandware.static", "dwstatic", "demandware.edgesuite"],  // ex-Demandware
+  Cafe24: ["cafe24.com", "echosting.cafe24", "sdeqoo"],   // Korean platform, big in KR/JP
+  BASE: ["thebase.in", "base-ec.com", "static.base.ec", "binbase"],   // BASE (ベイス) — JP SMB platform
   Webflow: ["webflow.com", "assets.website-files.com"],
   PrestaShop: ["prestashop", "/modules/ps_", "id_product_attribute", "prestashop-"],
   Odoo: ["data-oe-model", "web.assets_frontend", "/web/static/lib", "odoo.define"],
