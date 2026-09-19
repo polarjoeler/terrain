@@ -262,10 +262,11 @@ export type PlatCoverage = {
 export type CoverageRow = {
   country: string; region: string; discovered: number; tracked: number; focus: boolean;
   shopify: PlatCoverage | null; woo: PlatCoverage | null;
-  combined: PlatCoverage;   // both platforms together — the one-line coverage for the country
+  pending: number;          // unconfirmed candidates (platform unknown, unpublished) awaiting a probe
+  combined: PlatCoverage;   // both confirmed platforms together — the one-line coverage for the country
 };
 export type CoverageMatrix = {
-  discovered: number; tracked: number; totalCountries: number;
+  discovered: number; tracked: number; pending: number; totalCountries: number;
   grand: { shopify: PlatCoverage; woo: PlatCoverage };
   rows: CoverageRow[];
 };
@@ -294,7 +295,9 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const rows = await sql<{ country: string; plat: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
     SELECT UPPER(country) country,
-      CASE WHEN platform = 'woocommerce' THEN 'woo' ELSE 'shopify' END plat,
+      CASE WHEN platform = 'woocommerce' THEN 'woo'
+           WHEN platform IS NULL AND NOT published THEN 'pending'
+           ELSE 'shopify' END plat,
       count(*)::int discovered,
       count(*) FILTER (WHERE ${TRACKED})::int tracked,
       count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
@@ -306,22 +309,24 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
 
   const byCountry = new Map<string, { raw: Raw; row: CoverageRow }>();
   const gShop = emptyRaw(), gWoo = emptyRaw();
+  let gPending = 0;
   for (const r of rows) {
     const raw: Raw = { discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) };
     const c = r.country;
-    if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, combined: toPlat(emptyRaw()) } });
+    if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, pending: 0, combined: toPlat(emptyRaw()) } });
     const entry = byCountry.get(c)!;
-    addRaw(entry.raw, raw);
-    if (r.plat === "woo") { entry.row.woo = toPlat(raw); addRaw(gWoo, raw); }
-    else { entry.row.shopify = toPlat(raw); addRaw(gShop, raw); }
+    if (r.plat === "pending") { entry.row.pending += raw.discovered; gPending += raw.discovered; }
+    else if (r.plat === "woo") { addRaw(entry.raw, raw); entry.row.woo = toPlat(raw); addRaw(gWoo, raw); }
+    else { addRaw(entry.raw, raw); entry.row.shopify = toPlat(raw); addRaw(gShop, raw); }
   }
   const list = [...byCountry.values()].map(({ raw, row }) => {
-    row.discovered = raw.discovered; row.tracked = raw.tracked; row.combined = toPlat(raw); return row;
+    row.discovered = raw.discovered + row.pending; row.tracked = raw.tracked; row.combined = toPlat(raw); return row;
   }).sort((a, b) => Number(b.focus) - Number(a.focus) || b.tracked - a.tracked || b.discovered - a.discovered);
 
   return {
     discovered: list.reduce((s, r) => s + r.discovered, 0),
     tracked: list.reduce((s, r) => s + r.tracked, 0),
+    pending: gPending,
     totalCountries: list.length,
     grand: { shopify: toPlat(gShop), woo: toPlat(gWoo) },
     rows: list,

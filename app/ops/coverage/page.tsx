@@ -43,6 +43,9 @@ function CountryRow({ r }: { r: CoverageRow }) {
       </td>
       <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.shopify} color={SHOP} /></td>
       <td className="py-2.5 pr-3 text-right text-sm"><PlatCount p={r.woo} color={WOO} /></td>
+      <td className="py-2.5 pr-3 text-right text-sm tabular-nums" title="Unconfirmed candidates (platform not yet verified, unpublished) — the Woo worker probes these and publishes the real ones">
+        {r.pending > 0 ? <span className="text-cream/40">{r.pending.toLocaleString()}</span> : <span className="text-cream/20">—</span>}
+      </td>
       <td className="py-2.5 pr-3"><Cov pct={r.combined.payPct} tone="mint" /></td>
       <td className="py-2.5 pr-3"><Cov pct={r.combined.launchPct} tone="cyan" /></td>
       <td className="py-2.5 pr-3"><Cov pct={r.combined.checkedPct} tone="lilac" /></td>
@@ -91,7 +94,7 @@ export default async function CoveragePage() {
           <div>
             <h1 className="font-display text-2xl text-cream">Enrichment Coverage</h1>
             <p className="mt-1 text-xs text-cream/40">
-              {m.discovered.toLocaleString()} discovered · {m.tracked.toLocaleString()} tracked · {m.totalCountries} countries
+              {m.discovered.toLocaleString()} discovered · {m.tracked.toLocaleString()} tracked · {m.pending.toLocaleString()} pending · {m.totalCountries} countries
             </p>
           </div>
           <Link href="/ops" className="rounded-full border border-cream/15 px-3 py-1 text-sm text-cream/60 hover:text-cream">← Ops</Link>
@@ -111,6 +114,7 @@ export default async function CoveragePage() {
             <li><span className="text-mint">■</span> <b className="text-cream/80">Payments</b> — % of tracked stores with ≥1 payment gateway verified at checkout (Shopify checkout probe; Woo Store API / plugins).</li>
             <li><span className="text-cyan">■</span> <b className="text-cream/80">Launch date</b> — % with a real launch date on record (earliest product, StoreLeads launch, or first SSL cert).</li>
             <li><span className="text-lilac">■</span> <b className="text-cream/80">Liveness</b> — % with a liveness check on record (we&rsquo;ve confirmed alive/dead status at least once).</li>
+            <li><b className="text-cream/80">Pending</b> — candidate domains we&rsquo;ve imported but not yet confirmed (platform unverified, unpublished). The Woo worker probes these and publishes the real ones, moving them into the Woo column.</li>
           </ul>
           <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched.</p>
         </section>
@@ -126,12 +130,13 @@ export default async function CoveragePage() {
                 <span className="text-[11px] text-cream/35">{rows.length} countries · {tracked.toLocaleString()} tracked</span>
               </div>
               <div className="overflow-x-auto rounded-2xl border border-cream/12 bg-cream/[0.02]">
-                <table className="w-full min-w-[600px] border-collapse">
+                <table className="w-full min-w-[680px] border-collapse">
                   <thead>
                     <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
                       <th className="py-2 pl-3 pr-2 text-left">Country</th>
                       <th className="py-2 pr-3 text-right">Shopify</th>
                       <th className="py-2 pr-3 text-right">Woo</th>
+                      <th className="py-2 pr-3 text-right">Pending</th>
                       <th className="py-2 pr-3 text-right">Payments</th>
                       <th className="py-2 pr-3 text-right">Launch</th>
                       <th className="py-2 pr-3 text-right">Liveness</th>
