@@ -17,6 +17,9 @@ const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && proc
 const LIMIT = parseInt(arg("--limit", "2000"), 10);
 const CONC = parseInt(arg("--concurrency", "8"), 10);
 const LIKE = arg("--like", "%.com");
+// --null-country targets stores with NO country yet (the newly-banked global generic-TLD stores)
+// instead of a domain pattern — the mode the recurring job uses.
+const NULL_COUNTRY = process.argv.includes("--null-country");
 const DRY = process.argv.includes("--dry-run");
 const UA = "Mozilla/5.0 (compatible; terrain-radar/1.0; +country-attribution)";
 
@@ -70,13 +73,14 @@ async function main() {
   try {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS country_checked_at TIMESTAMPTZ`;
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS country_source TEXT`;
+    const target = NULL_COUNTRY ? sql`(country IS NULL OR country = '')` : sql`domain LIKE ${LIKE}`;
     const rows = await sql`
       SELECT domain, country FROM imported_stores
-      WHERE domain LIKE ${LIKE} AND country_checked_at IS NULL
+      WHERE ${target} AND country_checked_at IS NULL
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       ORDER BY published DESC, discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;
-    console.log(`country-enrich: ${rows.length} '${LIKE}' stores (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
+    console.log(`country-enrich: ${rows.length} ${NULL_COUNTRY ? "country-null" : `'${LIKE}'`} stores (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
 
     let i = 0, done = 0, attributed = 0, changed = 0, net = 0;
     const tally = new Map(), srcTally = new Map();
