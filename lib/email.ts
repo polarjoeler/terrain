@@ -34,6 +34,12 @@ async function send(mail: Mail): Promise<{ delivered: boolean; preview?: string 
   return { delivered: true };
 }
 
+/** Generic transactional send — reused by the weekly digest. Console-logs (no send) unless
+ *  RESEND_API_KEY is set, so callers are safe by default. */
+export async function sendEmail(mail: Mail): Promise<{ delivered: boolean; preview?: string }> {
+  return send(mail);
+}
+
 export async function sendMagicLink(to: string, url: string) {
   return send({
     to,

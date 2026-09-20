@@ -13,6 +13,7 @@ import { InsightsView } from "./insights-view";
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
+import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
 
 export const metadata = { title: "Terrain — Market Insights" };
 // Computed live from the store DB per request.
@@ -44,7 +45,15 @@ export default async function Insights({
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
   // Default view is "all" — a combined Woo + Shopify (+ future platforms) growth picture per
   // market, as the landing state. The Shopify / WooCommerce tabs then drill into one platform.
-  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" || sp.platform === "magento" ? sp.platform : "all";
+  let platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" || sp.platform === "magento" || sp.platform === "all" ? sp.platform : "all";
+  // Persona lens: when the user hasn't explicitly chosen a platform, default to their profile
+  // focus IF it's a single specific CMS (e.g. a Woo-only shop) — otherwise stay on "all".
+  if (!sp.platform) {
+    const [prof, org] = await Promise.all([getUserProfile(email).catch(() => null), getOrgProfile(orgKey(email)).catch(() => null)]);
+    const focus = (prof?.leadFocus?.length ? prof.leadFocus : org?.cmsFocus) ?? [];
+    const specific = focus.filter((f) => f === "shopify" || f === "woocommerce" || f === "magento");
+    if (specific.length === 1) platform = specific[0] as PlatformSel;
+  }
 
   const [data, baselineDate, momentumByPeriod, shifts] = await Promise.all([
     cachedInsights(country, tag, platform),

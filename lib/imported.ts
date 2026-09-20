@@ -307,7 +307,7 @@ export async function aiEnrichmentStatus(): Promise<AiEnrichmentStatus> {
   };
 }
 
-export async function publishedLeads(country?: string): Promise<Lead[]> {
+export async function publishedLeads(country?: string, platform?: string): Promise<Lead[]> {
   await ensure();
   // Explicit columns only — never SELECT * here: the `raw` jsonb is large and
   // this runs on every dashboard/homepage load.
@@ -322,6 +322,7 @@ export async function publishedLeads(country?: string): Promise<Lead[]> {
       -- Exclude verified-dead / migrated-off-Shopify stores: they aren't leads.
       AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
       ${country ? db()`AND country = ${country}` : db()``}
+      ${platform && platform !== "all" ? db()`AND lower(platform) = ${platform.toLowerCase()}` : db()``}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC`;
   const str = (v: unknown) => (v ? String(v) : null);
   const numOrNull = (v: unknown) => (v != null && v !== "" ? Number(v) : null);

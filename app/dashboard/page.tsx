@@ -9,7 +9,7 @@ import { getHomeStats, availableCountries } from "@/lib/insights";
 import { MarketPicker } from "./market-picker";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
-import { getUserProfile } from "@/lib/profile";
+import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
 import { exploreBrowse } from "@/lib/leads-explore";
 import { Explorer } from "@/app/admin/explore/explorer";
 
@@ -33,6 +33,17 @@ export default async function Dashboard({
 
   // Soft onboarding nudge — banner only, never blocks an existing user.
   const profile = await getUserProfile(email).catch(() => null);
+  const org = profile ? await getOrgProfile(orgKey(email)).catch(() => null) : null;
+  // Persona-lensed shortcut — points each company type at what it came for.
+  const PERSONA: Record<string, { line: string; cta: string; href: string }> = {
+    payments: { line: "See the payment landscape — every gateway ranked by adoption, with your own market report.", cta: "Product Partners", href: "/partners" },
+    app_developer: { line: "See which apps merchants install and where the gaps are.", cta: "App landscape", href: "/partners" },
+    shipping: { line: "See which carriers win at checkout across the market.", cta: "Carrier landscape", href: "/partners" },
+    investor: { line: "Track how the market is growing — launches, churn and platform shift.", cta: "Market insights", href: "/insights" },
+    researcher: { line: "Slice the full dataset and export what you need.", cta: "Open insights", href: "/insights" },
+    agency: { line: "Find the merchants and the partners moving in your space.", cta: "Explore partners", href: "/partners" },
+  };
+  const persona = org ? PERSONA[org.companyType] : null;
 
   const daysLeft = trialDaysLeft(subscriber);
 
@@ -158,6 +169,14 @@ export default async function Dashboard({
             className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-mint/30 bg-mint/10 px-4 py-3 text-sm transition hover:bg-mint/15">
             <span className="text-cream/85"><b className="text-mint">Tailor your Terrain</b> — 60 seconds to set your persona, lead cadence and digest so we show you the right data.</span>
             <span className="shrink-0 rounded-full bg-mint px-3 py-1 text-xs font-semibold text-ink">Set up →</span>
+          </Link>
+        )}
+
+        {persona && (
+          <Link href={persona.href}
+            className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-lilac/25 bg-lilac/[0.06] px-4 py-3 text-sm transition hover:bg-lilac/10">
+            <span className="text-cream/85">{persona.line}</span>
+            <span className="shrink-0 rounded-full border border-lilac/40 px-3 py-1 text-xs font-semibold text-lilac">{persona.cta} →</span>
           </Link>
         )}
 

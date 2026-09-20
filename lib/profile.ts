@@ -63,6 +63,27 @@ async function ensureTables(sql: ReturnType<typeof db>) {
     email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
     lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
     digest boolean DEFAULT true, completed_at timestamptz)`;
+  await sql`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS last_digest_at timestamptz`;
+}
+
+// Users whose digest is due now — opted in, and their cadence has elapsed since the last send.
+export type DueDigest = { email: string; leadFocus: string[]; cadence: LeadCadence };
+export async function dueDigestUsers(): Promise<DueDigest[]> {
+  const sql = db();
+  try {
+    await ensureTables(sql);
+    const rows = await sql`
+      SELECT email, lead_focus, lead_cadence FROM user_profile
+      WHERE digest = true AND completed_at IS NOT NULL
+        AND (last_digest_at IS NULL OR last_digest_at < now() - (
+          CASE lead_cadence WHEN 'daily' THEN interval '1 day'
+                            WHEN 'monthly' THEN interval '30 days'
+                            ELSE interval '7 days' END))`;
+    return rows.map((r) => ({ email: r.email, leadFocus: r.lead_focus ?? [], cadence: (r.lead_cadence ?? "weekly") as LeadCadence }));
+  } catch { return []; }
+}
+export async function markDigestSent(email: string): Promise<void> {
+  await db()`UPDATE user_profile SET last_digest_at = now() WHERE email = ${email.trim().toLowerCase()}`.catch(() => {});
 }
 
 export async function getUserProfile(email: string): Promise<UserProfile | null> {
