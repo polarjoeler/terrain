@@ -87,6 +87,7 @@ const PLATFORMS = {
   PrestaShop: ["prestashop", "/modules/ps_", "id_product_attribute", "prestashop-"],
   Odoo: ["data-oe-model", "web.assets_frontend", "/web/static/lib", "odoo.define"],
   Ecwid: ["app.ecwid.com"],
+  "EC-CUBE": ["ec-cube", "eccube", "ec-layoutrole", "/html/template/default"],   // dominant JP self-hosted platform
   "Square Online": ["squareup.com", "weeblycloud"],
 };
 
