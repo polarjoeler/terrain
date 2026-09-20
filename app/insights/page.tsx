@@ -44,7 +44,7 @@ export default async function Insights({
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
   // Default view is "all" — a combined Woo + Shopify (+ future platforms) growth picture per
   // market, as the landing state. The Shopify / WooCommerce tabs then drill into one platform.
-  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" ? sp.platform : "all";
+  const platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" || sp.platform === "magento" ? sp.platform : "all";
 
   const [data, baselineDate, momentumByPeriod, shifts] = await Promise.all([
     cachedInsights(country, tag, platform),

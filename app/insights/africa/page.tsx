@@ -27,7 +27,7 @@ export default async function AfricaOverview({
   if (!hasAccess(subscriber) && !isAdmin(email)) redirect("/billing");
 
   const sp = await searchParams;
-  const platform: PlatformSel = sp.platform === "shopify" || sp.platform === "woocommerce" ? sp.platform : "all";
+  const platform: PlatformSel = sp.platform === "shopify" || sp.platform === "woocommerce" || sp.platform === "magento" ? sp.platform : "all";
   const data = await cachedAgg(`africa:${platform}`, 10 * 60 * 1000, () => africaOverview(platform)).catch(() => ({} as Record<string, { stores: number; launched30d: number }>));
   const ranked = Object.entries(data)
     .map(([iso2, s]) => ({ iso2, ...s }))

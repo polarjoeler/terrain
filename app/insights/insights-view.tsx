@@ -199,6 +199,17 @@ function WooSections({ woo }: { woo: NonNullable<InsightsData["woo"]> }) {
   );
 }
 
+// Magento / Adobe Commerce sections — the version spread (like Woo's) + where they're hosted.
+// Payments render via the shared PaymentIntelligenceCard above.
+function MagentoSections({ magento }: { magento: NonNullable<InsightsData["magento"]> }) {
+  return (
+    <>
+      <DistroCard title="Magento version" subtitle={`Which Magento / Adobe Commerce release these ${magento.total.toLocaleString()} stores run`} data={magento.versions} baseline={null} tone="lilac" />
+      <DistroCard title="Hosting provider" subtitle="Where these stores are hosted — ASN-resolved" data={magento.hosting} baseline={null} tone="cyan" />
+    </>
+  );
+}
+
 /** Payment intelligence — providers split into PSP / BNPL / APM, each drillable, with the
  *  headline BNPL/PSP signals. Used on BOTH the Shopify and WooCommerce views (Woo now has real
  *  checkout-verified payment data), so a payment company sees the same breakdown per platform. */
@@ -264,7 +275,7 @@ export function InsightsView({
   country?: string;
   cohorts?: { tag: string; count: number }[];
   tag?: string;
-  platform?: "shopify" | "woocommerce" | "all";
+  platform?: "shopify" | "woocommerce" | "magento" | "all";
   momentumByPeriod?: Record<"day" | "week" | "month" | "quarter" | "year", ProviderMomentum[]>;
   shifts?: PaymentShift[];
 }) {
@@ -423,7 +434,7 @@ export function InsightsView({
           )}
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
-            {([["shopify", "Shopify", "#95BF47"], ["woocommerce", "WooCommerce", "#96588a"], ["all", "All", "#8fb0c4"]] as const).map(([key, label, dot]) => (
+            {([["shopify", "Shopify", "#95BF47"], ["woocommerce", "WooCommerce", "#96588a"], ["magento", "Magento", "#f26322"], ["all", "All", "#8fb0c4"]] as const).map(([key, label, dot]) => (
               <button key={key} onClick={() => go({ platform: key })}
                 className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition ${platform === key ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:text-cream"}`}>
                 <span className="h-2 w-2 rounded-full" style={{ background: dot }} /> {label}
@@ -620,6 +631,9 @@ export function InsightsView({
 
           {/* WooCommerce-native sections — store status, hosting, versions, plugins, gateways */}
           {platform === "woocommerce" && data.woo && <WooSections woo={data.woo} />}
+
+          {/* Magento / Adobe Commerce version + hosting — surfaced like Woo's version card */}
+          {platform === "magento" && data.magento && <MagentoSections magento={data.magento} />}
 
           {platform !== "woocommerce" && (<>
           {/* Cross-platform distributions — meaningful on the combined "all" view too. */}

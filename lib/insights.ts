@@ -99,6 +99,13 @@ export type InsightsData = {
     plugins: InsightItem[];         // top installed plugins
     paymentPlugins: InsightItem[];  // Woo payment gateways (from payment plugins)
   };
+  // Present only when the Magento platform is selected — the Magento/Adobe Commerce version
+  // spread + hosting, alongside the shared payment intelligence card.
+  magento?: {
+    total: number;
+    versions: InsightItem[];        // Magento / Adobe Commerce version
+    hosting: InsightItem[];         // ASN-resolved host/CDN
+  };
 };
 
 const pct = (n: number, denom: number) => (denom > 0 ? Math.round((100 * n) / denom) : 0);
@@ -240,11 +247,14 @@ const _insightsInflight = new Map<string, Promise<InsightsData>>();
 
 // Platform selector for insights. "shopify" (default) = everything except confirmed WooCommerce
 // (Shopify + not-yet-classified CT discoveries); "woocommerce" = confirmed Woo; "all" = both.
-export type PlatformSel = "shopify" | "woocommerce" | "all";
+export type PlatformSel = "shopify" | "woocommerce" | "magento" | "all";
 export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel) {
   if (platform === "woocommerce") return sql`AND lower(platform) = 'woocommerce'`;
+  if (platform === "magento") return sql`AND lower(platform) = 'magento'`;
   if (platform === "all") return sql``;
-  return sql`AND lower(platform) IS DISTINCT FROM 'woocommerce'`;
+  // "shopify" = real Shopify + not-yet-classified CT discoveries (platform NULL). Explicit rather
+  // than "not Woo" so surfaced non-Shopify platforms (Magento, later Wix…) don't leak into it.
+  return sql`AND (lower(platform) = 'shopify' OR platform IS NULL)`;
 }
 
 export async function computeInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
@@ -603,6 +613,21 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     };
   }
 
+  // Magento / Adobe Commerce version spread — surfaced like Woo's version card. Version comes
+  // from magento-probe (homepage) — self-reported on many stores, so the "known" denominator is
+  // those that expose it. LIVE() already scopes to lower(platform)='magento'.
+  let magento: InsightsData["magento"] = undefined;
+  if (platform === "magento") {
+    const [mt] = await sql<{ n: number }[]>`SELECT COUNT(*)::int n FROM imported_stores WHERE ${LIVE(country, tag, platform)}`;
+    const magTotal = Number(mt?.n ?? 0);
+    const magVers = await sql<Agg[]>`SELECT platform_version AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND platform_version IS NOT NULL AND platform_version <> '' GROUP BY 1 ORDER BY n DESC`;
+    const magHost = await sql<Agg[]>`SELECT hosting_provider AS label, COUNT(*)::int n FROM imported_stores
+          WHERE ${LIVE(country, tag, platform)} AND hosting_provider IS NOT NULL AND hosting_provider <> '' GROUP BY 1 ORDER BY n DESC`;
+    const known = (rows: Agg[]) => rows.reduce((s, r) => s + r.n, 0);
+    magento = { total: magTotal, versions: items(magVers, known(magVers)), hosting: items(magHost, known(magHost)) };
+  }
+
   return {
     date: new Date().toISOString().slice(0, 10),
     storesTotal,
@@ -658,6 +683,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       migratedTo,
     },
     woo,
+    magento,
   };
 }
 

@@ -57,8 +57,17 @@ async function probe(domain) {
   const hay = html.toLowerCase();
   const isMagento = MAGENTO_MARK.some((m) => hay.includes(m));
   const gws = [...new Set(GATEWAYS.filter(([re]) => re.test(html)).map(([, n]) => n))];
-  const vm = html.match(VER_RE);
-  const version = vm ? (vm[1] || vm[2]) : null;
+  let version = (html.match(VER_RE) || [])[1] || (html.match(VER_RE) || [])[2] || null;
+  // Magento hides its version on the homepage (security), so try the canonical /magento_version
+  // endpoint too — off on most stores, but the reliable source on the minority that leave it on.
+  if (!version) {
+    const mv = await get(`https://${domain}/magento_version`);
+    if (mv && mv.ok) {
+      const body = (await mv.text().catch(() => "")).slice(0, 200);
+      const m = body.match(/Magento\/([0-9.]+)/i);
+      if (m && body.length < 200) version = m[1];   // guard: real endpoint returns a short string, not a page
+    }
+  }
   // Is the GraphQL endpoint open? (the stores we can later pull full payment methods from)
   const g = await get(`https://${domain}/graphql`, {
     method: "POST", headers: { "User-Agent": UA, "Content-Type": "application/json" },
@@ -91,7 +100,10 @@ async function main() {
       if (r.gateways.length) { withPay++; for (const g of r.gateways) tally.set(g, (tally.get(g) ?? 0) + 1); }
       if (!DRY) {
         const pay = r.gateways.length ? r.gateways.join("; ") : null;
+        // Confirmed Magento graduates to published=true (like Woo after woo_probe) so it surfaces
+        // in insights + coverage + leads with its version. Mislabeled rows stay banked (untouched).
         await sql`UPDATE imported_stores SET
+          published = ${r.isMagento ? true : sql`published`},
           payments = COALESCE(${pay}, payments),
           platform_version = COALESCE(${r.version}, platform_version),
           payments_checked_at = now()

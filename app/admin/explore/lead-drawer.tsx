@@ -158,6 +158,13 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               </Section>
             )}
 
+            {data.platform?.toLowerCase() === "magento" && (
+              <Section title="Magento / Adobe Commerce">
+                <Row label="Magento version" value={data.platform_version} />
+                <Row label="Hosting" value={data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null} />
+              </Section>
+            )}
+
             <Section title="Revenue & catalog">
               <Row label="Est. monthly sales" value={money(data.estimated_monthly_sales, data.currency)} />
               <Row label="Est. revenue (USD)" value={money(data.est_revenue_usd, "$")} />
