@@ -25,6 +25,12 @@ const OUT = opt("--out", PLUS ? "feed/payment-queue-plus.txt" : "feed/payment-qu
 // TLD-agnostic and lands the whole CT firehose) don't consume checkout probes — each probe
 // leaves an abandoned checkout in the merchant's admin, so probing off-target stores is waste.
 const CLIST = (opt("--country", null) || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
+// --providers "paystack,stitch,peach" — a WATCH run: re-probe the stores that CURRENTLY carry
+// one of these providers (ignoring the normal staleness gate) so we catch switches away / gateway
+// churn for named providers on a schedule (weekly Sunday → Monday inbox). Bounded cohort, so it
+// re-probes ALL of them rather than reserving a thin slice. ADDS-to-provider still come from the
+// normal probe; a watch only ever sees the current carriers change.
+const PROVIDERS = (opt("--providers", null) || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL not set (run with --env-file=.env.local)");
@@ -49,9 +55,41 @@ function detectProviders(blob) {
   return found;
 }
 
+// Provider token → the LIKE fragments that identify it in our normalised `payments` column.
+const WATCH_TOKENS = {
+  paystack: ["paystack"],
+  stitch: ["stitch"],
+  peach: ["peach payment", "peachpayment", "peach"],
+};
+
+async function watchRun(sql) {
+  // Build the ILIKE predicate for the requested providers over the current `payments` value.
+  const frags = PROVIDERS.flatMap((p) => WATCH_TOKENS[p] || [p]);
+  const rows = await sql`
+    SELECT domain, estimated_monthly_sales sales, payments,
+      (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
+      (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS t500
+    FROM imported_stores
+    WHERE published
+      AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
+      AND payments IS NOT NULL AND payments <> ''
+      ${CLIST.length ? sql`AND UPPER(country) = ANY(${CLIST})` : sql``}
+      AND (${frags.map((f) => sql`lower(payments) LIKE ${"%" + f + "%"}`).reduce((a, b) => sql`${a} OR ${b}`)})
+    ORDER BY estimated_monthly_sales DESC NULLS LAST`;
+  const cap = LIMIT > 0 ? LIMIT : rows.length;
+  const queue = rows.slice(0, cap);
+  mkdirSync(dirname(OUT), { recursive: true });
+  writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");
+  const tagged = queue.filter((r) => r.t100 || r.t500).length;
+  console.log(`Provider WATCH [${PROVIDERS.join(", ")}]${CLIST.length ? ` in ${CLIST.join(",")}` : ""}: ${rows.length.toLocaleString()} current carriers.`);
+  console.log(`Wrote ${queue.length.toLocaleString()} domains → ${OUT} (${tagged.toLocaleString()} Top100/500). Re-probing ALL to catch switches away / gateway churn.`);
+  for (const r of queue.slice(0, 10)) console.log(`   $${Number(r.sales || 0).toLocaleString().padStart(14)}/mo  ${r.domain}`);
+}
+
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 6 });
   try {
+    if (PROVIDERS.length) { await watchRun(sql); return; }
     // 1. Free parse over the imported data.
     const rows = await sql`
       SELECT domain, raw->>'technologies' tech, raw->>'features' feat, apps
