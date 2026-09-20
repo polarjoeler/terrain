@@ -9,6 +9,7 @@ import { getHomeStats, availableCountries } from "@/lib/insights";
 import { MarketPicker } from "./market-picker";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
+import { getUserProfile } from "@/lib/profile";
 import { exploreBrowse } from "@/lib/leads-explore";
 import { Explorer } from "@/app/admin/explore/explorer";
 
@@ -29,6 +30,9 @@ export default async function Dashboard({
 
   const subscriber = await getSubscriber(email);
   if (!hasAccess(subscriber)) redirect("/billing");
+
+  // Soft onboarding nudge — banner only, never blocks an existing user.
+  const profile = await getUserProfile(email).catch(() => null);
 
   const daysLeft = trialDaysLeft(subscriber);
 
@@ -148,6 +152,14 @@ export default async function Dashboard({
             <FreshnessStamp updatedAt={updatedAt} live={live} />
           </div>
         </header>
+
+        {!profile && (
+          <Link href="/onboarding"
+            className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-mint/30 bg-mint/10 px-4 py-3 text-sm transition hover:bg-mint/15">
+            <span className="text-cream/85"><b className="text-mint">Tailor your Terrain</b> — 60 seconds to set your persona, lead cadence and digest so we show you the right data.</span>
+            <span className="shrink-0 rounded-full bg-mint px-3 py-1 text-xs font-semibold text-ink">Set up →</span>
+          </Link>
+        )}
 
         <div className="mt-8 grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-mint p-5 text-ink">
