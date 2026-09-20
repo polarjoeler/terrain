@@ -311,6 +311,29 @@ export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
   });
 }
 
+// Recall benchmarks — the honest "are we missing stores?" metric. Each row is a run of
+// scripts/coverage-benchmark.mjs against an external list (a paid-source export, a scraped
+// directory, the SA-100 sample…): coverage_pct = share of that list we already tracked;
+// true_recall_pct = share of the list's LIVE, in-scope stores we had (dead/off-platform
+// excluded). Latest run per label, newest first. Table may not exist yet → [].
+export type RecallBenchmark = {
+  label: string; ranAt: string; listTotal: number; present: number; missing: number;
+  coveragePct: number; liveMissing: number | null; trueRecallPct: number | null;
+};
+export async function recallBenchmarks(): Promise<RecallBenchmark[]> {
+  const sql = db();
+  try {
+    const rows = await sql<RecallBenchmark[]>`
+      SELECT DISTINCT ON (label) label, ran_at AS "ranAt", list_total AS "listTotal",
+        present, missing, coverage_pct AS "coveragePct", live_missing AS "liveMissing",
+        true_recall_pct AS "trueRecallPct"
+      FROM coverage_benchmarks ORDER BY label, ran_at DESC`;
+    return rows.sort((a, b) => new Date(b.ranAt).getTime() - new Date(a.ranAt).getTime());
+  } catch {
+    return []; // table not created until the first benchmark run
+  }
+}
+
 async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const sql = db();
   // Coverage numerators are scoped to TRACKED (published & live) stores — the set we enrich — so a

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { coverageMatrix, type CoverageRow, type PlatCoverage } from "@/lib/ops";
+import { coverageMatrix, recallBenchmarks, type CoverageRow, type PlatCoverage, type RecallBenchmark } from "@/lib/ops";
 import { countryEmoji, countryName, regionOf, REGION_ORDER } from "@/lib/countries";
 
 export const dynamic = "force-dynamic";
@@ -62,7 +62,10 @@ export default async function CoveragePage() {
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  const m = await coverageMatrix().catch(() => null);
+  const [m, recall] = await Promise.all([
+    coverageMatrix().catch(() => null),
+    recallBenchmarks().catch(() => [] as RecallBenchmark[]),
+  ]);
   if (!m) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load coverage.</main>;
 
   // Group rows by region, in REGION_ORDER; keep the focus-first / size ordering inside each.
@@ -124,6 +127,51 @@ export default async function CoveragePage() {
           </ul>
           <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched. <b className="text-cream/70">Click any country</b> to see every CMS in it.</p>
         </section>
+
+        {/* Recall benchmarks — the "are we missing stores?" KPI */}
+        {recall.length > 0 && (
+          <section className="mt-6">
+            <div className="mb-2 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/60">Recall benchmarks</h2>
+              <span className="text-[11px] text-cream/35">measured vs. external lists · higher = fewer stores missed</span>
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-cream/12 bg-cream/[0.02]">
+              <table className="w-full min-w-[640px] border-collapse">
+                <thead>
+                  <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
+                    <th className="py-2 pl-3 pr-2 text-left">Benchmark</th>
+                    <th className="py-2 pr-3 text-right">List</th>
+                    <th className="py-2 pr-3 text-right">Had</th>
+                    <th className="py-2 pr-3 text-right">Coverage</th>
+                    <th className="py-2 pr-3 text-right">True recall</th>
+                    <th className="py-2 pr-3 text-right">Checked</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recall.map((r) => {
+                    const tr = r.trueRecallPct ?? r.coveragePct;
+                    const tone = tr >= 90 ? "text-mint" : tr >= 70 ? "text-cyan" : "text-amber-400";
+                    return (
+                      <tr key={r.label} className="border-b border-cream/[0.06]">
+                        <td className="py-2.5 pl-3 pr-2 text-sm text-cream/85">{r.label}</td>
+                        <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-cream/60">{r.listTotal.toLocaleString()}</td>
+                        <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-cream/60">{r.present.toLocaleString()}</td>
+                        <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-cream/70">{Number(r.coveragePct).toFixed(0)}%</td>
+                        <td className={`py-2.5 pr-3 text-right text-sm font-semibold tabular-nums ${tone}`}>
+                          {r.trueRecallPct != null ? `${Number(r.trueRecallPct).toFixed(0)}%` : "—"}
+                        </td>
+                        <td className="py-2.5 pr-3 text-right text-[11px] tabular-nums text-cream/35">{new Date(r.ranAt).toLocaleDateString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-cream/40">
+              <b className="text-cream/70">Coverage</b> = share of the external list we already tracked. <b className="text-cream/70">True recall</b> = share of the list&rsquo;s <i>live, in-scope</i> stores we had (dead / off-platform excluded). Run <code className="text-cream/60">scripts/coverage-benchmark.mjs --file list.txt --label X --dns</code> against any paid-source export to add a row. The seed-fed discovery (Common&nbsp;Crawl + scanner reverse-lookup on Shopify&rsquo;s /24) is what keeps these high.
+            </p>
+          </section>
+        )}
 
         {/* Region sections */}
         {REGION_ORDER.filter((reg) => byRegion.has(reg)).map((reg) => {
