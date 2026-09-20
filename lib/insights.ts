@@ -242,9 +242,9 @@ const _insightsInflight = new Map<string, Promise<InsightsData>>();
 // (Shopify + not-yet-classified CT discoveries); "woocommerce" = confirmed Woo; "all" = both.
 export type PlatformSel = "shopify" | "woocommerce" | "all";
 export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel) {
-  if (platform === "woocommerce") return sql`AND platform = 'woocommerce'`;
+  if (platform === "woocommerce") return sql`AND lower(platform) = 'woocommerce'`;
   if (platform === "all") return sql``;
-  return sql`AND platform IS DISTINCT FROM 'woocommerce'`;
+  return sql`AND lower(platform) IS DISTINCT FROM 'woocommerce'`;
 }
 
 export async function computeInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {
@@ -570,7 +570,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
 
   // WooCommerce-native distributions — only when the Woo platform is selected. WP/Woo world data
   // (store status, hosting, versions, plugins) that has no Shopify equivalent. LIVE() already
-  // scopes to platform='woocommerce' here, so denominators + rows share the same filter.
+  // scopes to lower(platform) = 'woocommerce' here, so denominators + rows share the same filter.
   let woo: InsightsData["woo"] = undefined;
   if (platform === "woocommerce") {
     const [wt] = await sql<{ n: number }[]>`SELECT COUNT(*)::int n FROM imported_stores WHERE ${LIVE(country, tag, platform)}`;

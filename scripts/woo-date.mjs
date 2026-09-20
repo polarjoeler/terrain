@@ -50,7 +50,7 @@ async function main() {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS wp_dated_at TIMESTAMPTZ`;
     const rows = await sql`
       SELECT domain FROM imported_stores
-      WHERE platform = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND wp_dated_at IS NULL AND launched_at IS NULL
         AND (first_product_at IS NULL OR first_product_at !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}')
       ORDER BY published DESC, activity_tier = 'selling' DESC NULLS LAST, discovered_at DESC NULLS LAST

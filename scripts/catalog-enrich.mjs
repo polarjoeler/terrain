@@ -54,7 +54,7 @@ async function main() {
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND catalog_checked_at IS NULL
-        AND platform IS DISTINCT FROM 'woocommerce'   -- Woo has its own probe; products.json is Shopify-only
+        AND lower(platform) IS DISTINCT FROM 'woocommerce'   -- Woo has its own probe; products.json is Shopify-only
         ${COUNTRIES ? sql`AND country = ANY(${COUNTRIES})` : sql``}
       -- Priority for the LAUNCH metric: catalog-enrich fills launched_at (= earliest product date)
       -- only where it's missing, so stores with NO launch date come first — they're what actually

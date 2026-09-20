@@ -77,7 +77,7 @@ async function main() {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_source TEXT`;
     const rows = await sql`
       SELECT domain, plugins FROM imported_stores
-      WHERE platform = 'woocommerce'
+      WHERE lower(platform) = 'woocommerce'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND plugins IS NOT NULL AND plugins <> ''
         AND (payments IS NULL OR payments = '')`;

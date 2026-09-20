@@ -163,7 +163,7 @@ async function main() {
     // already checkout-probed (woo_checkout_at set); a network failure leaves it null → retried.
     const rows = await sql`
       SELECT domain FROM imported_stores
-      WHERE platform = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND woo_checkout_at IS NULL
         AND (payments IS NULL OR payments = '' OR payments_source = 'woo_plugin')
       -- Real, live storefronts first (selling/active) + published: they actually have the Store API

@@ -556,9 +556,9 @@ export async function growthSeries(opts: {
   const { country, provider, from, to } = opts;
   const sql = db();
   // Platform filter (imported_stores only — churn_log has no platform column). Default Shopify.
-  const plat = opts.platform === "woocommerce" ? sql`AND platform = 'woocommerce'`
+  const plat = opts.platform === "woocommerce" ? sql`AND lower(platform) = 'woocommerce'`
     : opts.platform === "all" ? sql``
-    : sql`AND platform IS DISTINCT FROM 'woocommerce'`;
+    : sql`AND lower(platform) IS DISTINCT FROM 'woocommerce'`;
   const variants = provider ? providerVariants(provider) : null;
   // Both imported_stores and churn_log have a `payments` column, so one fragment works
   // for both queries — a store/churned-store counts if it uses one of the provider's tokens.
@@ -662,8 +662,8 @@ export async function platformGrowthSeries(country?: string, provider?: string):
   // Monthly launches of currently-live stores, split by platform → cumulative in JS.
   const rows = await sql<{ b: string; woo: number; shop: number }[]>`
     SELECT to_char(date_trunc('month', ${LAUNCH}), 'YYYY-MM-DD') b,
-      COUNT(*) FILTER (WHERE platform = 'woocommerce')::int woo,
-      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce')::int woo,
+      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce')::int shop
     FROM imported_stores
     WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry} ${prov}
     GROUP BY 1 ORDER BY 1`.catch(() => []);
@@ -682,13 +682,13 @@ export async function platformGrowthSeries(country?: string, provider?: string):
     shop_total: number; shop_paid: number;
   }[]>`
     SELECT
-      COUNT(*) FILTER (WHERE platform = 'woocommerce')::int woo_total,
-      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'selling')::int woo_selling,
-      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'active')::int woo_active,
-      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND activity_tier = 'dormant')::int woo_dormant,
-      COUNT(*) FILTER (WHERE platform = 'woocommerce' AND (activity_tier IS NULL OR activity_tier NOT IN ('selling','active','dormant')))::int woo_other,
-      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce')::int shop_total,
-      COUNT(*) FILTER (WHERE platform IS DISTINCT FROM 'woocommerce' AND payments IS NOT NULL AND payments <> '')::int shop_paid
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce')::int woo_total,
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'selling')::int woo_selling,
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'active')::int woo_active,
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'dormant')::int woo_dormant,
+      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND (activity_tier IS NULL OR activity_tier NOT IN ('selling','active','dormant')))::int woo_other,
+      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce')::int shop_total,
+      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce' AND payments IS NOT NULL AND payments <> '')::int shop_paid
     FROM imported_stores WHERE ${LIVE} ${ctry} ${prov}`.catch(() => [{
       woo_total: 0, woo_selling: 0, woo_active: 0, woo_dormant: 0, woo_other: 0, shop_total: 0, shop_paid: 0,
     }]);

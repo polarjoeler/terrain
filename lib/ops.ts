@@ -153,13 +153,13 @@ async function opsStatusUncached(): Promise<OpsStatus> {
       FROM imported_stores WHERE published AND platform='Shopify'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND country = ANY(${CORE})`,
     () => sql<{ since: number; filled12h: number }[]>`
-      SELECT count(*) FILTER (WHERE country='ZA' AND platform IS DISTINCT FROM 'woocommerce' AND ${LAUNCH} >= '2026-07-30'::date)::int since,
+      SELECT count(*) FILTER (WHERE country='ZA' AND lower(platform) IS DISTINCT FROM 'woocommerce' AND ${LAUNCH} >= '2026-07-30'::date)::int since,
              count(*) FILTER (WHERE launched_source='earliest_product' AND catalog_checked_at > now()-interval '12 hours')::int filled12h
       FROM imported_stores`,
     () => sql<{ total: number; confirmed: number; real: number }[]>`
-      SELECT count(*) FILTER (WHERE platform='woocommerce')::int total,
-             count(*) FILTER (WHERE platform='woocommerce' AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int confirmed,
-             count(*) FILTER (WHERE platform='woocommerce' AND activity_tier IN ('selling','active','dormant') AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int real
+      SELECT count(*) FILTER (WHERE lower(platform) = 'woocommerce')::int total,
+             count(*) FILTER (WHERE lower(platform) = 'woocommerce' AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int confirmed,
+             count(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier IN ('selling','active','dormant') AND domain IN (SELECT domain FROM store_tags WHERE tag='woo-2019-sa'))::int real
       FROM imported_stores`,
     // heartbeats: last activity TIMESTAMP per machine role (created_at = row-insert time, a real
     // timestamptz — discovered_at is only a DATE so it can't heartbeat).
@@ -172,7 +172,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
     // Track A + Track B per platform, over the CORE markets.
     () => sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; has_launch: number; launched30d: number }[]>`
       SELECT
-        CASE WHEN platform='woocommerce' THEN 'WooCommerce' ELSE 'Shopify' END AS plat,
+        CASE WHEN lower(platform) = 'woocommerce' THEN 'WooCommerce' ELSE 'Shopify' END AS plat,
         count(*)::int tracked,
         count(*) FILTER (WHERE live_status IS NULL OR live_status NOT IN ('dead','migrated'))::int live,
         count(*) FILTER (WHERE live_checked_at > now()-interval '30 days')::int checked30d,
@@ -180,7 +180,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
         count(*) FILTER (WHERE launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}-')::int has_launch,
         count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ${LAUNCH} >= CURRENT_DATE-30)::int launched30d
       FROM imported_stores
-      WHERE published AND country = ANY(${CORE}) AND platform IN ('Shopify','woocommerce')
+      WHERE published AND country = ANY(${CORE}) AND lower(platform) IN ('shopify','woocommerce')
       GROUP BY 1`,
     // Market churn (last 30d) by ESTIMATED DEATH DATE — churn_log has no platform (Shopify liveness).
     () => sql<{ churned30d: number }[]>`
@@ -341,7 +341,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const rows = await sql<{ country: string; plat: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
     SELECT UPPER(country) country,
-      CASE WHEN platform = 'woocommerce' THEN 'woo'
+      CASE WHEN lower(platform) = 'woocommerce' THEN 'woo'
            WHEN platform = 'Shopify' OR (platform IS NULL AND published) THEN 'shopify'
            WHEN platform IS NULL AND NOT published THEN 'pending'
            ELSE 'other' END plat,

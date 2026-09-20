@@ -139,7 +139,7 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
       AND country = ANY(${[...VISIBLE_MARKETS]})
       -- Woo parked/holding-page installs ('not_a_store') are captured + revealed elsewhere,
       -- but they aren't leads — keep them out of the browsable list (Shopify + real Woo only).
-      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
+      AND (lower(platform) IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
       ${platformGate}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
@@ -175,7 +175,7 @@ export async function exploreLeadCount(customerOnly = false): Promise<number> {
     SELECT COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ANY(${[...VISIBLE_MARKETS]})
-      AND (platform IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
+      AND (lower(platform) IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')
       ${platformGate}`;
   return Number(r.n);
 }
