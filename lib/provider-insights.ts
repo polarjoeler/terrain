@@ -12,6 +12,7 @@
 import postgres from "postgres";
 import type { InsightItem } from "./insights";
 import { classify, cleanPayments, canonicalProvider, providerVariants, PROVIDER_SUBBRANDS, PAY_TYPES, type PayType } from "./payments-taxonomy";
+import { providerSlug } from "./provider-slug";
 
 export type ProviderSubReport = { total: number; subs: { label: string; count: number; pct: number }[] };
 
@@ -829,4 +830,70 @@ export async function switchesLog(opts: {
       oldPrimary: null, newPrimary: null, reordered: false,
     }))
     .filter((s) => s.added.length > 0 || s.removed.length > 0);
+}
+
+// ── Product Partners directory ────────────────────────────────────────────────
+// The "who's who" of PRODUCT players in-market — payment gateways, shipping carriers, and
+// apps — with how many live stores run each. A payments co / emerging app uses it to scan the
+// landscape for integration + collab targets. Payment rows link to their /p/<slug> report.
+export type PartnerCategory = "Payments" | "Shipping" | "Apps";
+export type ProductPartner = {
+  name: string; category: PartnerCategory; subtype: PayType | null; stores: number; countries: number; slug: string | null;
+};
+
+// Generic ";"-delimited-column aggregator → {value → distinct-store count, distinct-country count}.
+async function columnPartners(column: "shipping_providers" | "apps"): Promise<{ value: string; stores: number; countries: number }[]> {
+  const sql = db();
+  const rows = await sql<{ value: string; stores: number; countries: number }[]>`
+    SELECT trim(v) AS value, COUNT(DISTINCT domain)::int stores, COUNT(DISTINCT country)::int countries
+    FROM (
+      SELECT domain, country, unnest(string_to_array(${sql(column)}, ';')) AS v
+      FROM imported_stores
+      WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+        AND ${sql(column)} IS NOT NULL AND ${sql(column)} <> ''
+    ) x WHERE trim(v) <> '' GROUP BY 1`;
+  return rows.map((r) => ({ value: r.value, stores: Number(r.stores), countries: Number(r.countries) }));
+}
+
+// A Shopify-app URL → a readable app name ("https://apps.shopify.com/twik-app-2" → "Twik App").
+function appName(raw: string): string | null {
+  const m = raw.match(/apps\.shopify\.com\/([a-z0-9-]+)/i);
+  const slug = m ? m[1] : raw.replace(/^https?:\/\//, "").split("/")[0];
+  if (!slug || slug.length < 2) return null;
+  return slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export async function productPartners(): Promise<ProductPartner[]> {
+  const sql = db();
+  // Payments — reuse the canonicalised provider list + PSP/BNPL/APM taxonomy.
+  const pay = await availableProviders(5);
+  const payCountries = new Map<string, number>();
+  const pc = await sql<{ g: string; c: number }[]>`
+    SELECT canon AS g, COUNT(DISTINCT country)::int c FROM (
+      SELECT country, trim(unnest(string_to_array(payments, ';'))) AS canon FROM imported_stores
+      WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND payments <> ''
+    ) x WHERE canon <> '' GROUP BY 1`;
+  for (const r of pc) { const k = canonicalProvider(r.g); if (k) payCountries.set(k, Math.max(payCountries.get(k) ?? 0, Number(r.c))); }
+  const payments: ProductPartner[] = pay.map((p) => ({
+    name: p.provider, category: "Payments", subtype: classify(p.provider),
+    stores: p.stores, countries: payCountries.get(p.provider) ?? 1, slug: providerSlug(p.provider),
+  }));
+
+  // Apps — fold Shopify-app URLs to app names.
+  const appAgg = new Map<string, { stores: number; countries: number }>();
+  for (const r of await columnPartners("apps")) {
+    const n = appName(r.value); if (!n) continue;
+    const cur = appAgg.get(n) ?? { stores: 0, countries: 0 };
+    appAgg.set(n, { stores: cur.stores + r.stores, countries: Math.max(cur.countries, r.countries) });
+  }
+  const apps: ProductPartner[] = [...appAgg.entries()].filter(([, v]) => v.stores >= 5)
+    .map(([name, v]) => ({ name, category: "Apps", subtype: null, stores: v.stores, countries: v.countries, slug: null }));
+
+  // Shipping — drop the generic "shopify" placeholder (real carriers come via checkout source).
+  const GENERIC = new Set(["shopify", "manual", "custom", "flat rate", "free shipping", "pickup"]);
+  const shipping: ProductPartner[] = (await columnPartners("shipping_providers"))
+    .filter((r) => r.stores >= 3 && !GENERIC.has(r.value.toLowerCase()))
+    .map((r) => ({ name: r.value, category: "Shipping", subtype: null, stores: r.stores, countries: r.countries, slug: null }));
+
+  return [...payments, ...apps, ...shipping].sort((a, b) => b.stores - a.stores);
 }

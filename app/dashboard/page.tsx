@@ -103,6 +103,12 @@ export default async function Dashboard({
             )}
             <MarketPicker countries={markets} country={country} />
             <Link
+              href="/partners"
+              className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
+            >
+              Partners
+            </Link>
+            <Link
               href="/insights"
               className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
             >
