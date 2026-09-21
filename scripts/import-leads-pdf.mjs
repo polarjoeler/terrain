@@ -11,6 +11,7 @@ import { readFileSync } from "fs";
 
 async function main() {
   const file = process.argv[2];
+  const SRC = (process.argv.includes("--source") ? process.argv[process.argv.indexOf("--source")+1] : "storecensus");
   if (!file) { console.error("usage: import-leads-pdf.mjs <rows.json>"); process.exit(2); }
   const rows = JSON.parse(readFileSync(file, "utf8")).filter((r) => r.domain);
   const today = new Date().toISOString().slice(0, 10);
@@ -18,7 +19,7 @@ async function main() {
   try {
     const recs = rows.map((r) => ({
       domain: r.domain, name: r.domain, country: r.country ?? null,
-      platform: r.platform || "Shopify", published: true, source: "storeleads_pdf",
+      platform: r.platform || "Shopify", published: true, source: SRC,
       discovered_at: today, estimated_monthly_sales: r.sales ?? null,
     }));
     const cols = ["domain", "name", "country", "platform", "published", "source", "discovered_at", "estimated_monthly_sales"];

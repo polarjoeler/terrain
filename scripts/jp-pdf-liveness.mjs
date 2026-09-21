@@ -1,12 +1,13 @@
 /** Liveness + still-Shopify check for the imported JP PDF leads — how good is this source? */
 import postgres from "postgres";
+const SRC=(process.argv.includes('--source')?process.argv[process.argv.indexOf('--source')+1]:'storecensus');
 const UA="Mozilla/5.0 (compatible; terrain-radar/1.0; +liveness)";
 async function get(u){const c=new AbortController();const t=setTimeout(()=>c.abort(),11000);
   try{return await fetch(u,{signal:c.signal,redirect:"follow",headers:{"User-Agent":UA}});}catch{return null;}finally{clearTimeout(t);}}
 async function mapLimit(items,n,fn){let i=0;await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{while(i<items.length)await fn(items[i++]);}));}
 const sql=postgres(process.env.DATABASE_URL,{prepare:false,max:6,idle_timeout:20});
 try{
-  const rows=await sql`SELECT domain FROM imported_stores WHERE source='storeleads_pdf'`;
+  const rows=await sql`SELECT domain FROM imported_stores WHERE source=${SRC}`;
   console.log(`checking liveness of ${rows.length} PDF leads…`);
   let liveShop=0, aliveOther=0, dead=0, done=0;
   await mapLimit(rows,14,async({domain})=>{
