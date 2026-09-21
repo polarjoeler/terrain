@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { redeemMagicToken, startSession, originFromRequest } from "@/lib/auth";
+import { recordLogin, ipOf } from "@/lib/sessions";
 
 export const runtime = "nodejs";
 
@@ -18,5 +19,7 @@ export async function GET(req: Request) {
   }
 
   await startSession(email);
+  // Record where this seat signed in from (anti-sharing signal) — best-effort.
+  await recordLogin(email, ipOf(req), req.headers.get("user-agent") ?? "");
   return NextResponse.redirect(`${origin}/dashboard`);
 }

@@ -1,9 +1,11 @@
 /** Export selected stores to CSV. Pro-only, 200 rows/month, server-enforced. */
 
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { currentUser } from "@/lib/auth";
 import { publishedLeads } from "@/lib/imported";
 import { consumeExportQuota } from "@/lib/subscriptions";
+import { sharingGate, logExport, ipOf } from "@/lib/sessions";
 import type { Lead } from "@/lib/leads";
 
 export const runtime = "nodejs";
@@ -57,6 +59,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No stores selected" }, { status: 400 });
   }
 
+  // Anti-sharing: block bulk export when the seat is signed in from too many devices at once
+  // (the classic shared-login signal). Browsing stays open; only exfiltration is gated.
+  const gate = await sharingGate(email);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: `This account is signed in from ${gate.ips} locations (limit ${gate.cap}). Sign out other devices, or contact us to add seats.`, sharing: true },
+      { status: 403 },
+    );
+  }
+
   // Reserve quota BEFORE doing work (server-enforced, can't be bypassed).
   const quota = await consumeExportQuota(email, wanted.size);
   if (!quota.ok) {
@@ -73,9 +85,14 @@ export async function POST(req: Request) {
   const lines = selected.map((l) =>
     COLUMNS.map((c) => csvCell(l[c.key])).join(","),
   );
-  const csv = [header, ...lines].join("\n");
+  // Watermark: every export is stamped + logged, so a redistributed CSV is traceable to the seat.
+  const exportId = randomUUID().slice(0, 8);
+  const ts = new Date().toISOString();
+  const watermark = `# Terrain export — licensed to ${email} · ${ts} · id ${exportId} · redistribution is traceable`;
+  const csv = [header, ...lines, "", watermark].join("\n");   // footer, so imports read the header as row 1
+  await logExport(email, exportId, selected.length, ipOf(req));
 
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = ts.slice(0, 10);
   return new NextResponse(csv, {
     status: 200,
     headers: {
