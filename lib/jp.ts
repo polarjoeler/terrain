@@ -14,26 +14,33 @@ export type NameN = { label: string; n: number };
 export type JpStats = {
   total: number; dated: number; paidPct: number;
   byPlatform: NameN[];      // store count per platform
-  byYear: { year: string; n: number }[];   // launches by year (cumulative-friendly)
+  byYear: { year: string; n: number }[];   // launches by year
+  byCity: NameN[];          // store density by city / prefecture
   topPayments: NameN[];     // most-common payment providers
   newThisQuarter: number;
 };
 
+// The launch date as a bare SQL expression string — reused inside subqueries below so we never
+// interpolate a shared fragment into a fragile position (that broke the "… year" alias).
+const LAUNCH_EXPR = `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
+
 export async function jpStats(): Promise<JpStats> {
   const sql = db();
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
   const [tot] = await sql<{ total: number; dated: number; paid: number; nq: number }[]>`
     SELECT count(*)::int total,
-      count(*) FILTER (WHERE ${LAUNCH} IS NOT NULL)::int dated,
+      count(*) FILTER (WHERE l IS NOT NULL)::int dated,
       count(*) FILTER (WHERE payments IS NOT NULL AND payments <> '')::int paid,
-      count(*) FILTER (WHERE ${LAUNCH} >= date_trunc('quarter', now()))::int nq
-    FROM imported_stores WHERE ${LIVE()}`;
+      count(*) FILTER (WHERE l >= date_trunc('quarter', now()))::int nq
+    FROM (SELECT payments, ${sql.unsafe(LAUNCH_EXPR)} AS l FROM imported_stores WHERE ${LIVE()}) s`;
   const plat = await sql<NameN[]>`SELECT COALESCE(NULLIF(platform,''),'—') label, count(*)::int n
     FROM imported_stores WHERE ${LIVE()} GROUP BY 1 ORDER BY n DESC`;
-  const yr = await sql<{ year: string; n: number }[]>`
-    SELECT to_char(${LAUNCH}, 'YYYY') year, count(*)::int n
-    FROM imported_stores WHERE ${LIVE()} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= '2013-01-01'
-    GROUP BY 1 ORDER BY 1`;
+  const yr = await sql<{ yr: string; n: number }[]>`
+    SELECT to_char(l, 'YYYY') AS yr, count(*)::int n FROM (
+      SELECT ${sql.unsafe(LAUNCH_EXPR)} AS l FROM imported_stores WHERE ${LIVE()}
+    ) s WHERE l IS NOT NULL AND l >= '2013-01-01' GROUP BY 1 ORDER BY 1`;
+  // Density by prefecture (都道府県) — the JP equivalent of the Africa country map.
+  const city = await sql<NameN[]>`SELECT region label, count(*)::int n FROM imported_stores
+    WHERE ${LIVE()} AND region IS NOT NULL AND region <> '' GROUP BY 1 ORDER BY n DESC LIMIT 15`;
   const pay = await sql<NameN[]>`SELECT label, count(*)::int n FROM (
       SELECT trim(unnest(string_to_array(payments, ';'))) label FROM imported_stores
       WHERE ${LIVE()} AND payments IS NOT NULL AND payments <> ''
@@ -42,7 +49,8 @@ export async function jpStats(): Promise<JpStats> {
     total: Number(tot.total), dated: Number(tot.dated),
     paidPct: tot.total ? Math.round((100 * tot.paid) / tot.total) : 0,
     byPlatform: plat.map((r) => ({ label: r.label, n: Number(r.n) })),
-    byYear: yr.map((r) => ({ year: r.year, n: Number(r.n) })),
+    byYear: yr.map((r) => ({ year: r.yr, n: Number(r.n) })),
+    byCity: city.map((r) => ({ label: r.label, n: Number(r.n) })),
     topPayments: pay.map((r) => ({ label: r.label, n: Number(r.n) })),
     newThisQuarter: Number(tot.nq),
   };

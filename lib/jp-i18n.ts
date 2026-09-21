@@ -23,6 +23,9 @@ export const DICT = {
   h_launches_sub: { ja: "年ごとの新規出店数（出店時期ベース）", en: "New stores per year, by real launch date" },
   h_payments: { ja: "主要な決済プロバイダ", en: "Top payment providers" },
   h_payments_sub: { ja: "チェックアウトで確認した決済手段", en: "Verified at checkout" },
+  h_cities: { ja: "地域別の店舗密度", en: "Store density by area" },
+  h_cities_sub: { ja: "都市・都道府県ごとの店舗数", en: "Stores by city / prefecture" },
+  cities_coming: { ja: "地域データは取り込み中です（StoreLeadsで拡充予定）", en: "Location data is being ingested (enriched via StoreLeads)" },
 
   col_store: { ja: "店舗", en: "Store" },
   col_platform: { ja: "プラットフォーム", en: "Platform" },

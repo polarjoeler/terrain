@@ -60,8 +60,8 @@ export default async function JpOverview() {
           <p className="mt-0.5 text-xs text-cream/45">{t("h_launches_sub", locale)}</p>
           <div className="mt-5 flex h-40 items-end gap-1.5">
             {s.byYear.map((y) => (
-              <div key={y.year} className="flex flex-1 flex-col items-center gap-1.5" title={`${y.year}: ${y.n}`}>
-                <div className="w-full rounded-t bg-gradient-to-t from-mint/40 to-mint" style={{ height: `${(y.n / maxYear) * 100}%` }} />
+              <div key={y.year} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5" title={`${y.year}: ${y.n.toLocaleString()}`}>
+                <div className="w-full rounded-t bg-gradient-to-t from-mint/40 to-mint" style={{ height: `${Math.max(2, (y.n / maxYear) * 100)}%` }} />
                 <span className="text-[9px] tabular-nums text-cream/40">{y.year.slice(2)}</span>
               </div>
             ))}
@@ -69,6 +69,30 @@ export default async function JpOverview() {
           </div>
         </section>
       </div>
+
+      {/* Density by prefecture — the JP answer to the Africa country map */}
+      <section className="mt-6 rounded-2xl border border-cream/12 bg-cream/[0.02] p-5">
+        <h2 className="font-display text-lg text-cream">{t("h_cities", locale)}</h2>
+        <p className="mt-0.5 text-xs text-cream/45">{t("h_cities_sub", locale)}</p>
+        {s.byCity.length ? (
+          <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+            {s.byCity.map((c) => {
+              const maxCity = Math.max(1, ...s.byCity.map((x) => x.n));
+              return (
+                <div key={c.label} className="flex items-center gap-3 text-sm">
+                  <span className="w-24 shrink-0 truncate text-cream/80">{c.label}</span>
+                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/[0.06]">
+                    <div className="h-full rounded-full bg-gradient-to-r from-orange/60 to-orange" style={{ width: `${(c.n / maxCity) * 100}%` }} />
+                  </div>
+                  <span className="w-10 text-right tabular-nums text-cream/60">{c.n.toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-cream/40">{t("cities_coming", locale)}</p>
+        )}
+      </section>
 
       {/* Payments */}
       <section className="mt-6 rounded-2xl border border-cream/12 bg-cream/[0.02] p-5">
