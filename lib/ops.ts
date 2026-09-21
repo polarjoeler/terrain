@@ -343,6 +343,10 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
     SELECT UPPER(country) country,
       CASE WHEN lower(platform) = 'woocommerce' THEN 'woo'
            WHEN platform = 'Shopify' OR (platform IS NULL AND published) THEN 'shopify'
+           -- "pending" = a candidate we still need to probe. A platform-NULL/unpublished row we've
+           -- ALREADY probed (in probe_checked) and found not-a-store isn't backlog — drop it out.
+           WHEN platform IS NULL AND NOT published
+                AND EXISTS (SELECT 1 FROM probe_checked pc WHERE pc.domain = regexp_replace(imported_stores.domain,'^www\.','')) THEN 'checked_nonstore'
            WHEN platform IS NULL AND NOT published THEN 'pending'
            ELSE 'other' END plat,
       count(*)::int discovered,
@@ -358,6 +362,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   const gShop = emptyRaw(), gWoo = emptyRaw(), gOther = emptyRaw();
   let gPending = 0;
   for (const r of rows) {
+    if (r.plat === "checked_nonstore") continue;   // probed & not a store — not backlog, not a store
     const raw: Raw = { discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) };
     const c = r.country;
     if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, other: null, pending: 0, combined: toPlat(emptyRaw()) } });

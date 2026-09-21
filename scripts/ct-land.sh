@@ -12,4 +12,7 @@ node --env-file=.env.local scripts/heartbeat.mjs discovery >/dev/null 2>&1 || tr
 
 echo "===== ct-land $(date '+%F %T') ====="
 node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed"
+# Resolve "pending" candidates Lucy has since probed — capture any CMS detected (publish Shopify/
+# Woo), so the coverage page's pending count reflects real un-probed backlog, not stale imports.
+node --env-file=.env.local scripts/reconcile-probed.mjs || echo "!! reconcile-probed failed"
 echo "===== ct-land done $(date '+%F %T') ====="
