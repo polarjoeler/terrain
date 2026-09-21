@@ -20,6 +20,9 @@ import postgres from "postgres";
 const MARKETS = ["AO","BW","CI","CM","DZ","EG","ET","GH","KE","LS","LY","MA","MU","MW","MZ","NA",
   "NG","RW","SN","SO","SZ","TN","TZ","UG","ZA","ZM","ZW","JP"];
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
+// --country JP,ZA … narrows the dating pass to specific markets (e.g. a Japan demo push).
+const ONLY = (arg("--country", "") || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
+const SCOPE = ONLY.length ? ONLY : MARKETS;
 const LIMIT = parseInt(arg("--limit", "500"), 10);
 const CONC = parseInt(arg("--concurrency", "3"), 10);
 
@@ -58,7 +61,7 @@ async function main() {
     // filled for reports that read the column directly, just at lower priority).
     const rows = await sql`
       SELECT domain FROM imported_stores
-      WHERE published AND UPPER(country) = ANY(${MARKETS})
+      WHERE published AND UPPER(country) = ANY(${SCOPE})
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND launched_at IS NULL AND cert_checked_at IS NULL
       ORDER BY (first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}') ASC NULLS FIRST, discovered_at DESC NULLS LAST
