@@ -65,7 +65,10 @@ export default async function PartnersPage() {
               so you can scan the landscape for integration and collaboration targets. Payment rows open a full market report.
             </p>
           </div>
-          <Link href="/insights" className="shrink-0 rounded-full border border-cream/15 px-3 py-1 text-sm text-cream/60 hover:text-cream">Insights →</Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link href="/partners/services" className="rounded-full border border-cream/15 px-3 py-1 text-sm text-cream/60 hover:text-cream">Service Partners →</Link>
+            <Link href="/insights" className="rounded-full border border-cream/15 px-3 py-1 text-sm text-cream/60 hover:text-cream">Insights →</Link>
+          </div>
         </div>
 
         {partners.length === 0 && (
@@ -106,7 +109,7 @@ export default async function PartnersPage() {
 
         <p className="mt-6 text-[11px] leading-relaxed text-cream/40">
           Counts are live, published stores with the product detected (payments &amp; shipping verified at checkout; apps from installed-app data).
-          This is the <b className="text-cream/60">Product</b> directory — a separate <b className="text-cream/60">Service Partners</b> directory (agencies &amp; pros, with the stores each has built) is coming.
+          This is the <b className="text-cream/60">Product</b> directory. See the <Link href="/partners/services" className="text-cyan hover:underline">Service Partners</Link> directory for the agencies &amp; pros building these stores.
         </p>
       </div>
     </main>
