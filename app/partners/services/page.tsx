@@ -28,6 +28,9 @@ function PartnerRow({ p }: { p: ServicePartner }) {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-cream/90">{p.websiteUrl ? <a href={p.websiteUrl} target="_blank" rel="noopener noreferrer" className="hover:text-cyan hover:underline">{p.name}</a> : p.name}</span>
           {p.isPro && <span className="rounded-full border border-mint/30 bg-mint/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-mint">Pro</span>}
+          {p.verified
+            ? <span className="rounded-full border border-cyan/25 bg-cyan/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-cyan" title="Listed on Africa Shop Experts">Verified</span>
+            : <span className="rounded-full border border-cream/15 bg-cream/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase text-cream/45" title="Discovered by Terrain from a public build credit — unclaimed">Discovered</span>}
         </div>
         <div className="mt-0.5 text-[11px] text-cream/40">{p.type}{p.location ? ` · ${p.location}` : ""}</div>
         {p.skills.length > 0 && <div className="mt-1.5"><Chips items={p.skills} tone="text-lilac/70" /></div>}

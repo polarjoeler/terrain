@@ -13,4 +13,7 @@ node --env-file=.env.local scripts/sync-experts.mjs || echo "!! sync-experts fai
 # rolling batch). Writes back to Fundi automatically when EXPERTS_SUPABASE_SERVICE_KEY is set.
 WB=""; [ -n "${EXPERTS_SUPABASE_SERVICE_KEY:-}" ] && WB="--writeback"
 node --env-file=.env.local scripts/attribute-partners.mjs --footer 1500 $WB || echo "!! attribute-partners failed"
+# Low-priority trickle: promote a few discovered agencies (footer-credit byproduct) into the
+# directory as "Discovered" listings. A handful of agency-site fetches — never store discovery.
+node --env-file=.env.local scripts/enrich-candidates.mjs --limit 8 || echo "!! enrich-candidates failed"
 echo "===== done $(date '+%T') ====="

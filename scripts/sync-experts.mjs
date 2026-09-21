@@ -63,6 +63,7 @@ async function main() {
       completed_projects int, years_experience int, response_time text, availability text,
       is_pro boolean, website_url text, logo_url text, avatar text,
       stores_linked int, source_updated_at timestamptz, synced_at timestamptz NOT NULL DEFAULT now())`;
+    await sql`ALTER TABLE service_partners ADD COLUMN IF NOT EXISTS source text DEFAULT 'fundi'`;
 
     const arr = (v) => (Array.isArray(v) ? v : []);
     const rows = experts.map((e) => ({
@@ -81,13 +82,14 @@ async function main() {
     const linked = new Map((await sql`SELECT id, stores_linked FROM service_partners WHERE stores_linked IS NOT NULL`)
       .map((r) => [r.id, r.stores_linked]));
     await sql.begin(async (tx) => {
-      await tx`DELETE FROM service_partners`;
+      // Replace only the Fundi-sourced rows — never touch agencies we DISCOVERED ourselves.
+      await tx`DELETE FROM service_partners WHERE source IS NULL OR source = 'fundi'`;
       for (let i = 0; i < rows.length; i += 200) {
-        await tx`INSERT INTO service_partners ${tx(rows.slice(i, i + 200), ...cols)}`;
+        await tx`INSERT INTO service_partners ${tx(rows.slice(i, i + 200).map((r) => ({ ...r, source: "fundi" })), ...cols, "source")}`;
       }
       for (const [id, n] of linked) await tx`UPDATE service_partners SET stores_linked = ${n} WHERE id = ${id}`;
     });
-    console.log(`synced ${rows.length} experts → service_partners (full replace; ${linked.size} stores_linked preserved).`);
+    console.log(`synced ${rows.length} Fundi experts → service_partners (discovered rows preserved; ${linked.size} stores_linked preserved).`);
   } finally { await sql.end(); }
 }
 main().catch((e) => { console.error(e); process.exit(1); });
