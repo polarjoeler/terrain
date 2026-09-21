@@ -87,16 +87,21 @@ async function main() {
       while (idx < verified.length) {
         const [domain, v] = verified[idx++];
         // Read what we currently have so we can detect a real shift (not first capture).
-        const [cur] = await sql`SELECT payments FROM imported_stores WHERE domain = ${domain} AND published`;
+        const [cur] = await sql`SELECT payments, payments_source FROM imported_stores WHERE domain = ${domain} AND published`;
         const oldP = cur?.payments ?? null;
+        // A bootstrap import (e.g. StoreCensus generic gateways) is NOT a prior probe, so the
+        // first checkout probe over it is an INITIAL capture, not a switch — comparing our
+        // verified read against a bootstrap value would log a bogus switch. Only probe-verified
+        // baselines (source NULL / woo_*) count for switch detection.
+        const bootstrap = cur?.payments_source === "storecensus";
         // A logged "shift" must be a genuine GATEWAY change, not probe noise. Two guards:
         //  1. Strip intermittent sub-rails (Instant EFT / Bank Deposit are PayFast options
         //     that flap on/off between reads) so only real gateway adds/drops count — this
         //     alone kills the {PayFast} vs {PayFast;Instant EFT;Bank Deposit} oscillation.
         //  2. De-flap: skip if this exact state was already seen for the store in the last
         //     30 days (an A→B→A revert is unstable reads, not a real switch).
-        // First reads (oldP null) never log.
-        if (v.payments && oldP) {
+        // First reads (oldP null) and first probes over a bootstrap import never log.
+        if (v.payments && oldP && !bootstrap) {
           const oTok = toks(oldP).filter((t) => !PAY_NOISE.has(t.toLowerCase()));
           const nTok = toks(v.payments).filter((t) => !PAY_NOISE.has(t.toLowerCase()));
           const added = nTok.filter((t) => !oTok.some((o) => o.toLowerCase() === t.toLowerCase()));
@@ -119,7 +124,10 @@ async function main() {
               payments           = COALESCE(${v.payments}, payments),
               shipping_providers = COALESCE(${v.shipping}, shipping_providers),
               free_shipping      = COALESCE(${v.free}, free_shipping),
-              payments_checked_at = CASE WHEN ${v.payments}::text IS NOT NULL THEN now() ELSE payments_checked_at END
+              payments_checked_at = CASE WHEN ${v.payments}::text IS NOT NULL THEN now() ELSE payments_checked_at END,
+              -- once our probe verifies gateways, clear the bootstrap marker so future probes
+              -- compare probe-to-probe (matching the NULL convention of probe-verified Shopify).
+              payments_source = CASE WHEN ${v.payments}::text IS NOT NULL AND payments_source = 'storecensus' THEN NULL ELSE payments_source END
             WHERE domain = ${domain} AND published`;
         updated += r.count;
       }

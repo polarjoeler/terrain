@@ -136,16 +136,17 @@ const mergeVariants = (rows: { label: string; n: number }[]): { label: string; n
   return [...m.values()].sort((a, b) => b.n - a.n);
 };
 
-// "Brand New Stores" = discovered (cert-transparency found) in this window.
+// "Brand New Stores" = stores that LAUNCHED in this window (not when we discovered/imported
+// them), so bulk imports of older stores never masquerade as brand-new.
 export const NEW_STORE_DAYS = 90;
 
-// A cohort filter fragment: undefined = all; "new" = recently discovered
-// (dynamic); anything else = a curated store_tags cohort (Top 100 etc.).
+// A cohort filter fragment: undefined = all; "new" = recently launched
+// (dynamic, by launch date); anything else = a curated store_tags cohort (Top 100 etc.).
 const cohortFilter = (tag?: string) =>
   !tag
     ? db()``
     : tag === "new"
-      ? db()`AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
+      ? db()`AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
       : db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})`;
 
 // Published live stores for a market — the universe the insights describe.
@@ -395,11 +396,14 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       SELECT *,
         (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
         (published AND country = ${country} ${inTag} ${platClause}) AS za,
-        -- "new this week" = genuinely DISCOVERED by our engine in the last 7 days.
-        -- Use discovered_at (set only by the CT discovery feed), NOT created_at:
-        -- created_at also fires on bulk imports, so a backfill of old stores would
-        -- spike this misleadingly. Imports have discovered_at NULL → excluded.
-        (discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7) AS fresh,
+        -- "new this week" = stores that genuinely LAUNCHED in the window. Keyed off the launch
+        -- date (not discovered_at / created_at), so a bulk import or a payment backfill of
+        -- historically-launched stores spreads across their real launch periods instead of
+        -- spiking the current week/month. discovered_at = when WE found it, never a market birth.
+        (COALESCE(
+          (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+          launched_at
+        ) >= CURRENT_DATE - 7) AS fresh,
         -- Real launch date: earliest product timestamp, else the recorded launched_at.
         COALESCE(
           (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
@@ -489,13 +493,15 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
           WHERE ${LIVE(country, tag, platform)} AND apps IS NOT NULL AND apps <> ''
         ) x WHERE app <> '' GROUP BY app ORDER BY n DESC`;
 
-  // Discovery-neutral payment adoptions per period window — new-to-us stores (by
-  // discovered_at) with each provider + real switches (change log), so enrichment /
-  // vetting catch-up on OLD stores never inflates the Payment Intelligence change.
-  const adoptRows = await sql<{ discovered_at: Date | null; payments: string }[]>`
-    SELECT discovered_at, payments FROM imported_stores
+  // Import-neutral payment adoptions per period window — stores that LAUNCHED in the window
+  // using each provider + real switches (change log). Keyed off launch date (not discovered_at),
+  // so a bulk import or a payment-data backfill of historically-launched stores never inflates
+  // the current period — it lands in each store's real launch period instead.
+  const adoptRows = await sql<{ launch: Date | null; payments: string }[]>`
+    SELECT COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch, payments
+    FROM imported_stores
     WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''
-      AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 365`;
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 365`;
   const adoptChanges = await sql<{ changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
     SELECT pc.changed_at, pc.added, pc.removed FROM payment_changes pc
     JOIN imported_stores i ON i.domain = pc.domain
@@ -507,7 +513,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     const cut = Date.now() - P * 864e5;
     const m = new Map<string, number>();
     for (const r of adoptRows) {
-      if (!r.discovered_at || new Date(r.discovered_at).getTime() < cut) continue;
+      if (!r.launch || new Date(r.launch).getTime() < cut) continue;
       for (const g of cleanPayments(String(r.payments).split(";"))) m.set(g, (m.get(g) ?? 0) + 1);
     }
     for (const c of adoptChanges) {
@@ -722,7 +728,7 @@ async function getHomeStatsUncached(country = "ZA", platform: PlatformSel = "sho
   const [t] = await sql`
     SELECT
       COUNT(*)::int                                                                       AS stores,
-      COUNT(*) FILTER (WHERE discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7)::int AS new_week,
+      COUNT(*) FILTER (WHERE COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 7)::int AS new_week,
       COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int                       AS with_email,
       COUNT(*) FILTER (WHERE plus)::int                                                    AS plus
     FROM imported_stores

@@ -156,14 +156,17 @@ export async function providerInsights(provider: string, country?: string): Prom
     sizeBands.set(salesBand(rev), (sizeBands.get(salesBand(rev)) ?? 0) + 1);
   }
 
-  // Adoption among NEW (discovered) stores — organic, excludes imports.
-  const disc = (r: { discovered_at: Date | null }, days: number) =>
-    r.discovered_at != null && (Date.now() - new Date(r.discovered_at).getTime()) <= days * 864e5;
-  const newLast7 = mine.filter((x) => disc(x.r, 7)).length;
-  const newLast30 = mine.filter((x) => disc(x.r, 30)).length;
+  // Adoption among newly-LAUNCHED stores — market births, not when we discovered/imported them,
+  // so a bulk import or payment backfill of older stores can't inflate it. Denominator is
+  // new-launched stores WITH known payment data (market share over known stores, not total).
+  const launchedWithin = (r: { launched_at: Date | null }, days: number) =>
+    r.launched_at != null && (Date.now() - new Date(r.launched_at).getTime()) <= days * 864e5;
+  const newLast7 = mine.filter((x) => launchedWithin(x.r, 7)).length;
+  const newLast30 = mine.filter((x) => launchedWithin(x.r, 30)).length;
   const [nd] = await sql<{ n7: number }[]>`
     SELECT COUNT(*)::int n7 FROM imported_stores
-    WHERE ${LIVE} ${AND_C} AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - 7`;
+    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''
+      AND launched_at IS NOT NULL AND launched_at >= CURRENT_DATE - 7`;
   const newStores7 = Number(nd.n7);
 
   // Denominators for MARKET SHARE: all verified stores, by first_seen year and by country.
@@ -394,27 +397,27 @@ export type ProviderMomentum = {
   days: number;         // span of history compared
 };
 
-/** Per-provider ADOPTION momentum among NEWLY-DISCOVERED stores — "which PSPs are new
- *  stores choosing, this period vs last". Deliberately DISCOVERY-NEUTRAL: it compares
- *  stores discovered in the last period against those discovered in the period before,
- *  keyed on discovered_at. Backfilling payment data onto OLDER stores can't move this
- *  (they fall outside both windows), so the delta is real new-store movement — not an
- *  artefact of our vetting catching up on the existing base. */
+/** Per-provider ADOPTION momentum among NEWLY-LAUNCHED stores — "which PSPs are new
+ *  stores choosing, this period vs last". Deliberately IMPORT-NEUTRAL: it compares
+ *  stores that LAUNCHED in the last period against those that launched the period before,
+ *  keyed on launch date (not discovered_at). A bulk import or payment backfill of older
+ *  stores can't move this (they fall outside both windows by their real launch date), so
+ *  the delta is real new-store movement — not an artefact of our vetting catching up. */
 export async function providerMomentum(country = "ALL", period: "day" | "week" = "week"): Promise<ProviderMomentum[]> {
   const sql = db();
   const P = period === "day" ? 1 : 7;
   const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const rows = await sql<{ discovered_at: Date; payments: string }[]>`
-    SELECT discovered_at, payments FROM imported_stores
+  const rows = await sql<{ launched_at: Date; payments: string }[]>`
+    SELECT launched_at, payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND payments IS NOT NULL AND payments <> ''
-      AND discovered_at IS NOT NULL AND discovered_at >= CURRENT_DATE - ${2 * P}::int ${AND_C}`.catch(() => []);
+      AND launched_at IS NOT NULL AND launched_at >= CURRENT_DATE - ${2 * P}::int ${AND_C}`.catch(() => []);
 
   const recentCut = Date.now() - P * 864e5;
   let recentTotal = 0, priorTotal = 0;
   const recent = new Map<string, number>(), prior = new Map<string, number>();
   for (const r of rows) {
-    const isRecent = new Date(r.discovered_at).getTime() >= recentCut;
+    const isRecent = new Date(r.launched_at).getTime() >= recentCut;
     if (isRecent) recentTotal++; else priorTotal++;
     // Canonical, de-duped gateways for the store (drops card icons / sub-rails).
     const provs = new Set(cleanPayments(String(r.payments).split(";")).map((g) => canonicalProvider(g)).filter(Boolean) as string[]);
