@@ -18,6 +18,19 @@
 
   --font-display: var(--font-instrument-serif), Georgia, serif;
   --font-body: var(--font-inter), system-ui, sans-serif;
+
+  /* Motion contract — three speeds, two curves. Everything in the UI picks one.
+     press: hover/focus/active colour + border shifts (must feel instant)
+     move:  layout — panels, drawers, rows entering or leaving
+     data:  narrative — number count-ups, bars growing, the map drawing */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+:root {
+  --dur-press: 120ms;
+  --dur-move: 220ms;
+  --dur-data: 640ms;
 }
 
 body {
@@ -67,5 +80,58 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .radar-sweep {
     animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Interactive defaults.
+
+   The app had 232 `hover:` utilities against 82 transitions and exactly one
+   explicit duration — so most hover states snapped between colours with no
+   easing, which is what made the UI feel flat and unresponsive. Rather than
+   annotate 232 call sites, every interactive element gets the press-speed
+   transition here by default. Components can still override with a Tailwind
+   `duration-*` / `ease-*` utility where they need something slower.
+--------------------------------------------------------------------------- */
+@layer base {
+  a,
+  button,
+  summary,
+  select,
+  input,
+  textarea,
+  [role="button"],
+  [role="tab"],
+  [role="option"] {
+    transition-property: color, background-color, border-color, outline-color,
+      text-decoration-color, opacity, box-shadow, transform, filter;
+    transition-duration: var(--dur-press);
+    transition-timing-function: var(--ease-out-soft);
+  }
+
+  /* Keyboard users could not see where they were: 232 interactive hovers
+     against 31 focus styles. One visible ring for everything, mouse clicks
+     excluded via :focus-visible. */
+  :focus-visible {
+    outline: 2px solid var(--color-orange);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Figures line up in columns instead of jittering as values change. */
+  :where(table) {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Honour the OS setting across the whole app, not just the two tickers. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

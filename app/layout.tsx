@@ -14,7 +14,10 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
+// Absolute-URL base for canonical links and OG/Twitter cards. Driven by
+// NEXT_PUBLIC_SITE_URL so a domain move is an env change, not a code change.
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://terrain.tembocommerce.app"),
   title: "Terrain — Every new Shopify store in Africa, found first",
   description:
     "Terrain maps new African Shopify stores the day they launch — enriched with contact details, pricing, payment stacks and more — delivered weekly. Part of the Tembo Commerce family.",

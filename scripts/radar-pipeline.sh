@@ -144,7 +144,8 @@ node --env-file=.env.local scripts/verify-liveness.mjs --country "$MARKETS" --mi
 
 # Trigger the daily market-insights snapshot (the page computes + upserts it).
 echo "--- insights snapshot ---"
-curl -s -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 https://terrain.tembocommerce.app/insights || echo "!! insights snapshot failed (continuing)"
+# -L so the warm still lands while the old domain 308s to the new one during the move.
+curl -sL -o /dev/null -w "insights: HTTP %{http_code}\n" --max-time 60 "${SITE_URL:-https://terrain.tembocommerce.app}/insights" || echo "!! insights snapshot failed (continuing)"
 
 # (catalog-enrich moved up to run right after payments — NEW STORES FIRST. See above.)
 
