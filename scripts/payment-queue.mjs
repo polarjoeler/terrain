@@ -72,6 +72,7 @@ async function watchRun(sql) {
     FROM imported_stores
     WHERE published
       AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
+      AND (lower(platform) = 'shopify' OR platform IS NULL)  -- Shopify checkout probe only (Woo has its own)
       AND payments IS NOT NULL AND payments <> ''
       ${CLIST.length ? sql`AND UPPER(country) = ANY(${CLIST})` : sql``}
       AND (${frags.map((f) => sql`lower(payments) LIKE ${"%" + f + "%"}`).reduce((a, b) => sql`${a} OR ${b}`)})
@@ -128,7 +129,7 @@ async function main() {
     // 75 days. Unprobed stores are always eligible.
     const HV_REPROBE_DAYS = 7, TAIL_REPROBE_DAYS = 21;
     const eligible = await sql`
-      SELECT domain, estimated_monthly_sales sales, live_status, discovered_at,
+      SELECT domain, estimated_monthly_sales sales, live_status, discovered_at, source, country,
         (payments IS NULL OR payments = '') AS needs_initial,
         COALESCE(plus, false) AS plus,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
@@ -137,6 +138,10 @@ async function main() {
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
+        -- checkout_probe.py is SHOPIFY-specific (products.json + Shopify checkout). Feeding it
+        -- WooCommerce/other-platform stores just burns budget on guaranteed no_variant results —
+        -- those are the Woo probe's job. Keep NULL (unclassified, most likely Shopify).
+        AND (lower(platform) = 'shopify' OR platform IS NULL)
         ${CLIST.length ? sql`AND UPPER(country) = ANY(${CLIST})` : sql``}
         ${PLUS ? sql`AND plus = true`
                : sql`AND (
@@ -154,19 +159,34 @@ async function main() {
     // reclaims the freed slots. Tune with --reprobe-share / REPROBE_SHARE (0 = pure drain).
     const isHV = (r) => r.t100 || r.t500 || r.plus;
     const cap = LIMIT > 0 ? LIMIT : eligible.length;
+    // Boosted from 0.12 → 0.30 to clear the African StoreCensus re-probe backlog fast (their
+    // StoreCensus payment data was unreliable — see clean-storecensus-payments). The re-probe
+    // ordering below sends that slice to the African cohort first. Revert to 0.12 once drained.
     const REPROBE_SHARE = Math.min(1, Math.max(0,
-      parseFloat(opt("--reprobe-share", process.env.REPROBE_SHARE || "0.12"))));
+      parseFloat(opt("--reprobe-share", process.env.REPROBE_SHARE || "0.30"))));
     // NEW STORES FIRST. The product sells subscribers fast access to new leads, so a
     // freshly-discovered store must get its gateway probed before the value backlog — a
     // brand-new lead with no payment data is worthless the week it matters most. Order
     // initial probes newest-discovered first; HV / new-market only break ties on the same day.
     const disc = (r) => (r.discovered_at ? new Date(r.discovered_at).getTime() : 0);
-    const init = eligible.filter((r) => r.needs_initial).sort((a, b) =>
-      disc(b) - disc(a)
-      || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)
-      || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0));
-    const reprobes = eligible.filter((r) => !r.needs_initial)
-      .sort((a, b) => (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)); // HV switches first
+    // African StoreCensus cohort first: their imported payment data was US-centric/unreliable (see
+    // clean-storecensus-payments), so establishing our own probe-verified gateways for them is the
+    // priority. Scoped to non-Shopify-Payments markets — JP/US/EU StoreCensus data is valid there,
+    // so it isn't boosted. Self-limiting: once the African backlog drains, sc()=0 for all and it
+    // falls back to the normal newest-first-then-value ordering.
+    const SP = new Set(["US","CA","GB","AU","NZ","IE","JP","SG","HK","AT","BE","CZ","DK","FI","FR","DE","IT","NL","PT","ES","SE","CH","RO","BG","HR","CY","EE","GR","HU","LV","LT","LU","MT","PL","SK","SI"]);
+    const sc = (r) => (r.source === "storecensus" && !SP.has((r.country || "").toUpperCase()) ? 1 : 0);
+    const init = eligible.filter((r) => r.needs_initial).sort((a, b) => {
+      const s = sc(b) - sc(a); if (s) return s;                       // StoreCensus reset cohort first
+      if (sc(a)) return (b.sales || 0) - (a.sales || 0);              // within it: highest-value first
+      return disc(b) - disc(a)                                        // fresh CT discoveries: newest first (unchanged)
+        || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)
+        || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0);
+    });
+    const reprobes = eligible.filter((r) => !r.needs_initial).sort((a, b) =>
+      sc(b) - sc(a)                                                   // African StoreCensus re-verify first
+      || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)                        // then HV switch detection
+      || (b.sales || 0) - (a.sales || 0));                           // then by value
     const reSlots = Math.min(reprobes.length, Math.round(cap * REPROBE_SHARE));
     const takeInit = init.slice(0, Math.max(0, cap - reSlots));
     const takeRe = reprobes.slice(0, cap - takeInit.length);

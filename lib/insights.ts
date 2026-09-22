@@ -436,9 +436,12 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
 
   // Per-store payments → provider share, type share (stores offering ≥1), and
   // first-listed provider (best-effort ordering from the checkout sync).
+  // CANONICAL: payment market share counts only PROBE-VERIFIED stores, never the StoreCensus vendor
+  // import (its generic US-stack data misses local PSPs and pads the denominator). Same rule in
+  // snapshot-providers.mjs and lib/provider-insights.ts.
   const payRows = await sql`
     SELECT payments FROM imported_stores
-    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''`;
+    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'`;
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
@@ -858,7 +861,7 @@ export function isReportSection(s: string): boolean { return s in REPORT_SECTION
 /** Payment landscape from provider_snapshots: each provider's merchant count, market share %,
  *  change vs the prior comparable period (Δcount + Δshare in pp), and a share sparkline —
  *  at `back` periods ago (0 = latest). This is what makes the numbers legible over time. */
-async function paymentSnapshotReport(country: string, period: PeriodKey, back: number): Promise<SectionReport> {
+async function paymentSnapshotReport(country: string, period: PeriodKey, back: number, platform = "all"): Promise<SectionReport> {
   const sql = db();
   const P = REPORT_PERIOD_DAYS[period] ?? 7;
   const cfg = REPORT_SECTIONS.payments;
@@ -867,7 +870,7 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
     period, periodDays: P, items: [], allTimeStores: 0, periodStores: 0, back };
 
   const dates = (await sql<{ date: Date }[]>`SELECT DISTINCT date FROM provider_snapshots
-    WHERE UPPER(country) = ${cc} ORDER BY date DESC`.catch(() => [])).map((r) => r.date);
+    WHERE UPPER(country) = ${cc} AND platform = ${platform} ORDER BY date DESC`.catch(() => [])).map((r) => r.date);
   if (!dates.length) return base;
 
   const MS = 864e5, iso = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
@@ -877,7 +880,7 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
   const windowStart = iso(new Date(ms(viewDate) - 35 * MS)); // trailing window for the sparkline
 
   const rows = await sql<{ provider: string; date: Date; data: unknown }[]>`SELECT provider, date, data
-    FROM provider_snapshots WHERE UPPER(country) = ${cc} AND date <= ${viewDate} AND date >= ${windowStart}
+    FROM provider_snapshots WHERE UPPER(country) = ${cc} AND platform = ${platform} AND date <= ${viewDate} AND date >= ${windowStart}
     ORDER BY date`;
   const byProv = new Map<string, Map<string, { total: number; share: number }>>();
   for (const r of rows) {
@@ -928,7 +931,7 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
     asOf: vIso, comparedTo: pIso ?? undefined };
 }
 
-export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week", back = 0): Promise<SectionReport> {
+export async function sectionReport(section: string, country = "ZA", period: PeriodKey = "week", back = 0, platform = "all"): Promise<SectionReport> {
   const cfg = REPORT_SECTIONS[section];
   if (!cfg) throw new Error(`unknown report section: ${section}`);
   const P = REPORT_PERIOD_DAYS[period] ?? 7;
@@ -938,7 +941,7 @@ export async function sectionReport(section: string, country = "ZA", period: Per
   // provider_snapshots so every row carries share %, its change vs the prior comparable period,
   // and a trend sparkline — and can be stepped back through time. (Best practice: an absolute
   // number is meaningless without a denominator + a comparison.)
-  if (section === "payments") return paymentSnapshotReport(country, period, back);
+  if (section === "payments") return paymentSnapshotReport(country, period, back, platform);
 
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   // Period counts are keyed on real LAUNCH date (first product / launched_at), not discovered_at —

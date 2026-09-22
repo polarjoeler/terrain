@@ -9,7 +9,7 @@
  * Run it after a checkout-probe run (e.g. of the Plus queue) to close the loop.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -24,19 +24,32 @@ async function main() {
   try { cache = JSON.parse(readFileSync(cachePath, "utf8")); }
   catch (e) { console.error(`Could not read ${cachePath}: ${e.message}`); process.exit(1); }
 
+  // Incremental: only sync entries probed since the last successful sync. The old code re-processed
+  // the ENTIRE (growing) cache every hourly run; once it crept past ~8k rows it began exceeding the
+  // pipeline's time budget → "sync failed" → payments_checked_at never advanced → the queue re-probed
+  // the same stores forever. Keyed on probed_at, with a small overlap so nothing slips the boundary.
+  const statePath = join(homedir(), "shopify-radar", ".sync_state.json");
+  let lastSync = 0;
+  try { lastSync = Date.parse(JSON.parse(readFileSync(statePath, "utf8")).last_synced_at) || 0; } catch {}
+  const cutoff = lastSync ? lastSync - 20 * 60e3 : Date.now() - 6 * 3600e3; // first run: last 6h
+  const fresh = (rec) => { const t = rec?.probed_at ? Date.parse(rec.probed_at) : NaN; return isNaN(t) || t >= cutoff; };
+
   // domain -> { payments, shipping, free } (checkout-verified)
   const verified = [];
   for (const [domain, rec] of Object.entries(cache)) {
+    if (!fresh(rec)) continue;
     const gw = rec?.gateways;
     const ship = rec?.shipping;
     const hasGw = Array.isArray(gw) && gw.length;
     const hasShip = Array.isArray(ship) && ship.length;
     const hasFree = typeof rec?.free_shipping === "boolean";
-    if (hasGw || hasShip || hasFree) {
+    const hasPlus = rec?.plus === "strong"; // independent, still-Plus-exclusive fingerprint
+    if (hasGw || hasShip || hasFree || hasPlus) {
       verified.push([clean(domain), {
         payments: hasGw ? gw.join(";") : null,
         shipping: hasShip ? ship.join(";") : null,
         free: hasFree ? rec.free_shipping : null,
+        plus: hasPlus,
       }]);
     }
   }
@@ -46,26 +59,30 @@ async function main() {
   // even reach a testable checkout, and errors/WAF blocks aren't a signal — those stay
   // "unknown", never "no gateway".
   const checkedEmpty = Object.entries(cache)
-    .filter(([, rec]) => String(rec?.note || "").startsWith("no_gateways_found"))
+    .filter(([, rec]) => fresh(rec) && String(rec?.note || "").startsWith("no_gateways_found"))
     .map(([d]) => clean(d));
   console.log(`${verified.length.toLocaleString()} domains with verified checkout data · ${checkedEmpty.length.toLocaleString()} confirmed no-gateway (probed, none chosen).`);
 
   const POOL = 8, CONCURRENCY = 6; // CONCURRENCY < POOL so queries never queue past
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: POOL });
+  // Idempotent schema setup. IF NOT EXISTS isn't atomic, so two overlapping syncs can still race
+  // (42P07 "already exists") — swallow that so an overlap never aborts the run.
+  const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`;
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`;
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`);
     // When we last verified checkout — lets the queue re-surface stale stores for a
     // re-probe (so provider switches get caught), instead of probe-once-forever.
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`;
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plus_signal TEXT`);
     // Event log of payment-provider shifts — the raw material for monitoring stores
     // that switch/add/drop a gateway or reorder their checkout (a live sales signal).
     // Populated here by diffing each re-probe against what we last had.
-    await sql`CREATE TABLE IF NOT EXISTS payment_changes (
+    await ddl(sql`CREATE TABLE IF NOT EXISTS payment_changes (
       id BIGSERIAL PRIMARY KEY, domain TEXT NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       old_payments TEXT, new_payments TEXT, added TEXT[], removed TEXT[],
-      old_primary TEXT, new_primary TEXT, reordered BOOLEAN NOT NULL DEFAULT false)`;
-    await sql`CREATE INDEX IF NOT EXISTS idx_payment_changes_at ON payment_changes (changed_at DESC)`;
+      old_primary TEXT, new_primary TEXT, reordered BOOLEAN NOT NULL DEFAULT false)`);
+    await ddl(sql`CREATE INDEX IF NOT EXISTS idx_payment_changes_at ON payment_changes (changed_at DESC)`);
 
     const toks = (s) => (s ? s.split(";").map((t) => t.trim()).filter(Boolean) : []);
     // Non-PSP payment METHODS/rails that render intermittently at checkout (e.g. PayFast
@@ -127,7 +144,11 @@ async function main() {
               payments_checked_at = CASE WHEN ${v.payments}::text IS NOT NULL THEN now() ELSE payments_checked_at END,
               -- once our probe verifies gateways, clear the bootstrap marker so future probes
               -- compare probe-to-probe (matching the NULL convention of probe-verified Shopify).
-              payments_source = CASE WHEN ${v.payments}::text IS NOT NULL AND payments_source = 'storecensus' THEN NULL ELSE payments_source END
+              payments_source = CASE WHEN ${v.payments}::text IS NOT NULL AND payments_source = 'storecensus' THEN NULL ELSE payments_source END,
+              -- an independent, still-Plus-exclusive fingerprint (multipass / Plus badge) confirms
+              -- Plus on its own — record it and set the confident flag live (never un-set).
+              plus_signal = CASE WHEN ${v.plus} THEN 'strong' ELSE plus_signal END,
+              plus        = CASE WHEN ${v.plus} THEN true ELSE plus END
             WHERE domain = ${domain} AND published`;
         updated += r.count;
       }
@@ -144,6 +165,8 @@ async function main() {
       console.log(`  ↳ marked ${r.count.toLocaleString()} stores checked-but-no-gateway (probed, no provider yet).`);
     }
     if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);
+    // Advance the incremental watermark only after a successful pass.
+    writeFileSync(statePath, JSON.stringify({ last_synced_at: new Date().toISOString() }));
   } finally {
     await sql.end();
   }

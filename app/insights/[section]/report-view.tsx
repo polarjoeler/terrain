@@ -34,7 +34,7 @@ function SharePp({ v }: { v?: number }) {
   );
 }
 
-export function ReportView({ report, country, countries }: { report: SectionReport; country: string; countries: string[] }) {
+export function ReportView({ report, country, countries, platform }: { report: SectionReport; country: string; countries: string[]; platform: string }) {
   const setParam = (k: string, v: string) => {
     const p = new URLSearchParams(window.location.search);
     p.set(k, v);
@@ -135,6 +135,16 @@ export function ReportView({ report, country, countries }: { report: SectionRepo
                 className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-xs text-cream outline-none focus:border-cream/50">
                 {countries.map((c) => <option key={c} value={c} className="text-ink">{c}</option>)}
               </select>
+            )}
+
+            {report.section === "payments" && (
+              <div className="flex gap-1 rounded-full border border-cream/12 p-1" title="market share by CMS platform in this country">
+                {([["all", "All CMS"], ["shopify", "Shopify"], ["woocommerce", "WooCommerce"], ["magento", "Magento"]] as const).map(([k, l]) => (
+                  <button key={k} onClick={() => setParam("platform", k)}
+                    className={`rounded-full px-3 py-1 text-xs transition ${platform === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}
+                  >{l}</button>
+                ))}
+              </div>
             )}
           </div>
         </header>

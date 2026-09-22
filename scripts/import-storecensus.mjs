@@ -22,6 +22,21 @@ const isoDate = (s) => {
 // signal in the Shopify era (>=2015); cert-based dating remains authoritative when present.
 const launchFrom = (s) => { const d = isoDate(s); return d && d >= "2015-01-01" ? d : null; };
 const num = (v) => (v === "" || v == null || isNaN(+v) ? null : +v);
+// Cap implausibly-high monthly sales at import (StoreCensus occasionally emits an annual/cumulative
+// figure as monthly — e.g. "$439M/mo" for a single ccTLD store). No real Shopify store does >$20M/mo.
+const SALES_CEILING = 20_000_000;
+const salesNum = (v) => { const n = num(v); return n == null ? null : Math.min(n, SALES_CEILING); };
+// StoreCensus assumes the US Shopify stack, so outside Shopify-Payments countries it emits gateways
+// that can't be real (shopify_payments/shop_pay require Shopify Payments; klarna/affirm don't operate
+// there). Strip those so we never import a geographically-impossible gateway. See clean-storecensus-payments.mjs.
+const SP_COUNTRIES = new Set(["US","CA","GB","AU","NZ","IE","JP","SG","HK","AT","BE","CZ","DK","FI","FR","DE","IT","NL","PT","ES","SE","CH","RO","BG","HR","CY","EE","GR","HU","LV","LT","LU","MT","PL","SK","SI"]);
+const IMPOSSIBLE_PAY = new Set(["shopify_payments", "shop_pay", "apple_pay", "google_pay", "klarna", "affirm"]);
+const cleanPays = (pays, country) => {
+  if (!pays) return null;
+  if (SP_COUNTRIES.has((country || "").toUpperCase())) return pays;
+  const kept = pays.split(/[;|]/).map((t) => t.trim()).filter((t) => t && !IMPOSSIBLE_PAY.has(t.toLowerCase()));
+  return kept.length ? kept.join("|") : null;
+};
 // StoreCensus `state` is almost always empty; `city` sometimes holds the prefecture (e.g. 東京都).
 // Use state if present, else city when it looks like a 都道府県, else leave region for a later pass.
 const prefecture = (state, city) => {
@@ -50,10 +65,10 @@ async function main() {
     return {
       domain: r.d, name: r.d, country: (r.country || null), platform: (r.platform || "Shopify"),
       published: true, source: SRC, discovered_at: today,
-      estimated_monthly_sales: num(r.s),
+      estimated_monthly_sales: salesNum(r.s),
       city: r.city || null, region: prefecture(r.state, r.city), geo_checked_at: (r.city || r.state) ? now : null,
       theme: r.theme || null, plan: r.plan || null, currency: r.cur || null, category: r.vert || null,
-      payments: r.pays || null, payments_source: r.pays ? SRC : null, payments_checked_at: r.pays ? now : null,
+      payments: cleanPays(r.pays, r.country), payments_source: cleanPays(r.pays, r.country) ? SRC : null, payments_checked_at: cleanPays(r.pays, r.country) ? now : null,
       store_created: created, launched_at: launchFrom(created), launched_source: launchFrom(created) ? SRC : null,
       raw: r,
     };

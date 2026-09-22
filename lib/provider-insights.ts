@@ -27,7 +27,7 @@ export async function providerSubReport(canonical: string, country?: string): Pr
   const rows = await sql<{ payments: string }[]>`
     SELECT payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry}
-      AND payments IS NOT NULL AND payments <> ''
+      AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus' -- probe-verified only
       AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))
   `.catch(() => []);
   const counts = subs.map((s) => ({ label: s.label, count: 0, pct: 0 }));
@@ -121,7 +121,10 @@ export async function providerInsights(provider: string, country?: string): Prom
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS t500
     FROM imported_stores
-    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''`;
+    -- CANONICAL: market share counts only PROBE-VERIFIED stores, never the StoreCensus vendor import
+    -- (generic US-stack data that misses local PSPs and pads the denominator). Same rule in
+    -- snapshot-providers.mjs and lib/insights.ts.
+    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'`;
   const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
 
   const verifiedBase = rows.length;
@@ -165,7 +168,7 @@ export async function providerInsights(provider: string, country?: string): Prom
   const newLast30 = mine.filter((x) => launchedWithin(x.r, 30)).length;
   const [nd] = await sql<{ n7: number }[]>`
     SELECT COUNT(*)::int n7 FROM imported_stores
-    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> ''
+    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
       AND launched_at IS NOT NULL AND launched_at >= CURRENT_DATE - 7`;
   const newStores7 = Number(nd.n7);
 
@@ -337,7 +340,7 @@ export async function providerHistory(provider: string, country = "ALL"): Promis
   const sql = db();
   const rows = await sql<{ date: Date; data: Record<string, number> }[]>`
     SELECT date, data FROM provider_snapshots
-    WHERE lower(provider) = ${provider.toLowerCase()} AND country = ${country}
+    WHERE lower(provider) = ${provider.toLowerCase()} AND country = ${country} AND platform = 'all'
     ORDER BY date ASC`.catch(() => []);
   return rows.map((r) => {
     const total = Number(r.data.total ?? 0), verifiedBase = Number(r.data.verifiedBase ?? 0);

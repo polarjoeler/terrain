@@ -16,7 +16,7 @@ export default async function SectionReportPage({
   params, searchParams,
 }: {
   params: Promise<{ section: string }>;
-  searchParams: Promise<{ country?: string; period?: string; back?: string }>;
+  searchParams: Promise<{ country?: string; period?: string; back?: string; platform?: string }>;
 }) {
   const { section } = await params;
   if (!isReportSection(section)) notFound();
@@ -32,9 +32,12 @@ export default async function SectionReportPage({
   const country = sp.country && countries.some((c) => c.country === sp.country) ? sp.country : "ZA";
   const period = (PERIODS.includes(sp.period as PeriodKey) ? sp.period : "week") as PeriodKey;
   const back = Math.max(0, Math.min(36, parseInt(sp.back ?? "0", 10) || 0)); // periods back (0 = now)
+  // Payments can be viewed combined ('all', default) or drilled into one CMS in that country.
+  const PLATFORMS = ["all", "shopify", "woocommerce", "magento"];
+  const platform = PLATFORMS.includes(sp.platform ?? "") ? (sp.platform as string) : "all";
 
-  const report = await sectionReport(section, country, period, back).catch(() => null);
+  const report = await sectionReport(section, country, period, back, platform).catch(() => null);
   if (!report) notFound();
 
-  return <ReportView report={report} country={country} countries={countries.map((c) => c.country)} />;
+  return <ReportView report={report} country={country} countries={countries.map((c) => c.country)} platform={platform} />;
 }
