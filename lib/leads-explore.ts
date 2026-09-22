@@ -52,7 +52,10 @@ export type ExploreLead = {
   instagram: string | null;
   facebook: string | null;
   tiktok: string | null;
-  discoveredAt: string | null;   // ISO date we first tracked the store — powers the recency filter
+  discoveredAt: string | null;   // ISO date WE first tracked the store — the "newly discovered" filter
+  launchedAt: string | null;     // ISO date the store actually started selling (first_product_at, else launched_at).
+                                 // Null on rows from a browse_snapshot written before this field existed —
+                                 // the UI hides the Launched filter until a refresh fills them in.
   score: number;         // 0–100 Lead Fit Score
 };
 
@@ -126,12 +129,20 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
     instagram: string | null; facebook: string | null; tiktok: string | null;
     instagram_followers: number | null; facebook_followers: number | null; discovered_at: Date | null;
     payments_checked_at: Date | null; top100: boolean; top500: boolean;
+    launched_on: Date | string | null;
   }[]>`
     SELECT domain, name, category, country, city, theme, platform,
            activity_tier, activity_score, hosting_provider, platform_version,
            payments, shipping_providers, apps,
            product_count, avg_product_price, estimated_monthly_sales, currency, plus, email,
            instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at, payments_checked_at,
+           -- Launch date: first_product_at is free text, so only trust it when it
+           -- actually starts with a date; fall back to launched_at. Identical to the
+           -- expression getHomeStats() uses, so tiles and filters can't disagree.
+           COALESCE(
+             (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+             launched_at
+           ) AS launched_on,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS top500
     FROM imported_stores
@@ -158,6 +169,7 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
       estMonthlySales: sales, plus: r.plus, top100: r.top100, top500: r.top500, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
       discoveredAt: r.discovered_at ? new Date(r.discovered_at).toISOString().slice(0, 10) : null,
+      launchedAt: r.launched_on ? new Date(r.launched_on).toISOString().slice(0, 10) : null,
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at, r.product_count ?? 0, aov ?? 0),
     };
   });
