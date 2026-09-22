@@ -122,7 +122,12 @@ export type ExploreInitial = {
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
 };
 
-export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; total?: number; initial?: ExploreInitial }) {
+export function Explorer({ leads, total, initial, showStats }: {
+  leads: ExploreLead[]; total?: number; initial?: ExploreInitial;
+  /** Render the live stat tiles above the table. The dashboard turns this on;
+   *  /admin/explore leaves it off (it has its own header). */
+  showStats?: boolean;
+}) {
   const [q, setQ] = useState(initial?.q ?? "");
   const [country, setCountry] = useState<Set<string>>(new Set(initial?.country));
   const [category, setCategory] = useState<Set<string>>(new Set(initial?.category));
@@ -228,6 +233,22 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency]);
 
+  // Stat tiles read off `filtered`, not the server — so they move the instant a
+  // facet is toggled instead of waiting on a round-trip. This is what replaced
+  // the old market dropdown, which did `window.location.href = ...` (a full page
+  // reload) to change one number.
+  //
+  // Note "Newly discovered" is discoveredAt (when WE first tracked the store),
+  // which is what every other recency control here means. The server's old
+  // "new this week" tile counted LAUNCH date, so the two aren't interchangeable
+  // — hence the different label rather than a silently different number.
+  const liveStats = useMemo(() => ({
+    shown: filtered.length,
+    fresh: filtered.filter((l) => withinDays(l.discoveredAt, 7)).length,
+    plus: filtered.filter((l) => l.plus).length,
+    email: filtered.filter((l) => l.email).length,
+  }), [filtered]);
+
   const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); };
   const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
 
@@ -308,6 +329,28 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
 
       {/* main */}
       <main className="min-w-0 flex-1 px-5 py-5">
+        {showStats && (
+          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-3xl bg-mint p-5 text-ink">
+              <div className="font-display text-4xl tabular-nums">+{liveStats.fresh.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">Newly discovered · 7d</div>
+            </div>
+            <div className="rounded-3xl bg-lilac p-5 text-ink">
+              <div className="font-display text-4xl tabular-nums">{liveStats.plus.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">Shopify Plus</div>
+            </div>
+            <div className="rounded-3xl border border-cream/15 p-5">
+              <div className="font-display text-4xl tabular-nums">{liveStats.email.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">With direct email</div>
+            </div>
+            <div className="rounded-3xl border border-cream/15 p-5">
+              <div className="font-display text-4xl tabular-nums">{liveStats.shown.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
+                {activeCount > 0 ? "Stores matching" : "Stores tracked"}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <input value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search domain or store…"
             className="w-72 rounded-full border border-cream/15 bg-transparent px-4 py-2 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50" />

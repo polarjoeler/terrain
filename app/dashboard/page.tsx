@@ -5,8 +5,7 @@ import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
 import { sampleLeads } from "@/lib/leads";
 import { summarise } from "@/lib/sheets";
-import { getHomeStats, availableCountries } from "@/lib/insights";
-import { MarketPicker } from "./market-picker";
+import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
@@ -47,10 +46,15 @@ export default async function Dashboard({
 
   const daysLeft = trialDaysLeft(subscriber);
 
-  // Market filter (default South Africa) — the tiles + table both respect it.
-  const markets = await availableCountries().catch(() => [] as { country: string; stores: number }[]);
+  // Market for the header's live-feed badge. There is no picker any more — country
+  // is a facet in the Explorer, which filters client-side with no round-trip — but
+  // digest deep-links still arrive as ?country=KE, so honour the param.
+  //
+  // This used to call availableCountries() purely to validate the param, which put
+  // another sequential query on the critical path. A shape check does the same job:
+  // the value is a bound parameter, and an unknown code just returns no rows.
   const sp = await searchParams;
-  const country = sp.country && markets.some((m) => m.country === sp.country) ? sp.country : "ZA";
+  const country = sp.country && /^[A-Za-z]{2}$/.test(sp.country) ? sp.country.toUpperCase() : "ZA";
 
   // Drill-through: insights links land here with a facet pre-applied
   // (e.g. /dashboard?payment=Paystack) — seed the Explorer's filters from them.
@@ -116,7 +120,6 @@ export default async function Dashboard({
                 Payment failed — update card
               </Link>
             )}
-            <MarketPicker countries={markets} country={country} />
             <Link
               href="/partners"
               className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
@@ -180,32 +183,6 @@ export default async function Dashboard({
           </Link>
         )}
 
-        <div className="mt-8 grid gap-4 md:grid-cols-4">
-          <div className="rounded-3xl bg-mint p-5 text-ink">
-            <div className="font-display text-4xl">+{stats.newThisWeek}</div>
-            <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">
-              New this week
-            </div>
-          </div>
-          <div className="rounded-3xl bg-lilac p-5 text-ink">
-            <div className="font-display text-4xl">{stats.plusFlagged}</div>
-            <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">
-              Shopify Plus
-            </div>
-          </div>
-          <div className="rounded-3xl border border-cream/15 p-5">
-            <div className="font-display text-4xl">{stats.withEmail}</div>
-            <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
-              With direct email
-            </div>
-          </div>
-          <div className="rounded-3xl border border-cream/15 p-5">
-            <div className="font-display text-4xl">{stats.storesTracked.toLocaleString()}</div>
-            <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
-              Stores tracked
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Browse gets a WIDER centered container than the hero — the leads table has
@@ -233,7 +210,7 @@ export default async function Dashboard({
 async function BrowseSection({ initial }: { initial?: import("@/app/admin/explore/explorer").ExploreInitial }) {
   const { leads, count } = await exploreBrowse().catch(() => ({ leads: [], count: 0 }));
   if (!leads.length) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
-  return <Explorer leads={leads} total={count} initial={initial} />;
+  return <Explorer leads={leads} total={count} initial={initial} showStats />;
 }
 
 function BrowseSkeleton() {
