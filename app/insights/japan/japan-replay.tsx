@@ -6,8 +6,24 @@ import japan from "@/lib/geo/japan.json";
 import type { JapanTimeline, PlatGroup, FeaturedStore } from "@/lib/japan-timeline";
 import { JP_REGIONS, type JpRegion } from "@/lib/japan-regions";
 import {
-  W, H, fmtMonth, decodeName, hash, pick, titleCase, pointFor, GrowthChart, OpsBox, type Shape, type Paths,
+  W, H, fmtMonth, decodeName, hash, pick, titleCase, pointFor, GrowthChart, OpsBox, type Shape, type Paths, type Lang,
 } from "@/app/insights/africa/africa-replay";
+
+const fmJa = (m: string) => { const [y, mo] = m.split("-"); return `${y}年${+mo}月`; };
+const fm = (m: string, lang: Lang) => (lang === "ja" ? fmJa(m) : fmtMonth(m));
+// UI copy for the JP/EN toggle. Region names come from REGION_JA; store names stay as-is.
+const T = {
+  en: { platform: "Platform", all: "All", tracked: "stores tracked", latest: " · latest data", replay: "↻ Replay",
+    estBadge: "Estimated regional split", justAppeared: "just appeared", payments: "Payments", shipping: "Shipping", region: "Region", theme: "theme",
+    byRegion: "By region (地方)", tip1: "tracked", tip2: "launched · this month", tipEst: "estimated regional split",
+    panelNote: "= stores that launched that month. Region is estimated for stores without a stated location",
+    estHead: "How the regions are estimated:", est: "state a location we can pin to a region. We use that sample to estimate each region’s share (Kanto/Tokyo leads, then Kansai/Osaka), then distribute the rest by those weights. Totals, launch dates and CMS are real; the region a store sits in is inferred for the unlocated majority. This becomes exact once prefecture data lands on import." },
+  ja: { platform: "プラットフォーム", all: "すべて", tracked: "店舗を追跡", latest: " · 最新データ", replay: "↻ 再生",
+    estBadge: "地域内訳は推定値", justAppeared: "登場したばかり", payments: "決済", shipping: "配送", region: "地域", theme: "テーマ",
+    byRegion: "地方別", tip1: "追跡", tip2: "開設 · 今月", tipEst: "地域内訳は推定値",
+    panelNote: "= その月に開設された店舗数。所在地の記載がない店舗の地域は推定です",
+    estHead: "地域の推定方法：", est: "のみが地域を特定できる所在地を記載しています。そのサンプルから各地域のシェアを推定し（関東・東京が最多、次いで関西・大阪）、残りをその比率で配分します。総数・開設日・CMSは実データで、大多数の未特定店舗の地域は推定です。今後、都道府県データが取り込まれれば正確になります。" },
+} as const;
 
 type JFeature = { properties: { pref: string; pref_ja: string; region: JpRegion }; geometry: unknown };
 type Sel = "all" | "shopify" | "woocommerce";
@@ -38,6 +54,8 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
   const [playing, setPlaying] = useState(true);
   const [hover, setHover] = useState<{ region: JpRegion; x: number; y: number } | null>(null);
   const [spot, setSpot] = useState<FeaturedStore | null>(null);
+  const [lang, setLang] = useState<Lang>("en");
+  const L = T[lang];
 
   // ---- geometry: prefectures, grouped by region ----
   const geo = useMemo(() => {
@@ -154,17 +172,22 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
       role="group" aria-label="Animated replay of Japanese eCommerce store launches by region">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-cream/12 bg-cream/[0.03] px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">{L.platform}</span>
           {PLATFORMS.map((p) => (
             <button key={p.key} onClick={() => { setPlatform(p.key); setSpot(null); }}
               className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition ${platform === p.key ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:text-cream"}`}>
-              <span className="h-2 w-2 rounded-full" style={{ background: p.dot }} /> {p.label}
+              <span className="h-2 w-2 rounded-full" style={{ background: p.dot }} /> {p.key === "all" ? L.all : p.label}
             </button>
           ))}
+          <div className="ml-1 flex overflow-hidden rounded-full border border-cream/15 text-xs font-semibold">
+            {(["en", "ja"] as const).map((l) => (
+              <button key={l} onClick={() => setLang(l)} className={`px-2.5 py-1 transition ${lang === l ? "bg-cream text-ink" : "text-cream/55 hover:text-cream"}`}>{l === "en" ? "EN" : "日本語"}</button>
+            ))}
+          </div>
         </div>
         <div className="text-right tabular-nums">
-          <div className="font-display text-2xl leading-none text-cream md:text-3xl">{fmtMonth(months[mi])}</div>
-          <div className="mt-1 text-xs text-cyan">{totalNow.toLocaleString()} stores tracked{atEnd ? " · latest data" : ""}</div>
+          <div className="font-display text-2xl leading-none text-cream md:text-3xl">{fm(months[mi], lang)}</div>
+          <div className="mt-1 text-xs text-cyan">{totalNow.toLocaleString()} {L.tracked}{atEnd ? L.latest : ""}</div>
         </div>
       </div>
 
@@ -179,13 +202,13 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
           <div className="h-full rounded-full bg-cyan/70" style={{ width: `${(t / (N - 1)) * 100}%` }} />
           <div className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cream shadow" style={{ left: `${(t / (N - 1)) * 100}%` }} />
         </div>
-        <button onClick={replay} className="shrink-0 rounded-full border border-cream/15 px-3 py-1.5 text-xs text-cream/60 hover:text-cream">↻ Replay</button>
+        <button onClick={replay} className="shrink-0 rounded-full border border-cream/15 px-3 py-1.5 text-xs text-cream/60 hover:text-cream">{L.replay}</button>
       </div>
 
       <div className="mt-5 grid gap-6 md:grid-cols-[1fr_18rem]">
         {/* map */}
         <div className="relative rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-4">
-          <span className="absolute left-5 top-5 z-10 rounded-full border border-lilac/30 bg-lilac/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-lilac">Estimated regional split</span>
+          <span className="absolute left-5 top-5 z-10 rounded-full border border-lilac/30 bg-lilac/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-lilac">{L.estBadge}</span>
           <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseLeave={() => setHover(null)}>
             {geo.paths.map((p) => {
               const op = shade(series.cumByRegion[p.region]?.[mi] ?? 0, series.maxRegion);
@@ -223,7 +246,7 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
 
           {spot && spotPt && (
             <div className="pointer-events-none absolute z-20 w-52 rounded-2xl border border-cream/20 bg-ink-deep/95 p-3 shadow-2xl backdrop-blur" style={cardPos(spotPt)}>
-              <div className="mb-1.5 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-cyan/80"><span className="h-1.5 w-1.5 rounded-full bg-cyan" /> just appeared</div>
+              <div className="mb-1.5 flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wider text-cyan/80"><span className="h-1.5 w-1.5 rounded-full bg-cyan" /> {L.justAppeared}</div>
               <div className="flex items-center gap-2">
                 {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
                 <img src={`https://www.google.com/s2/favicons?domain=${spot.domain}&sz=64`} alt="" width={22} height={22} referrerPolicy="no-referrer" className="rounded" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
@@ -231,12 +254,12 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
               </div>
               <div className="mt-2 flex flex-wrap gap-1 text-[10px]">
                 <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: "color-mix(in srgb, var(--color-mint) 18%, transparent)", color: "var(--color-mint)" }}>{CMS_LABEL[spot.g]}</span>
-                <span className="rounded-full bg-cream/10 px-2 py-0.5 text-cream/70">{themeOf(spot)} theme</span>
+                <span className="rounded-full bg-cream/10 px-2 py-0.5 text-cream/70">{themeOf(spot)} {L.theme}</span>
               </div>
               <div className="mt-2 space-y-1 text-[11px]">
-                <div className="flex items-center justify-between"><span className="text-cream/40">Payments</span><span className="text-cream/80">{pick(JP_PAY, hash(spot.domain))}</span></div>
-                <div className="flex items-center justify-between"><span className="text-cream/40">Shipping</span><span className="text-cream/80">{pick(JP_SHIP, hash(spot.domain) ^ 0x9e3779b9)}</span></div>
-                <div className="flex items-center justify-between"><span className="text-cream/40">Region</span><span className="text-cream/80">{spot.r} · {REGION_JA[spot.r]}</span></div>
+                <div className="flex items-center justify-between"><span className="text-cream/40">{L.payments}</span><span className="text-cream/80">{pick(JP_PAY, hash(spot.domain))}</span></div>
+                <div className="flex items-center justify-between"><span className="text-cream/40">{L.shipping}</span><span className="text-cream/80">{pick(JP_SHIP, hash(spot.domain) ^ 0x9e3779b9)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-cream/40">{L.region}</span><span className="text-cream/80">{lang === "ja" ? REGION_JA[spot.r] : `${spot.r} · ${REGION_JA[spot.r]}`}</span></div>
               </div>
             </div>
           )}
@@ -246,10 +269,10 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
             return (
               <div className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-xl border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
                 style={{ left: `${(hover.x / W) * 100}%`, top: `calc(${(hover.y / H) * 100}% - 10px)` }} role="status">
-                <div className="font-semibold text-cream">{hover.region} · {REGION_JA[hover.region]}</div>
-                <div className="mt-1 text-cyan">{cum.toLocaleString()} tracked · {fmtMonth(months[mi])}</div>
-                <div className="text-mint">+{m.toLocaleString()} launched · this month</div>
-                <div className="mt-1 text-[10px] text-cream/40">estimated regional split</div>
+                <div className="font-semibold text-cream">{lang === "ja" ? REGION_JA[hover.region] : `${hover.region} · ${REGION_JA[hover.region]}`}</div>
+                <div className="mt-1 text-cyan">{cum.toLocaleString()} {L.tip1} · {fm(months[mi], lang)}</div>
+                <div className="text-mint">+{m.toLocaleString()} {L.tip2}</div>
+                <div className="mt-1 text-[10px] text-cream/40">{L.tipEst}</div>
               </div>
             );
           })()}
@@ -258,8 +281,8 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
         {/* ranked region panel */}
         <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-4">
           <div className="mb-2 flex items-baseline justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">By region (地方)</h2>
-            <span className="text-[10px] text-cream/35">{fmtMonth(months[mi])}</span>
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">{L.byRegion}</h2>
+            <span className="text-[10px] text-cream/35">{fm(months[mi], lang)}</span>
           </div>
           <div className="relative" style={{ height: rowH * 8 }}>
             {ranked.map((r) => {
@@ -269,8 +292,8 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
                   style={{ top: idx * rowH, height: rowH - 4, transition: "top .6s cubic-bezier(.4,0,.2,1)" }}>
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="w-4 shrink-0 text-right text-[11px] text-cream/30 tabular-nums">{idx + 1}</span>
-                    <span className="truncate text-cream/85">{r.region}</span>
-                    <span className="shrink-0 text-[11px] text-cream/35">{REGION_JA[r.region]}</span>
+                    <span className="truncate text-cream/85">{lang === "ja" ? REGION_JA[r.region] : r.region}</span>
+                    {lang === "en" && <span className="shrink-0 text-[11px] text-cream/35">{REGION_JA[r.region]}</span>}
                   </span>
                   <span className="flex shrink-0 items-baseline gap-2 tabular-nums">
                     <span className="text-cream/70">{r.cum.toLocaleString()}</span>
@@ -280,19 +303,19 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
               );
             })}
           </div>
-          <p className="mt-3 text-[11px] text-cream/35"><span className="text-mint">+N</span> = stores that launched that month. Region is estimated for stores without a stated location (~{Math.round(100 - (100 * data.meta.located) / Math.max(1, data.meta.totalTracked))}% of the base) — see the note below.</p>
+          <p className="mt-3 text-[11px] text-cream/35"><span className="text-mint">+N</span> {L.panelNote}（{lang === "ja" ? "基盤の約" : "~"}{Math.round(100 - (100 * data.meta.located) / Math.max(1, data.meta.totalTracked))}%{lang === "ja" ? "）—下記の注記参照。" : " of the base) — see the note below."}</p>
         </div>
       </div>
 
       <GrowthChart shopCum={series.shopCum} wooCum={series.wooCum} months={months}
-        showShop={platform !== "woocommerce"} showWoo={platform !== "shopify"} prog={chartProg} lastRefresh={data.meta.lastRefresh} scope="Japan" scopeAdj="Japanese" />
+        showShop={platform !== "woocommerce"} showWoo={platform !== "shopify"} prog={chartProg} lastRefresh={data.meta.lastRefresh} scope="Japan" scopeAdj={lang === "ja" ? "日本" : "Japanese"} lang={lang} />
 
       {/* estimation honesty note */}
       <div className="mt-4 rounded-2xl border border-lilac/20 bg-lilac/[0.04] px-5 py-3 text-[11px] leading-relaxed text-cream/45">
-        <span className="font-semibold text-lilac">How the regions are estimated:</span> only about {data.meta.located.toLocaleString()} of {data.meta.totalTracked.toLocaleString()} tracked stores state a location we can pin to a region. We use that sample to estimate each region&apos;s share (Kanto/Tokyo leads, then Kansai/Osaka), then distribute the rest by those weights. Totals, launch dates and CMS are real; the region a store sits in is inferred for the unlocated majority. This becomes exact once prefecture data lands on import.
+        <span className="font-semibold text-lilac">{L.estHead}</span>{lang === "ja" ? "" : " "}{lang === "ja" ? `${data.meta.totalTracked.toLocaleString()} 店舗のうち約 ${data.meta.located.toLocaleString()} 店舗` : `only about ${data.meta.located.toLocaleString()} of ${data.meta.totalTracked.toLocaleString()} tracked stores`}{lang === "ja" ? "" : " "}{L.est}
       </div>
 
-      <OpsBox ops={data.ops ?? { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }} total={data.meta.totalTracked} playing={playing} />
+      <OpsBox ops={data.ops ?? { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }} total={data.meta.totalTracked} playing={playing} scope={{ en: "Japan", ja: "日本" }} lang={lang} />
 
       <style>{`@media (prefers-reduced-motion: reduce){svg animate{display:none}}`}</style>
     </div>

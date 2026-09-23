@@ -35,7 +35,7 @@ export default async function AfricaPublicMap() {
             African eCommerce, <em className="text-cyan">coming to life.</em>
           </h1>
           <p className="mt-4 max-w-2xl text-cream/60">
-            {data.meta.totalTracked.toLocaleString()} stores tracked across the continent, each pulse a real merchant appearing by its estimated launch date. Watch a decade of growth in thirty seconds — or scrub the timeline yourself.
+            {data.meta.totalTracked.toLocaleString()}{" "}stores tracked across the continent, each pulse a real merchant appearing by its estimated launch date. Watch a decade of growth in thirty seconds — or scrub the timeline yourself.
           </p>
         </header>
 
