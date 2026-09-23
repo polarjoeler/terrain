@@ -35,7 +35,7 @@ export default async function JapanOverview() {
         <header className="mt-8">
           <h1 className="font-display text-4xl md:text-5xl">Japanese eCommerce, by region</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            {data.meta.totalTracked.toLocaleString()} stores tracked across Japan&apos;s eight regions, each pulse a real merchant appearing by its estimated launch date. Watch the growth replay — or scrub the timeline. Regional split is estimated (see the note under the chart).
+            {data.meta.totalTracked.toLocaleString()}{" "}stores tracked across Japan&apos;s eight regions, each pulse a real merchant appearing by its estimated launch date. Watch the growth replay — or scrub the timeline. Regional split is estimated (see the note under the chart).
           </p>
         </header>
 

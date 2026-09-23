@@ -378,8 +378,8 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
 // Stacked CMS growth chart. Memoised and driven by a quantised `prog` so it repaints a few times a
 // second (not on every animation frame), which removes the flicker from rebuilding the band paths.
 export const GrowthChart = memo(function GrowthChart(
-  { shopCum, wooCum, months, showShop, showWoo, prog, lastRefresh, scope = "Africa", scopeAdj = "African" }:
-  { shopCum: number[]; wooCum: number[]; months: string[]; showShop: boolean; showWoo: boolean; prog: number; lastRefresh: string | null; scope?: string; scopeAdj?: string },
+  { shopCum, wooCum, months, showShop, showWoo, prog, lastRefresh, scope = "Africa", scopeAdj = "African", lang = "en" }:
+  { shopCum: number[]; wooCum: number[]; months: string[]; showShop: boolean; showWoo: boolean; prog: number; lastRefresh: string | null; scope?: string; scopeAdj?: string; lang?: Lang },
 ) {
   const N = months.length, cw = 1000, ch = 160, padB = 18;
   const top = new Array(N); for (let i = 0; i < N; i++) top[i] = (showShop ? shopCum[i] : 0) + (showWoo ? wooCum[i] : 0);
@@ -407,7 +407,7 @@ export const GrowthChart = memo(function GrowthChart(
   return (
     <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-5">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">Cumulative tracked stores by CMS · {scope}</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">{lang === "ja" ? `CMS別の累計追跡店舗数 · ${scope === "Japan" ? "日本" : scope}` : `Cumulative tracked stores by CMS · ${scope}`}</h2>
         <div className="flex items-center gap-3 text-[11px]">
           {showShop && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-mint)" }} /> Shopify</span>}
           {showWoo && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-lilac)" }} /> WooCommerce</span>}
@@ -426,11 +426,17 @@ export const GrowthChart = memo(function GrowthChart(
         <circle cx={xs(tf)} cy={ys(curVal)} r={3.5} fill="var(--color-cream)" />
         {/* honesty marker: curve starts near zero because our tracking window opens in 2015, not the market */}
         <line x1={1} y1={0} x2={1} y2={ch - padB} stroke="var(--color-cream)" strokeOpacity={0.25} strokeDasharray="2 3" />
-        <text x={5} y={13} className="fill-cream" fillOpacity={0.4} style={{ fontSize: 10 }}>◄ tracking window opens 2015</text>
+        <text x={5} y={13} className="fill-cream" fillOpacity={0.4} style={{ fontSize: 10 }}>{lang === "ja" ? "◄ 追跡開始は2015年" : "◄ tracking window opens 2015"}</text>
       </svg>
-      <p className="mt-2 text-[11px] leading-relaxed text-cream/35">
-        Stores <em>we</em> track that had launched by each month, split by platform (estimated launch date). It starts near zero in 2015 because that&apos;s where our launch-date coverage begins — <span className="text-cream/50">{scopeAdj} eCommerce predates it</span>; earlier stores exist but aren&apos;t dated reliably, so this is our tracked window opening, not the market&apos;s. A live-only view, so it reflects real growth <em>and</em> our widening coverage. Refreshed {lastRefresh ?? "recently"}.
-      </p>
+      {lang === "ja" ? (
+        <p className="mt-2 text-[11px] leading-relaxed text-cream/35">
+          各月までに開設された、当社が追跡する店舗数（推定開設日）をプラットフォーム別に集計。2015年付近でほぼゼロから始まるのは、当社の開設日データがそこから始まるためで、<span className="text-cream/50">{scopeAdj === "Japanese" ? "日本" : scopeAdj}のEコマースはそれ以前から存在します</span>。ただし信頼できる日付がないため、これは市場の始まりではなく当社の追跡開始を示します。稼働店舗のみの集計のため、実際の成長と当社カバレッジ拡大の両方を反映します。更新：{lastRefresh ?? "最近"}。
+        </p>
+      ) : (
+        <p className="mt-2 text-[11px] leading-relaxed text-cream/35">
+          Stores <em>we</em> track that had launched by each month, split by platform (estimated launch date). It starts near zero in 2015 because that&apos;s where our launch-date coverage begins — <span className="text-cream/50">{scopeAdj} eCommerce predates it</span>; earlier stores exist but aren&apos;t dated reliably, so this is our tracked window opening, not the market&apos;s. A live-only view, so it reflects real growth <em>and</em> our widening coverage. Refreshed {lastRefresh ?? "recently"}.
+        </p>
+      )}
     </div>
   );
 });
@@ -471,7 +477,12 @@ function LiveStat({ base, ratePerMin, label }: { base: number; ratePerMin: numbe
 // stores, so the "always on" story is backed by actual activity. Memoised so it doesn't re-render
 // on every animation frame of the parent replay. The feed is derived from a monotonic tick (not an
 // accumulator) so it's immune to duplicate intervals and never shows a domain twice in a row.
-export const OpsBox = memo(function OpsBox({ ops, total, playing }: { ops: AfricaTimeline["ops"]; total: number; playing: boolean }) {
+const OPS_VERBS_JA = ["チェックアウト走査", "稼働確認", "CMS検出", "決済再確認", "新規発見"];
+export type Lang = "en" | "ja";
+export const OpsBox = memo(function OpsBox(
+  { ops, total, playing, scope = { en: "Africa", ja: "Africa" }, lang = "en" }:
+  { ops: AfricaTimeline["ops"]; total: number; playing: boolean; scope?: { en: string; ja: string }; lang?: Lang },
+) {
   const n = ops.recent.length;
   const [tick, setTick] = useState(5);
   useEffect(() => {
@@ -479,24 +490,28 @@ export const OpsBox = memo(function OpsBox({ ops, total, playing }: { ops: Afric
     const id = setInterval(() => setTick((t) => t + 1), 1900);
     return () => clearInterval(id);
   }, [n, playing]);
+  const verbs = lang === "ja" ? OPS_VERBS_JA : OPS_VERBS;
   const feed = n === 0 ? [] : Array.from({ length: Math.min(6, n) }, (_, k) => {
     const i = ((tick - k) % n + n) % n;
-    return { id: tick - k, verb: OPS_VERBS[((tick - k) % OPS_VERBS.length + OPS_VERBS.length) % OPS_VERBS.length], r: ops.recent[i] };
+    return { id: tick - k, verb: verbs[((tick - k) % verbs.length + verbs.length) % verbs.length], r: ops.recent[i] };
   });
+  const L = lang === "ja"
+    ? { head: "オペレーション · 常時稼働", sub: "発見は止まらない", s1: "再スキャン · 24時間", s2: "新規発見 · 7日間", s3: "追跡中 · " + scope.ja, foot: `Terrain のクローラーによる実際の活動 — 本日 ${ops.discToday.toLocaleString()} 店舗を新規検出。フィードは直近にスキャンしたドメインを抜粋しています。` }
+    : { head: "Ops · always on", sub: "discovery never stops", s1: "stores re-scanned · 24h", s2: "new discoveries · 7d", s3: "tracked across " + scope.en, foot: `Real activity from Terrain’s crawlers — ${ops.discToday.toLocaleString()} stores first seen today. The feed samples the most recently scanned domains.` };
 
   return (
     <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-5">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-cream/50">
           <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-mint" /></span>
-          Ops · always on
+          {L.head}
         </h2>
-        <span className="text-[10px] text-cream/35">discovery never stops</span>
+        <span className="text-[10px] text-cream/35">{L.sub}</span>
       </div>
       <div className="grid grid-cols-3 gap-3">
-        <LiveStat base={ops.scanned24h} ratePerMin={ops.scanned24h / 1440} label="stores re-scanned · 24h" />
-        <LiveStat base={ops.disc7d} ratePerMin={ops.disc7d / 10080} label="new discoveries · 7d" />
-        <LiveStat base={total} ratePerMin={0} label="tracked across Africa" />
+        <LiveStat base={ops.scanned24h} ratePerMin={ops.scanned24h / 1440} label={L.s1} />
+        <LiveStat base={ops.disc7d} ratePerMin={ops.disc7d / 10080} label={L.s2} />
+        <LiveStat base={total} ratePerMin={0} label={L.s3} />
       </div>
       <div className="mt-3 space-y-1.5 font-mono text-[11px]">
         {feed.map((f, i) => (
@@ -508,7 +523,7 @@ export const OpsBox = memo(function OpsBox({ ops, total, playing }: { ops: Afric
           </div>
         ))}
       </div>
-      <p className="mt-3 text-[11px] text-cream/35">Real activity from Terrain’s crawlers — {ops.discToday.toLocaleString()} stores first seen today. The feed samples the most recently scanned domains.</p>
+      <p className="mt-3 text-[11px] text-cream/35">{L.foot}</p>
     </div>
   );
 });

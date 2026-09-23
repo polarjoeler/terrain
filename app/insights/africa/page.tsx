@@ -33,7 +33,7 @@ export default async function AfricaOverview() {
         <header className="mt-8">
           <h1 className="font-display text-4xl md:text-5xl">African eCommerce, coming to life</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            {data.meta.totalTracked.toLocaleString()} stores tracked across the continent, each pulse a real merchant appearing by its estimated launch date. Watch a decade of growth replay in half a minute — or scrub the timeline yourself.
+            {data.meta.totalTracked.toLocaleString()}{" "}stores tracked across the continent, each pulse a real merchant appearing by its estimated launch date. Watch a decade of growth replay in half a minute — or scrub the timeline yourself.
           </p>
         </header>
 
