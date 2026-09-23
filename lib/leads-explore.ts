@@ -219,10 +219,18 @@ export async function refreshBrowseSnapshot(): Promise<number> {
   const [leads, count] = await Promise.all([loadExploreLeads(20000, true), exploreLeadCount(true)]);
   const data: Browse = { leads, count };
   await ensureSnapshotTable();
-  // Pass the payload as a text param cast to jsonb — avoids sql.json()'s narrow
-  // JSONValue typing while storing identical jsonb.
-  await db()`INSERT INTO browse_snapshot (id, data, computed_at)
-             VALUES (1, ${JSON.stringify(data)}::jsonb, now())
+  // NOTE: this used to be `${JSON.stringify(data)}::jsonb`, which looked right but
+  // stored a jsonb *scalar string* instead of an object: postgres.js inferred the
+  // param as json and encoded the already-serialised text a second time. Reads then
+  // got a string back, `data.leads` was undefined, and exploreBrowse() fell through
+  // to recomputing the whole 20k-row query ON THE REQUEST PATH every single time —
+  // so the snapshot never actually served a request. Check with:
+  //   SELECT jsonb_typeof(data) FROM browse_snapshot;   -- must be 'object'
+  // sql.json() encodes exactly once; the cast is for its deliberately narrow
+  // JSONValue parameter type, not for the database.
+  const sql = db();
+  await sql`INSERT INTO browse_snapshot (id, data, computed_at)
+             VALUES (1, ${sql.json(data as never)}, now())
              ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`;
   _browse = { at: Date.now(), data };   // warm this instance too
   return leads.length;
@@ -231,8 +239,16 @@ export async function refreshBrowseSnapshot(): Promise<number> {
 async function readSnapshot(): Promise<Browse | null> {
   try {
     await ensureSnapshotTable();
-    const [row] = await db()<{ data: Browse }[]>`SELECT data FROM browse_snapshot WHERE id = 1`;
-    return row?.data ?? null;
+    const [row] = await db()<{ data: Browse | string }[]>`SELECT data FROM browse_snapshot WHERE id = 1`;
+    const raw = row?.data;
+    if (raw == null) return null;
+    // Tolerate rows written by the double-encoding bug above, so an existing
+    // snapshot starts serving immediately instead of waiting for a pipeline pass.
+    // Once every row is a real object this branch simply never runs.
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw) as Browse; } catch { return null; }
+    }
+    return raw;
   } catch {
     return null;
   }
