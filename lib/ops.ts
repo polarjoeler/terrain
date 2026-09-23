@@ -311,6 +311,33 @@ export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
   });
 }
 
+// Operational activity within an arbitrary date range — powers the /ops/coverage date-range panel.
+// Each metric counts imported_stores by the relevant timestamp column, optionally scoped to one
+// country. Definitions are literal so the panel can label them exactly:
+//  - discovered: stores first found by our discovery pipeline (CT/DNS) in the window
+//  - imported:   stores added by a bulk import (StoreCensus / StoreLeads / BuiltWith / CSV) in the window
+//  - launched:   stores whose real launch date falls in the window (actual market launches)
+//  - payments / launchDated / liveness: enrichment probes that RAN in the window
+export type RangeActivity = { discovered: number; imported: number; launched: number; payments: number; launchDated: number; liveness: number };
+const DISCOVERY_SOURCES = ["ct_tail", "woo_ct", "woo_probe_cms", "discovery", "cms_dns", "crtsh"];
+export async function rangeActivity(from: string, to: string, country?: string): Promise<RangeActivity> {
+  const sql = db();
+  const cc = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const [r] = await sql<{ discovered: number; imported: number; launched: number; payments: number; launch_dated: number; liveness: number }[]>`
+    SELECT
+      count(*) FILTER (WHERE discovered_at BETWEEN ${from} AND ${to} AND source = ANY(${DISCOVERY_SOURCES}))::int discovered,
+      count(*) FILTER (WHERE created_at::date BETWEEN ${from} AND ${to} AND (source IS NULL OR NOT (source = ANY(${DISCOVERY_SOURCES}))))::int imported,
+      count(*) FILTER (WHERE launched_at BETWEEN ${from} AND ${to})::int launched,
+      count(*) FILTER (WHERE payments_checked_at::date BETWEEN ${from} AND ${to})::int payments,
+      count(*) FILTER (WHERE catalog_checked_at::date BETWEEN ${from} AND ${to})::int launch_dated,
+      count(*) FILTER (WHERE live_checked_at::date BETWEEN ${from} AND ${to})::int liveness
+    FROM imported_stores WHERE 1=1 ${cc}`;
+  return {
+    discovered: Number(r?.discovered ?? 0), imported: Number(r?.imported ?? 0), launched: Number(r?.launched ?? 0),
+    payments: Number(r?.payments ?? 0), launchDated: Number(r?.launch_dated ?? 0), liveness: Number(r?.liveness ?? 0),
+  };
+}
+
 // Recall benchmarks — the honest "are we missing stores?" metric. Each row is a run of
 // scripts/coverage-benchmark.mjs against an external list (a paid-source export, a scraped
 // directory, the SA-100 sample…): coverage_pct = share of that list we already tracked;
