@@ -9,7 +9,11 @@ import postgres from "postgres";
 // snapshot-refresh script (Node --experimental-strip-types) doesn't hit a relative .ts import
 // that tsc then rejects. When you launch a platform, drop its values here AND flip the flag in
 // platforms.ts. NULL platform is an unconfirmed CT discovery (Shopify-first) and stays visible.
-const HIDDEN_PLATFORM_DBVALUES = ["woocommerce", "wix", "adobe_commerce", "magento"];
+// Platforms not surfaced to customers. WooCommerce was removed from this list —
+// it is now a first-class CMS filter alongside Shopify. Parked Woo installs are
+// still excluded by the activity_tier <> 'not_a_store' gate in the query below,
+// so this shows real Woo stores only.
+const HIDDEN_PLATFORM_DBVALUES = ["wix", "adobe_commerce", "magento"];
 
 // Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — kept in sync).
 // Inlined here rather than imported so the standalone snapshot-refresh script (Node
@@ -68,6 +72,69 @@ const APP_ALIAS: Record<string, string> = {
   "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
   omnisend: "Omnisend", mailchimp: "Mailchimp",
 };
+// Shipping values that are not carriers. "shopify" is Shopify's own built-in rate
+// layer — present on ~9,900 stores and meaningless as a filter — and the
+// shopify_provided_* variants are its internal rate-estimation layers.
+const SHIPPING_SKIP = new Set(["shopify", "shopify_provided_generic_layer", "shopify_provided_prediction_layer"]);
+
+// Same vendor reported under several labels; collapse to one name so the facet
+// doesn't split a carrier across rows.
+const SHIPPING_ALIAS: Record<string, string> = {
+  "tunl shipping": "TUNL", "tunl shipping rates": "TUNL",
+  "bob go rates at checkout": "Bob Go", "bobgo": "Bob Go",
+  "pargo dynamic shipping": "Pargo",
+  "dhl_express": "DHL Express", "dhl commerce": "DHL Commerce",
+  "ups_shipping": "UPS", "usps": "USPS", "fedex": "FedEx",
+  "delivery by fastway.": "Fastway", "delivery by fastway": "Fastway",
+};
+
+/** Drop Shopify's own rate layers, fold known aliases, de-duplicate. */
+function cleanShipping(raw: string | null): string | null {
+  if (!raw) return null;
+  const out: string[] = [];
+  for (const part of raw.split(";")) {
+    const v = part.trim();
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (SHIPPING_SKIP.has(k)) continue;
+    const name = SHIPPING_ALIAS[k] ?? v;
+    if (!out.some((x) => x.toLowerCase() === name.toLowerCase())) out.push(name);
+  }
+  return out.length ? out.join(";") : null;
+}
+
+/** Theme names arrive in mixed case — "dawn", "Dawn", "DAWN" are three facet rows
+ *  for one theme. Rules don't settle this (a rule that preserves all-caps keeps
+ *  "Shrine PRO" apart from "Shrine Pro"; one that title-cases everything turns
+ *  "Minimog - OS 2.0" into "Os 2.0"). So fold by frequency instead: group case
+ *  variants and adopt whichever spelling the data actually uses most. Ties break
+ *  alphabetically so the result is deterministic. */
+function canonicaliseTheme<T extends { theme: string | null }>(rows: T[]): void {
+  const variants = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const v = r.theme;
+    if (!v) continue;
+    const key = v.toLowerCase();
+    let m = variants.get(key);
+    if (!m) variants.set(key, (m = new Map()));
+    m.set(v, (m.get(v) ?? 0) + 1);
+  }
+  const winner = new Map<string, string>();
+  for (const [key, m] of variants) {
+    let best = [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    // An all-lowercase winner ("horizon") is a scraping artifact rather than a real
+    // theme name, so title-case it. Anything with deliberate inner capitals
+    // ("Minimog - OS 2.0") already reads correctly and is left alone.
+    if (best === best.toLowerCase()) {
+      best = best.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    }
+    winner.set(key, best);
+  }
+  for (const r of rows) {
+    if (r.theme) r.theme = winner.get(r.theme.toLowerCase()) ?? r.theme;
+  }
+}
+
 const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]); // app-store links, not installed apps
 function cleanApps(raw: string | null): string | null {
   if (!raw) return null;
@@ -160,16 +227,16 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
 
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const sales = toUsd(r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null, r.currency, r.country);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, r.currency, r.country);
     const social = (r.instagram_followers ?? 0) + (r.facebook_followers ?? 0);
     return {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
-      theme: r.theme, platform: r.platform,
+      theme: r.theme?.trim() || null, platform: r.platform,
       activityTier: r.activity_tier, activityScore: r.activity_score,
       hostingProvider: r.hosting_provider, platformVersion: r.platform_version,
-      payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
+      payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: cleanShipping(r.shipping_providers), apps: cleanApps(r.apps),
       productCount: r.product_count, aovUsd: aov,
       estMonthlySales: sales, plus: r.plus, top100: r.top100, top500: r.top500, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
@@ -178,6 +245,9 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at, r.product_count ?? 0, aov ?? 0),
     };
   });
+  // Needs the whole set, so it runs after the map rather than per row.
+  canonicaliseTheme(mapped);
+  return mapped;
 }
 
 /** Total live, published leads — so the UI can show the real count even when the
