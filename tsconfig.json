@@ -6,6 +6,11 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Lets lib modules import each other as "./fx.ts", so the same file works in
+    // Next AND in standalone `node --experimental-strip-types` scripts. Without it,
+    // shared constants had to be copy-pasted between lib files — which is how the
+    // FX table drifted and silently mis-converted 30% of revenue values.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
