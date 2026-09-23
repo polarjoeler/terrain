@@ -84,7 +84,12 @@ const FX: Record<string, number> = { USD: 1, ZAR: 0.054, NGN: 0.00065, KES: 0.00
 const CCY_BY_COUNTRY: Record<string, string> = { ZA: "ZAR", NG: "NGN", KE: "KES", US: "USD", GB: "GBP" };
 function toUsd(sales: number | null, currency: string | null, country: string | null): number | null {
   if (sales == null) return null;
-  const ccy = currency || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD";
+  // Currency is stored inconsistently cased — the data holds both "ZAR" and "zar",
+  // "USD" and "usd". FX is keyed uppercase, so an un-normalised "zar" missed the
+  // table and fell through `?? 1`, leaving the amount in rands but labelled USD:
+  // ~18.5x too high for ZAR, ~1538x for NGN. Those inflated rows then won the
+  // `ORDER BY estimated_monthly_sales DESC` cut and displaced real ones.
+  const ccy = (currency || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD").toUpperCase();
   return Math.round(sales * (FX[ccy] ?? 1));
 }
 
