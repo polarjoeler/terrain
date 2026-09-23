@@ -19,6 +19,17 @@ const RECENCY_OPTS: { key: RecencyKey; label: string; days: number }[] = [
   { key: "30d", label: "New this month", days: 30 },
   { key: "365d", label: "New this year", days: 365 },
 ];
+// Launch recency = when the store actually STARTED SELLING (launchedAt). This is
+// the one people mean by "new stores"; discovery above is when we first saw it.
+// Both exist because they answer different questions, and they are independent
+// single-selects — nested windows, so not multi-toggle.
+type LaunchKey = "" | "7d" | "30d" | "90d" | "365d";
+const LAUNCH_OPTS: { key: LaunchKey; label: string; days: number }[] = [
+  { key: "7d", label: "Launched this week", days: 7 },
+  { key: "30d", label: "Launched this month", days: 30 },
+  { key: "90d", label: "Launched this quarter", days: 90 },
+  { key: "365d", label: "Launched this year", days: 365 },
+];
 const withinDays = (iso: string | null, days: number) =>
   iso != null && (Date.now() - new Date(iso).getTime()) <= days * 864e5;
 
@@ -118,11 +129,17 @@ export type ExploreInitial = {
   q?: string; country?: string[]; category?: string[]; band?: string[];
   theme?: string[]; city?: string[]; payment?: string[]; shipping?: string[];
   activity?: string[];    // seed Woo activity tier (selling/active/dormant) from a deep link
-  recency?: RecencyKey;   // seed "new this week" (7d) etc. from a deep link
+  recency?: RecencyKey;   // seed "newly discovered this week" (7d) etc. from a deep link
+  launched?: LaunchKey;   // seed "launched this week" etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
 };
 
-export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; total?: number; initial?: ExploreInitial }) {
+export function Explorer({ leads, total, initial, showStats }: {
+  leads: ExploreLead[]; total?: number; initial?: ExploreInitial;
+  /** Render the live stat tiles above the table. The dashboard turns this on;
+   *  /admin/explore leaves it off (it has its own header). */
+  showStats?: boolean;
+}) {
   const [q, setQ] = useState(initial?.q ?? "");
   const [country, setCountry] = useState<Set<string>>(new Set(initial?.country));
   const [category, setCategory] = useState<Set<string>>(new Set(initial?.category));
@@ -140,6 +157,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
+  const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
   const [sort, setSort] = useState<SortKey>("score");
   const [shown, setShown] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
@@ -184,6 +202,10 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       const days = RECENCY_OPTS.find((o) => o.key === recency)?.days ?? 0;
       if (!withinDays(l.discoveredAt, days)) return false;
     }
+    if (skip !== "launched" && launched) {
+      const days = LAUNCH_OPTS.find((o) => o.key === launched)?.days ?? 0;
+      if (!withinDays(l.launchedAt, days)) return false;
+    }
     return true;
   };
 
@@ -194,7 +216,7 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, sort]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -226,18 +248,53 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched]);
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (q ? 1 : 0);
+  // Rows written into browse_snapshot before launchedAt existed carry null, which
+  // would render the whole Launched control as a column of zeroes. Hide it until a
+  // snapshot refresh fills the dates in, rather than showing a filter that can only
+  // ever return nothing.
+  const hasLaunchData = useMemo(() => leads.some((l) => l.launchedAt != null), [leads]);
+
+  // Stat tiles read off `filtered`, not the server — so they move the instant a
+  // facet is toggled instead of waiting on a round-trip. This is what replaced
+  // the old market dropdown, which did `window.location.href = ...` (a full page
+  // reload) to change one number.
+  //
+  // Note "Newly discovered" is discoveredAt (when WE first tracked the store),
+  // which is what every other recency control here means. The server's old
+  // "new this week" tile counted LAUNCH date, so the two aren't interchangeable
+  // — hence the different label rather than a silently different number.
+  const liveStats = useMemo(() => ({
+    shown: filtered.length,
+    // Launch date is the number people actually mean by "new stores"; fall back to
+    // discovery only while a pre-launchedAt snapshot is still in play. The tile's
+    // label follows whichever is being counted, so it never claims to be the other.
+    fresh: filtered.filter((l) => withinDays(hasLaunchData ? l.launchedAt : l.discoveredAt, 7)).length,
+    plus: filtered.filter((l) => l.plus).length,
+    email: filtered.filter((l) => l.email).length,
+  }), [filtered, hasLaunchData]);
+
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Counts for the recency control — computed with recency skipped so each window
   // shows its own total regardless of the current selection.
+  const launchCounts = useMemo(() => {
+    const base = leads.filter((l) => passes(l, "launched"));
+    const out = Object.fromEntries(LAUNCH_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.launchedAt, o.days)).length])) as Record<LaunchKey, number>;
+    // ~14% of stores have no launch date at all. They match no window, so without
+    // saying so the counts read as "everything else is old" rather than "unknown".
+    out[""] = base.filter((l) => l.launchedAt == null).length;
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
+
   const recencyCounts = useMemo(() => {
     const base = leads.filter((l) => passes(l, "recency"));
     return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier]);
+  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, launched]);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
@@ -274,7 +331,34 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
           </div>
         </div>
 
-        {/* Recently discovered — single-select (windows are nested). */}
+        {/* Launched — when the store started selling. Single-select (nested windows). */}
+        {hasLaunchData && (
+          <div className="mt-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Launched</div>
+            <div className="mt-2 space-y-1">
+              {LAUNCH_OPTS.map((o) => {
+                const on = launched === o.key;
+                return (
+                  <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setShown(PAGE); }}
+                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                    <span className="flex items-center gap-2">
+                      <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
+                      {o.label}
+                    </span>
+                    <span className="text-xs tabular-nums text-cream/40">{(launchCounts[o.key] ?? 0).toLocaleString()}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {launchCounts[""] > 0 && (
+              <p className="mt-1.5 px-2 text-[11px] leading-snug text-cream/35">
+                {launchCounts[""].toLocaleString()} more with no launch date on record — not in any window above.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Recently discovered — when WE first saw it. Single-select (nested windows). */}
         <div className="mt-4">
           <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
           <div className="mt-2 space-y-1">
@@ -308,6 +392,28 @@ export function Explorer({ leads, total, initial }: { leads: ExploreLead[]; tota
 
       {/* main */}
       <main className="min-w-0 flex-1 px-5 py-5">
+        {showStats && (
+          <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-3xl bg-mint p-5 text-ink">
+              <div className="font-display text-4xl tabular-nums">+{liveStats.fresh.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">{hasLaunchData ? "Launched" : "Newly discovered"} · 7d</div>
+            </div>
+            <div className="rounded-3xl bg-lilac p-5 text-ink">
+              <div className="font-display text-4xl tabular-nums">{liveStats.plus.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">Shopify Plus</div>
+            </div>
+            <div className="rounded-3xl border border-cream/15 p-5">
+              <div className="font-display text-4xl tabular-nums">{liveStats.email.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">With direct email</div>
+            </div>
+            <div className="rounded-3xl border border-cream/15 p-5">
+              <div className="font-display text-4xl tabular-nums">{liveStats.shown.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
+                {activeCount > 0 ? "Stores matching" : "Stores tracked"}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <input value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search domain or store…"
             className="w-72 rounded-full border border-cream/15 bg-transparent px-4 py-2 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50" />

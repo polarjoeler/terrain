@@ -9,7 +9,11 @@ import postgres from "postgres";
 // snapshot-refresh script (Node --experimental-strip-types) doesn't hit a relative .ts import
 // that tsc then rejects. When you launch a platform, drop its values here AND flip the flag in
 // platforms.ts. NULL platform is an unconfirmed CT discovery (Shopify-first) and stays visible.
-const HIDDEN_PLATFORM_DBVALUES = ["woocommerce", "wix", "adobe_commerce", "magento"];
+// Platforms not surfaced to customers. WooCommerce was removed from this list —
+// it is now a first-class CMS filter alongside Shopify. Parked Woo installs are
+// still excluded by the activity_tier <> 'not_a_store' gate in the query below,
+// so this shows real Woo stores only.
+const HIDDEN_PLATFORM_DBVALUES = ["wix", "adobe_commerce", "magento"];
 
 // Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — kept in sync).
 // Inlined here rather than imported so the standalone snapshot-refresh script (Node
@@ -52,7 +56,10 @@ export type ExploreLead = {
   instagram: string | null;
   facebook: string | null;
   tiktok: string | null;
-  discoveredAt: string | null;   // ISO date we first tracked the store — powers the recency filter
+  discoveredAt: string | null;   // ISO date WE first tracked the store — the "newly discovered" filter
+  launchedAt: string | null;     // ISO date the store actually started selling (first_product_at, else launched_at).
+                                 // Null on rows from a browse_snapshot written before this field existed —
+                                 // the UI hides the Launched filter until a refresh fills them in.
   score: number;         // 0–100 Lead Fit Score
 };
 
@@ -65,6 +72,69 @@ const APP_ALIAS: Record<string, string> = {
   "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
   omnisend: "Omnisend", mailchimp: "Mailchimp",
 };
+// Shipping values that are not carriers. "shopify" is Shopify's own built-in rate
+// layer — present on ~9,900 stores and meaningless as a filter — and the
+// shopify_provided_* variants are its internal rate-estimation layers.
+const SHIPPING_SKIP = new Set(["shopify", "shopify_provided_generic_layer", "shopify_provided_prediction_layer"]);
+
+// Same vendor reported under several labels; collapse to one name so the facet
+// doesn't split a carrier across rows.
+const SHIPPING_ALIAS: Record<string, string> = {
+  "tunl shipping": "TUNL", "tunl shipping rates": "TUNL",
+  "bob go rates at checkout": "Bob Go", "bobgo": "Bob Go",
+  "pargo dynamic shipping": "Pargo",
+  "dhl_express": "DHL Express", "dhl commerce": "DHL Commerce",
+  "ups_shipping": "UPS", "usps": "USPS", "fedex": "FedEx",
+  "delivery by fastway.": "Fastway", "delivery by fastway": "Fastway",
+};
+
+/** Drop Shopify's own rate layers, fold known aliases, de-duplicate. */
+function cleanShipping(raw: string | null): string | null {
+  if (!raw) return null;
+  const out: string[] = [];
+  for (const part of raw.split(";")) {
+    const v = part.trim();
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (SHIPPING_SKIP.has(k)) continue;
+    const name = SHIPPING_ALIAS[k] ?? v;
+    if (!out.some((x) => x.toLowerCase() === name.toLowerCase())) out.push(name);
+  }
+  return out.length ? out.join(";") : null;
+}
+
+/** Theme names arrive in mixed case — "dawn", "Dawn", "DAWN" are three facet rows
+ *  for one theme. Rules don't settle this (a rule that preserves all-caps keeps
+ *  "Shrine PRO" apart from "Shrine Pro"; one that title-cases everything turns
+ *  "Minimog - OS 2.0" into "Os 2.0"). So fold by frequency instead: group case
+ *  variants and adopt whichever spelling the data actually uses most. Ties break
+ *  alphabetically so the result is deterministic. */
+function canonicaliseTheme<T extends { theme: string | null }>(rows: T[]): void {
+  const variants = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const v = r.theme;
+    if (!v) continue;
+    const key = v.toLowerCase();
+    let m = variants.get(key);
+    if (!m) variants.set(key, (m = new Map()));
+    m.set(v, (m.get(v) ?? 0) + 1);
+  }
+  const winner = new Map<string, string>();
+  for (const [key, m] of variants) {
+    let best = [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    // An all-lowercase winner ("horizon") is a scraping artifact rather than a real
+    // theme name, so title-case it. Anything with deliberate inner capitals
+    // ("Minimog - OS 2.0") already reads correctly and is left alone.
+    if (best === best.toLowerCase()) {
+      best = best.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    }
+    winner.set(key, best);
+  }
+  for (const r of rows) {
+    if (r.theme) r.theme = winner.get(r.theme.toLowerCase()) ?? r.theme;
+  }
+}
+
 const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]); // app-store links, not installed apps
 function cleanApps(raw: string | null): string | null {
   if (!raw) return null;
@@ -81,7 +151,12 @@ const FX: Record<string, number> = { USD: 1, ZAR: 0.054, NGN: 0.00065, KES: 0.00
 const CCY_BY_COUNTRY: Record<string, string> = { ZA: "ZAR", NG: "NGN", KE: "KES", US: "USD", GB: "GBP" };
 function toUsd(sales: number | null, currency: string | null, country: string | null): number | null {
   if (sales == null) return null;
-  const ccy = currency || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD";
+  // Currency is stored inconsistently cased — the data holds both "ZAR" and "zar",
+  // "USD" and "usd". FX is keyed uppercase, so an un-normalised "zar" missed the
+  // table and fell through `?? 1`, leaving the amount in rands but labelled USD:
+  // ~18.5x too high for ZAR, ~1538x for NGN. Those inflated rows then won the
+  // `ORDER BY estimated_monthly_sales DESC` cut and displaced real ones.
+  const ccy = (currency || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD").toUpperCase();
   return Math.round(sales * (FX[ccy] ?? 1));
 }
 
@@ -126,12 +201,20 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
     instagram: string | null; facebook: string | null; tiktok: string | null;
     instagram_followers: number | null; facebook_followers: number | null; discovered_at: Date | null;
     payments_checked_at: Date | null; top100: boolean; top500: boolean;
+    launched_on: Date | string | null;
   }[]>`
     SELECT domain, name, category, country, city, theme, platform,
            activity_tier, activity_score, hosting_provider, platform_version,
            payments, shipping_providers, apps,
            product_count, avg_product_price, estimated_monthly_sales, currency, plus, email,
            instagram, facebook, tiktok, instagram_followers, facebook_followers, discovered_at, payments_checked_at,
+           -- Launch date: first_product_at is free text, so only trust it when it
+           -- actually starts with a date; fall back to launched_at. Identical to the
+           -- expression getHomeStats() uses, so tiles and filters can't disagree.
+           COALESCE(
+             (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+             launched_at
+           ) AS launched_on,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS top500
     FROM imported_stores
@@ -144,23 +227,27 @@ async function loadExploreLeads(limit = 20000, customerOnly = false): Promise<Ex
     ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
     LIMIT ${limit}`;
 
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const sales = toUsd(r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null, r.currency, r.country);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, r.currency, r.country);
     const social = (r.instagram_followers ?? 0) + (r.facebook_followers ?? 0);
     return {
       domain: r.domain, name: r.name, category: r.category, country: r.country, city: r.city,
-      theme: r.theme, platform: r.platform,
+      theme: r.theme?.trim() || null, platform: r.platform,
       activityTier: r.activity_tier, activityScore: r.activity_score,
       hostingProvider: r.hosting_provider, platformVersion: r.platform_version,
-      payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: r.shipping_providers, apps: cleanApps(r.apps),
+      payments: r.payments, paymentsChecked: r.payments_checked_at != null, shippingProviders: cleanShipping(r.shipping_providers), apps: cleanApps(r.apps),
       productCount: r.product_count, aovUsd: aov,
       estMonthlySales: sales, plus: r.plus, top100: r.top100, top500: r.top500, email: r.email,
       instagram: r.instagram, facebook: r.facebook, tiktok: r.tiktok,
       discoveredAt: r.discovered_at ? new Date(r.discovered_at).toISOString().slice(0, 10) : null,
+      launchedAt: r.launched_on ? new Date(r.launched_on).toISOString().slice(0, 10) : null,
       score: scoreLead(sales ?? 0, !!r.email, r.plus, social, r.discovered_at, r.product_count ?? 0, aov ?? 0),
     };
   });
+  // Needs the whole set, so it runs after the map rather than per row.
+  canonicaliseTheme(mapped);
+  return mapped;
 }
 
 /** Total live, published leads — so the UI can show the real count even when the
@@ -207,10 +294,18 @@ export async function refreshBrowseSnapshot(): Promise<number> {
   const [leads, count] = await Promise.all([loadExploreLeads(20000, true), exploreLeadCount(true)]);
   const data: Browse = { leads, count };
   await ensureSnapshotTable();
-  // Pass the payload as a text param cast to jsonb — avoids sql.json()'s narrow
-  // JSONValue typing while storing identical jsonb.
-  await db()`INSERT INTO browse_snapshot (id, data, computed_at)
-             VALUES (1, ${JSON.stringify(data)}::jsonb, now())
+  // NOTE: this used to be `${JSON.stringify(data)}::jsonb`, which looked right but
+  // stored a jsonb *scalar string* instead of an object: postgres.js inferred the
+  // param as json and encoded the already-serialised text a second time. Reads then
+  // got a string back, `data.leads` was undefined, and exploreBrowse() fell through
+  // to recomputing the whole 20k-row query ON THE REQUEST PATH every single time —
+  // so the snapshot never actually served a request. Check with:
+  //   SELECT jsonb_typeof(data) FROM browse_snapshot;   -- must be 'object'
+  // sql.json() encodes exactly once; the cast is for its deliberately narrow
+  // JSONValue parameter type, not for the database.
+  const sql = db();
+  await sql`INSERT INTO browse_snapshot (id, data, computed_at)
+             VALUES (1, ${sql.json(data as never)}, now())
              ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`;
   _browse = { at: Date.now(), data };   // warm this instance too
   return leads.length;
@@ -219,8 +314,16 @@ export async function refreshBrowseSnapshot(): Promise<number> {
 async function readSnapshot(): Promise<Browse | null> {
   try {
     await ensureSnapshotTable();
-    const [row] = await db()<{ data: Browse }[]>`SELECT data FROM browse_snapshot WHERE id = 1`;
-    return row?.data ?? null;
+    const [row] = await db()<{ data: Browse | string }[]>`SELECT data FROM browse_snapshot WHERE id = 1`;
+    const raw = row?.data;
+    if (raw == null) return null;
+    // Tolerate rows written by the double-encoding bug above, so an existing
+    // snapshot starts serving immediately instead of waiting for a pipeline pass.
+    // Once every row is a real object this branch simply never runs.
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw) as Browse; } catch { return null; }
+    }
+    return raw;
   } catch {
     return null;
   }
