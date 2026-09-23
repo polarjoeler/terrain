@@ -50,7 +50,7 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
       const d = gp(f as never); if (!d) continue;
       const c = gp.centroid(f as never); const b = gp.bounds(f as never); const { pref, region } = f.properties;
       paths.push({ iso2: pref, name: pref, region, d, cx: c[0], cy: c[1] });
-      shape.set(pref, { path: new Path2D(d), bb: [b[0][0], b[0][1], b[1][0], b[1][1]] });
+      if (typeof Path2D !== "undefined") shape.set(pref, { path: new Path2D(d), bb: [b[0][0], b[0][1], b[1][0], b[1][1]] });
       (regionPrefs[region] ??= []).push(pref);
       const a = acc[region] ??= [0, 0, 0]; a[0] += c[0]; a[1] += c[1]; a[2]++;
     }
