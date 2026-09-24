@@ -9,6 +9,10 @@ import {
   W, H, fmtMonth, decodeName, hash, pick, titleCase, pointFor, GrowthChart, OpsBox, type Shape, type Paths, type Lang,
 } from "@/app/insights/africa/africa-replay";
 
+// Re-export so the Japan homepage and page can pull Lang from this module (its canonical source is
+// africa-replay, but consumers here treat japan-replay as the Japan surface).
+export type { Lang };
+
 const fmJa = (m: string) => { const [y, mo] = m.split("-"); return `${y}年${+mo}月`; };
 const fm = (m: string, lang: Lang) => (lang === "ja" ? fmJa(m) : fmtMonth(m));
 // UI copy for the JP/EN toggle. Region names come from REGION_JA; store names stay as-is.
@@ -43,7 +47,7 @@ const themeOf = (f: FeaturedStore) => f.theme ? titleCase(f.theme) : pick(SHOP_T
 
 function shade(v: number, max: number): number { return v <= 0 ? 0 : 0.1 + 0.85 * Math.sqrt(v / max); }
 
-export function JapanReplay({ data }: { data: JapanTimeline }) {
+export function JapanReplay({ data, lang: langProp }: { data: JapanTimeline; lang?: Lang }) {
   const router = useRouter();
   const { months } = data;
   const N = months.length;
@@ -54,7 +58,11 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
   const [playing, setPlaying] = useState(true);
   const [hover, setHover] = useState<{ region: JpRegion; x: number; y: number } | null>(null);
   const [spot, setSpot] = useState<FeaturedStore | null>(null);
-  const [lang, setLang] = useState<Lang>("en");
+  // Language can be driven by a parent (the Japan homepage's single JP/EN toggle) or, when used
+  // standalone (/insights/japan), by the map's own toggle below.
+  const controlled = langProp !== undefined;
+  const [langState, setLang] = useState<Lang>("en");
+  const lang = controlled ? (langProp as Lang) : langState;
   const L = T[lang];
 
   // ---- geometry: prefectures, grouped by region ----
@@ -179,11 +187,13 @@ export function JapanReplay({ data }: { data: JapanTimeline }) {
               <span className="h-2 w-2 rounded-full" style={{ background: p.dot }} /> {p.key === "all" ? L.all : p.label}
             </button>
           ))}
-          <div className="ml-1 flex overflow-hidden rounded-full border border-cream/15 text-xs font-semibold">
-            {(["en", "ja"] as const).map((l) => (
-              <button key={l} onClick={() => setLang(l)} className={`px-2.5 py-1 transition ${lang === l ? "bg-cream text-ink" : "text-cream/55 hover:text-cream"}`}>{l === "en" ? "EN" : "日本語"}</button>
-            ))}
-          </div>
+          {!controlled && (
+            <div className="ml-1 flex overflow-hidden rounded-full border border-cream/15 text-xs font-semibold">
+              {(["en", "ja"] as const).map((l) => (
+                <button key={l} onClick={() => setLang(l)} className={`px-2.5 py-1 transition ${lang === l ? "bg-cream text-ink" : "text-cream/55 hover:text-cream"}`}>{l === "en" ? "EN" : "日本語"}</button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="text-right tabular-nums">
           <div className="font-display text-2xl leading-none text-cream md:text-3xl">{fm(months[mi], lang)}</div>
