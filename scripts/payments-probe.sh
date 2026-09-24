@@ -54,7 +54,14 @@ node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 --country "$MA
   || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
-  ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
+  # Rotate the 100-IP Webshare pool (one IP per store). WITHOUT this the whole
+  # hourly run — 1,500 stores at concurrency 10 — goes out from the single
+  # residential IP, gets throttled by Shopify's edge, and the run collapses:
+  # daily payment-check counts swing between ~7,000 and 0. browser-probe.sh has
+  # always set this; the two HTTP probes never did, so the rotator we pay for
+  # was wired into the lowest-volume job only.
+  ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
+      "$PROBE_PY" checkout_probe.py \
       --from-file "$HOME/storepulse/feed/payment-queue.txt" --limit 1500 --concurrency 10 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed (continuing)"

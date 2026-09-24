@@ -91,7 +91,14 @@ async function main() {
       filled++;
       for (const g of gws) tally.set(g, (tally.get(g) ?? 0) + 1);
       if (COMMIT) {
-        await sql`UPDATE imported_stores SET payments = ${gws.join(";")}, payments_source = 'woo_plugin'
+        // Stamp payments_checked_at. Without it the Woo path filled `payments` but
+        // left the staleness column NULL — so 12,140 ZA Woo stores read as 26%
+        // payment coverage but 0% "checked", and nothing downstream could tell
+        // WHEN we last looked. Payment-switch detection needs that baseline: with
+        // no timestamp there is no "since", so a Woo store changing gateway is
+        // undetectable. Still guarded to first-fill only, so this adds no write volume.
+        await sql`UPDATE imported_stores SET payments = ${gws.join(";")}, payments_source = 'woo_plugin',
+                  payments_checked_at = now()
                   WHERE domain = ${r.domain} AND (payments IS NULL OR payments = '')`;
         updated++;
         if (updated % 50 === 0) process.stdout.write(`\r  wrote ${updated}…`);
