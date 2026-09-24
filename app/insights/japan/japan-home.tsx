@@ -29,7 +29,7 @@ type Copy = {
   products: Record<string, { audience: string; line: string; explore: string }>;
   whoEyebrow: string; whoH2: string;
   segments: [string, string, string][];
-  nlEyebrow: string; nlH2: string; nlSub: string; nlPlaceholder: string; nlButton: string; nlDone: string; nlMock: string;
+  nlEyebrow: string; nlH2: string; nlSub: string; nlPlaceholder: string; nlButton: string; nlLoading: string; nlDone: string; nlError: string;
   footer: string;
 };
 
@@ -63,9 +63,9 @@ const COPY: Record<Lang, Copy> = {
     nlEyebrow: "Coming soon",
     nlH2: "Get the Japanese commerce briefing.",
     nlSub: "New stores, provider switches, and market moves across Japan's eight regions — a short weekly read.",
-    nlPlaceholder: "you@company.com", nlButton: "Join",
+    nlPlaceholder: "you@company.com", nlButton: "Join", nlLoading: "Adding you…",
     nlDone: "Thanks — you're on the early list ✦",
-    nlMock: "Mock-up — the form isn't connected to a mailing list yet.",
+    nlError: "Couldn’t sign you up — please try again.",
     footer: "Japan · a Tembo Commerce product",
   },
   ja: {
@@ -97,9 +97,9 @@ const COPY: Record<Lang, Copy> = {
     nlEyebrow: "近日公開",
     nlH2: "日本コマースのブリーフィングを受け取る。",
     nlSub: "新規ストア、プロバイダーの乗り換え、8地域の市場動向を、毎週手短に。",
-    nlPlaceholder: "you@company.com", nlButton: "登録",
+    nlPlaceholder: "you@company.com", nlButton: "登録", nlLoading: "登録中…",
     nlDone: "ありがとうございます — 先行リストに登録されました ✦",
-    nlMock: "モックアップ — フォームはまだメーリングリストに接続されていません。",
+    nlError: "登録できませんでした — もう一度お試しください。",
     footer: "日本 · Tembo Commerce プロダクト",
   },
 };
@@ -107,9 +107,23 @@ const COPY: Record<Lang, Copy> = {
 export function JapanHome({ data, initialLang = "en" }: { data: JapanTimeline; initialLang?: Lang }) {
   const [lang, setLang] = useState<Lang>(initialLang);
   const [email, setEmail] = useState("");
-  const [done, setDone] = useState(false);
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const L = COPY[lang];
   const ready = data.months.length > 0;
+
+  async function submitEmail(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email || state === "loading") return;
+    setState("loading");
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, region: "japan" }),
+      });
+      if (!res.ok) throw new Error();
+      setState("done"); setEmail("");
+    } catch { setState("error"); }
+  }
 
   return (
     <main className="pt-4">
@@ -198,13 +212,15 @@ export function JapanHome({ data, initialLang = "en" }: { data: JapanTimeline; i
           <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">{L.nlEyebrow}</span>
           <h2 className="mt-3 font-display text-4xl tracking-tight md:text-5xl">{L.nlH2}</h2>
           <p className="mx-auto mt-4 max-w-xl text-cream/60">{L.nlSub}</p>
-          <form onSubmit={(e) => { e.preventDefault(); if (email.trim()) setDone(true); }} className="mx-auto mt-8 flex max-w-md flex-wrap justify-center gap-3">
-            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder={L.nlPlaceholder}
-              className="min-w-[220px] flex-1 rounded-full border border-cream/15 bg-ink-deep/50 px-5 py-3.5 text-cream outline-none focus:border-cyan" />
-            <button type="submit" className="rounded-full bg-cyan px-6 py-3.5 font-medium text-cyan-deep transition hover:brightness-110">{L.nlButton}</button>
+          <form onSubmit={submitEmail} className="mx-auto mt-8 flex max-w-md flex-wrap justify-center gap-3">
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder={L.nlPlaceholder} disabled={state === "done"}
+              className="min-w-[220px] flex-1 rounded-full border border-cream/15 bg-ink-deep/50 px-5 py-3.5 text-cream outline-none focus:border-cyan disabled:opacity-60" />
+            <button type="submit" disabled={state === "loading" || state === "done"} className="rounded-full bg-cyan px-6 py-3.5 font-medium text-cyan-deep transition hover:brightness-110 disabled:opacity-60">{state === "loading" ? L.nlLoading : L.nlButton}</button>
           </form>
-          <div className="mt-4 min-h-[20px] text-sm text-mint">{done ? L.nlDone : ""}</div>
-          <p className="mt-1 text-[11px] text-cream/35">{L.nlMock}</p>
+          <div className="mt-4 min-h-[20px] text-sm">
+            {state === "done" && <span className="text-mint">{L.nlDone}</span>}
+            {state === "error" && <span className="text-orange">{L.nlError}</span>}
+          </div>
         </div>
       </section>
 
