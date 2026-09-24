@@ -14,6 +14,19 @@ cd "$HOME/storepulse" || exit 1
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
+# Cache guard (2026-09-24 incident): checkout_cache.json is read whole into one string. Past ~512MB
+# it exceeds the max string size and EVERY run dies "Cannot create a string longer than 0x1fffffe8"
+# → "No un-probed stores" and silent zero throughput. Rotate it well before that. The DB is the
+# source of truth (payment-queue picks by payments_checked_at IS NULL), so a fresh cache is harmless.
+CACHE="$HOME/shopify-radar/checkout_cache.json"
+if [ -f "$CACHE" ]; then
+  sz=$(stat -f %z "$CACHE" 2>/dev/null || echo 0)
+  if [ "$sz" -gt 419430400 ]; then
+    mv "$CACHE" "$CACHE.rotated-$(date +%Y%m%d%H%M)" 2>/dev/null
+    echo "[$(date '+%F %T')] rotated checkout_cache.json (${sz}B > 400MB) — avoids the 512MB read crash."
+  fi
+fi
+
 LOCK="$HOME/shopify-radar/.probe.lock"
 
 # Clear a stale lock (a probe that died holding it) — older than 90 min is dead.

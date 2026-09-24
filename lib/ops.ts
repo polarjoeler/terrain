@@ -35,7 +35,19 @@ export type OpsStatus = {
   // separate from the market estimate so a backlog-detection wave never reads as a market crash.
   rawOps: { discovered: number; checked: number; foundDead: number; foundMigrated: number; paymentsProbed: number };
   machines: Heartbeat[];
+  // Active health-check alerts (from scripts/health-check.mjs, hourly) — a probe running but
+  // producing nothing, an oversized cache, etc. Empty = healthy.
+  alerts: { check: string; detail: string }[];
 };
+
+// Read the latest health-check verdicts that are currently in an alert state.
+export async function healthAlerts(): Promise<{ check: string; detail: string }[]> {
+  const rows = await db()<{ task: string; note: string }[]>`
+    SELECT task, note FROM agent_heartbeat
+    WHERE machine = 'health-check' AND note LIKE '⚠%' AND last_run > now() - interval '3 hours'
+    ORDER BY task`.catch(() => []);
+  return rows.map((r) => ({ check: r.task, detail: r.note.replace(/^⚠ ALERT · /, "") }));
+}
 
 const mins = (d: Date | null): number | null => (d ? Math.round((Date.now() - new Date(d).getTime()) / 60000) : null);
 
@@ -242,6 +254,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
       beat("Discovery · VPS → landing", h.vps_disc, 360, "CT-log landings (4h cadence)"),
       beat("Lucy · launch dates", h.lucy_launch, 180, "fresh-IP launch enrichment"),
     ],
+    alerts: await healthAlerts().catch(() => []),
   };
 }
 
