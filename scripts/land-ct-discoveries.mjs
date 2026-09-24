@@ -48,8 +48,11 @@ async function main() {
       const at = (r.seen_at || "").slice(0, 10) || today();
       // Prefer the recorded country; else derive from the ccTLD; else null (generic TLD).
       const country = (r.country ? String(r.country).toUpperCase() : null) || countryFromDomain(d);
+      // TLS cert issuance date (ISO YYYY-MM-DD) captured by the CT tailer; may be absent/null.
+      // NOT a launch date — a cert renewal has a fresh notBefore, so it never touches launched_at.
+      const certNotBefore = r.cert_not_before ? String(r.cert_not_before).slice(0, 10) : null;
       const prev = seen.get(d);
-      if (!prev || at < prev.at) seen.set(d, { at, country });
+      if (!prev || at < prev.at) seen.set(d, { at, country, certNotBefore });
     } catch {
       /* skip malformed line */
     }
@@ -61,12 +64,14 @@ async function main() {
 
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
   try {
+    // Nullable cert-issuance date column (metadata-only, idempotent — safe to run every time).
+    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_not_before date`;
     const existing = new Set(
       (await sql`SELECT domain FROM imported_stores WHERE domain = ANY(${[...seen.keys()]})`).map((r) => r.domain),
     );
     const fresh = [...seen.keys()].filter((d) => !existing.has(d));
 
-    const records = [...seen.entries()].map(([domain, { at, country }]) => ({
+    const records = [...seen.entries()].map(([domain, { at, country, certNotBefore }]) => ({
       domain,
       name: domain,
       country,
@@ -77,17 +82,20 @@ async function main() {
       // landing. Stamping it here means fresh leads are classified the instant they land — no
       // waiting on a probe — so insights counts + the "new this week" tile are honest immediately.
       platform: "Shopify",
+      // TLS cert issuance date (nullable). Freshness signal only — deliberately NOT launched_at.
+      cert_not_before: certNotBefore,
     }));
-    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform"];
+    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before"];
     for (let i = 0; i < records.length; i += 400) {
       const batch = records.slice(i, i + 400);
-      // Insert new; for existing, only backfill discovered_at + platform-if-unset (never touch
-      // source / published / an already-classified platform — those belong to the record we have).
+      // Insert new; for existing, only backfill discovered_at + platform-if-unset + cert_not_before-if-unset
+      // (never touch source / published / an already-classified platform / launched_at — those stay put).
       await sql`
         INSERT INTO imported_stores ${sql(batch, ...cols)}
         ON CONFLICT (domain) DO UPDATE SET
-          discovered_at = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
-          platform      = COALESCE(imported_stores.platform, EXCLUDED.platform)`;
+          discovered_at   = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
+          platform        = COALESCE(imported_stores.platform, EXCLUDED.platform),
+          cert_not_before = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before)`;
     }
 
     const overlap = seen.size - fresh.length;
