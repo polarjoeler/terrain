@@ -53,7 +53,7 @@ export default async function OpsPage() {
   const [s, beats] = await Promise.all([opsStatus().catch(() => null), agentHeartbeats().catch(() => [])]);
   if (!s) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load status.</main>;
 
-  const allOk = s.machines.every((m) => m.ok);
+  const allOk = s.machines.every((m) => m.ok) && s.alerts.length === 0;
 
   // Group worker heartbeats by machine so /ops shows who actually ran what, most-recent first.
   const byMachine = new Map<string, typeof beats>();
@@ -78,6 +78,19 @@ export default async function OpsPage() {
           <p className="text-xs text-cream/35">Live · refreshes every 60s · {new Date(s.at).toLocaleTimeString()}</p>
           <Link href="/ops/coverage" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-medium text-cyan hover:bg-cyan/20">📊 Coverage by country</Link>
         </div>
+
+        {/* Health-check alerts — silent-failure catcher (a probe running but producing nothing). */}
+        {s.alerts.length > 0 && (
+          <section className="mt-5 rounded-3xl border border-orange/40 bg-orange/10 p-4">
+            <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-orange">⚠ Health alerts · {s.alerts.length}</h2>
+            {s.alerts.map((a) => (
+              <div key={a.check} className="flex items-baseline justify-between gap-3 border-b border-orange/15 py-1.5 text-sm last:border-0">
+                <span className="font-medium text-cream/90">{a.check}</span>
+                <span className="text-right text-[12px] text-orange">{a.detail}</span>
+              </div>
+            ))}
+          </section>
+        )}
 
         {/* Machine heartbeats — the "is everything running" glance */}
         <section className="mt-5 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">
