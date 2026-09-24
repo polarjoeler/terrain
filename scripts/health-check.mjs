@@ -20,14 +20,20 @@ const add = (name, ok, detail) => checks.push({ name, ok, detail });
 //    timestamp column recently; if not, it's stalled even if the job "ran".
 const [t] = await sql`SELECT
   max(payments_checked_at) pay, max(woo_checkout_at) woo, max(live_checked_at) live,
-  max(catalog_checked_at) cat, max(discovered_at) disc FROM imported_stores`;
+  max(catalog_checked_at) cat, max(created_at) ins FROM imported_stores`;
 const rule = (name, ageMin, limitMin) => add(name, ageMin != null && ageMin <= limitMin,
   ageMin == null ? "never" : `last write ${ageMin < 60 ? ageMin + "m" : Math.round(ageMin / 60) + "h"} ago (limit ${Math.round(limitMin / 60)}h)`);
 rule("payments-probe", mins(t.pay), 150);      // hourly job → stale past ~2.5h
 rule("woo-checkout", mins(t.woo), 200);        // 2-hourly → stale past ~3.3h
 rule("catalog/launch", mins(t.cat), 60 * 26);  // slower cadence
 add("liveness", mins(t.live) != null && mins(t.live) <= 60 * 30, mins(t.live) == null ? "never" : `last check ${Math.round(mins(t.live) / 60)}h ago`);
-add("discovery", mins(t.disc) != null && mins(t.disc) <= 60 * 24, mins(t.disc) == null ? "never" : `last ${Math.round(mins(t.disc) / 60)}h ago`);
+// Discovery health = are NEW rows actually landing? Use created_at, a real insert timestamp.
+// NOT discovered_at — that's a DATE (day granularity), so max(discovered_at) always reads 0-24h
+// old regardless of whether anything is landing, and never signals a real stall (an earlier
+// version of this check used it and was useless). Inserts run continuously (hundreds/hour), so
+// 6h with no new row is a genuine landing stall.
+add("discovery", mins(t.ins) != null && mins(t.ins) <= 60 * 6,
+  mins(t.ins) == null ? "never" : `last store landed ${mins(t.ins) < 60 ? mins(t.ins) + "m" : Math.round(mins(t.ins) / 60) + "h"} ago`);
 
 // 2. Known failure modes — oversized caches read whole into one string (the 512MB crash).
 for (const p of ["shopify-radar/checkout_cache.json"]) {
