@@ -9,7 +9,7 @@
  */
 import postgres from "postgres";
 import { statSync } from "fs";
-import { homedir } from "os";
+import { homedir, hostname } from "os";
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3 });
 const mins = (d) => (d == null ? null : Math.round((Date.now() - new Date(d).getTime()) / 60000));
@@ -51,5 +51,67 @@ console.log(`health-check ${new Date().toISOString()}`);
 for (const c of checks) console.log(`  ${c.ok ? "✓" : "✗"} ${c.name.padEnd(18)} ${c.detail}`);
 if (bad.length) console.log(`\n⚠ UNHEALTHY (${bad.length}): ${bad.map((c) => c.name).join(", ")}`);
 else console.log("\n✅ all healthy");
+
+// ── Proactive alerting ──────────────────────────────────────────────────────────────────────
+// Email the owner the moment state goes unhealthy (and once when it recovers), so a silent stall
+// doesn't wait for someone to open /ops. Cooldown state lives in agent_heartbeat task='__alert':
+//   note     = signature of what we last alerted on ("clear" once recovered)
+//   last_run = when we last actually sent an email  → drives the re-alert cooldown
+// We only write that row when we send, so last_run is a true "last email" clock.
+const ALERT_TO = process.env.ALERT_EMAIL;                 // set in .env.local (gitignored)
+const RESEND_KEY = process.env.RESEND_API_KEY;
+const FROM = process.env.EMAIL_FROM ?? "Terrain <onboarding@resend.dev>";
+const COOLDOWN_H = 6;                                      // re-nag on the same problem at most this often
+const sig = bad.length ? bad.map((c) => c.name).sort().join(",") : "clear";
+
+const [prev] = await sql`SELECT note, last_run FROM agent_heartbeat WHERE machine='health-check' AND task='__alert'`.catch(() => [null]);
+const prevSig = prev?.note ?? "clear";
+const prevAgeH = prev?.last_run ? (Date.now() - new Date(prev.last_run).getTime()) / 3.6e6 : Infinity;
+
+let fire = null; // "alert" | "recovered"
+if (bad.length) {
+  if (sig !== prevSig || prevAgeH >= COOLDOWN_H) fire = "alert"; // new/changed problem, or persisted past cooldown
+} else if (prevSig !== "clear") {
+  fire = "recovered";
+}
+
+async function sendResend(subject, text) {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: FROM, to: [ALERT_TO], subject, text }),
+  });
+  if (!res.ok) throw new Error(`resend ${res.status}: ${await res.text()}`);
+}
+
+if (fire && ALERT_TO && RESEND_KEY) {
+  const host = hostname();
+  const subject = fire === "recovered"
+    ? "✅ Terrain health recovered"
+    : `⚠ Terrain health: ${bad.length} check${bad.length > 1 ? "s" : ""} failing`;
+  const lines = fire === "recovered"
+    ? [`All ${checks.length} health checks are green again.`, "", ...checks.map((c) => `  ✓ ${c.name} — ${c.detail}`)]
+    : [
+        `${bad.length} of ${checks.length} health checks are failing on ${host}:`,
+        "",
+        ...bad.map((c) => `  ✗ ${c.name} — ${c.detail}`),
+        "",
+        "Passing:",
+        ...checks.filter((c) => c.ok).map((c) => `  ✓ ${c.name} — ${c.detail}`),
+      ];
+  const text = [...lines, "", `— health-check · ${new Date().toISOString()}`, "See https://heyterrain.com/ops for live status."].join("\n");
+  try {
+    await sendResend(subject, text);
+    await sql`INSERT INTO agent_heartbeat (machine, task, last_run, note)
+      VALUES ('health-check', '__alert', now(), ${fire === "recovered" ? "clear" : sig})
+      ON CONFLICT (machine, task) DO UPDATE SET last_run = now(), note = EXCLUDED.note`.catch(() => {});
+    console.log(`\n📧 alert email sent to ${ALERT_TO} (${fire})`);
+  } catch (e) {
+    console.error(`\n!! alert email failed: ${e.message}`);
+  }
+} else if (fire && !ALERT_TO) {
+  console.log(`\n(alert suppressed — set ALERT_EMAIL in .env.local to enable email alerts)`);
+}
+
 await sql.end();
 process.exit(bad.length ? 1 : 0);
