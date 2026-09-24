@@ -425,3 +425,107 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
     rows: list,
   };
 }
+
+// ── Imports progress ─────────────────────────────────────────────────────────────────────────
+// When a big chunk is imported, rows land with a `source` tag and a fresh created_at. This tracks
+// each recent import batch's enrichment progress on the three long-running passes: Scan (liveness),
+// Payments (Shopify checkout probe OR Woo checkout probe), and Launch date. Scoped to a recent
+// window so it rides the created_at index (idx_is_created) and stays fast on a 427k-row table.
+// Rendered on-demand from /ops (an API route), never on the auto-refresh, so it can't slow the page.
+export type ImportBatch = {
+  source: string;
+  total: number;
+  published: number;
+  scanned: number; scanPct: number;   // live_checked_at IS NOT NULL
+  paid: number; payPct: number;        // payments_checked_at OR woo_checkout_at IS NOT NULL
+  launched: number; launchPct: number; // launched_at IS NOT NULL
+  firstAdd: string; lastAdd: string;
+};
+
+export type ImportsReport = { computedAt: string; days: number; batches: ImportBatch[] };
+
+// The GROUP BY scans most of the table (recent imports dominate the 427k rows), so it's ~15-25s.
+// That's fine for an on-demand report, but we cache it (below) so repeat views are instant.
+async function computeImports(days: number): Promise<ImportsReport> {
+  const sql = db();
+  const d = Math.max(1, Math.min(365, Math.round(days)));
+  const rows = await sql<{
+    source: string | null; total: number; published: number; scanned: number; paid: number;
+    launched: number; first_add: string; last_add: string;
+  }[]>`
+    SELECT source,
+      count(*)::int total,
+      count(*) FILTER (WHERE published)::int published,
+      count(*) FILTER (WHERE live_checked_at IS NOT NULL)::int scanned,
+      count(*) FILTER (WHERE payments_checked_at IS NOT NULL OR woo_checkout_at IS NOT NULL)::int paid,
+      count(*) FILTER (WHERE launched_at IS NOT NULL)::int launched,
+      min(created_at) first_add, max(created_at) last_add
+    FROM imported_stores
+    WHERE created_at > now() - make_interval(days => ${d})
+    GROUP BY source
+    ORDER BY max(created_at) DESC, count(*) DESC
+    LIMIT 40`;
+  const pct = (a: number, b: number) => (b > 0 ? Math.round((100 * a) / b) : 0);
+  return {
+    computedAt: new Date().toISOString(),
+    days: d,
+    batches: rows.map((r) => ({
+      source: r.source ?? "(untagged)",
+      total: r.total, published: r.published,
+      scanned: r.scanned, scanPct: pct(r.scanned, r.total),
+      paid: r.paid, payPct: pct(r.paid, r.total),
+      launched: r.launched, launchPct: pct(r.launched, r.total),
+      firstAdd: new Date(r.first_add).toISOString(), lastAdd: new Date(r.last_add).toISOString(),
+    })),
+  };
+}
+
+// Cached 30 min in agg_cache (DB-backed → survives serverless), since import enrichment fills over
+// hours, not seconds. Pass fresh=true to force a recompute. Called on-demand from /ops only — never
+// on the auto-refresh — so the heavy scan can't slow the dashboard.
+export function importsProgress(days = 30, fresh = false): Promise<ImportsReport> {
+  const d = Math.max(1, Math.min(365, Math.round(days)));
+  return cachedAgg(`ops:imports:${d}d`, fresh ? 0 : 30 * 60 * 1000, () => computeImports(d));
+}
+
+// ── Project priority cue ─────────────────────────────────────────────────────────────────────
+// A single adjustable knob for "what matters most right now", persisted in app_settings. Pipeline
+// workers can read it (getOpsPriority) to bias what they pick up: enrich a fresh import, hold the
+// day-to-day balance, or push one country to completeness. Reading it is one PK lookup — cheap
+// enough to render inline on every /ops refresh.
+export type OpsPriorityMode = "balanced" | "import" | "country";
+export type OpsPriority = {
+  mode: OpsPriorityMode;
+  country: string | null;  // ISO-2, set only when mode === "country"
+  note: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+const PRIORITY_KEY = "ops.priority";
+const DEFAULT_PRIORITY: OpsPriority = { mode: "balanced", country: null, note: "", updatedAt: null, updatedBy: null };
+
+export async function getOpsPriority(): Promise<OpsPriority> {
+  const sql = db();
+  const [row] = await sql<{ value: string }[]>`SELECT value FROM app_settings WHERE key = ${PRIORITY_KEY}`;
+  if (!row) return DEFAULT_PRIORITY;
+  try { return { ...DEFAULT_PRIORITY, ...JSON.parse(row.value) }; } catch { return DEFAULT_PRIORITY; }
+}
+
+export async function setOpsPriority(
+  input: { mode: OpsPriorityMode; country?: string | null; note?: string },
+  by: string | null,
+): Promise<OpsPriority> {
+  const sql = db();
+  const mode: OpsPriorityMode = ["balanced", "import", "country"].includes(input.mode) ? input.mode : "balanced";
+  const country = mode === "country" ? (input.country ?? "").trim().toUpperCase().slice(0, 2) || null : null;
+  const value: OpsPriority = {
+    mode, country,
+    note: (input.note ?? "").trim().slice(0, 280),
+    updatedAt: new Date().toISOString(),
+    updatedBy: by,
+  };
+  await sql`INSERT INTO app_settings (key, value, updated_at)
+    VALUES (${PRIORITY_KEY}, ${JSON.stringify(value)}, now())
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+  return value;
+}
