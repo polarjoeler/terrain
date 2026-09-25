@@ -90,17 +90,22 @@ async function watchRun(sql) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 6 });
 
-  // Honour the ops priority cue: a "country completeness" priority scopes probing to that one
-  // country (drains it to 100% before spreading budget back out), overriding any --country passed.
-  // This is what wires the /ops Project-priority control to the actual payments probe.
-  try {
-    const [pr] = await sql`SELECT value FROM app_settings WHERE key = 'ops.priority'`;
-    const p = pr ? JSON.parse(pr.value) : null;
-    if (p && p.mode === "country" && p.country) {
-      CLIST = [String(p.country).toUpperCase()];
-      console.log(`priority cue: country-completeness ${CLIST[0]} → scoping payment queue to ${CLIST[0]} only`);
-    }
-  } catch { /* app_settings missing / bad json → fall back to --country */ }
+  // Honour the ops priority cue: a "country completeness" priority makes that country LEAD the
+  // queue (drains toward 100% first) WITHOUT excluding the other focus markets — it takes up to
+  // ~75% of each run's initial-probe slots and the rest (KE/NG/JP/Africa) keep the remainder, so
+  // they still make progress. The provider-WATCH run (--providers) is exempt: switch detection
+  // must stay all-markets even during a country drain.
+  let priorityCC = null;
+  if (!PROVIDERS.length) {
+    try {
+      const [pr] = await sql`SELECT value FROM app_settings WHERE key = 'ops.priority'`;
+      const p = pr ? JSON.parse(pr.value) : null;
+      if (p && p.mode === "country" && p.country) {
+        priorityCC = String(p.country).toUpperCase();
+        console.log(`priority cue: country-completeness ${priorityCC} → ${priorityCC} leads the queue (~75%); other focus markets keep the rest`);
+      }
+    } catch { /* app_settings missing / bad json → ignore */ }
+  }
   try {
     if (PROVIDERS.length) { await watchRun(sql); return; }
     // 1. Free parse over the imported data.
@@ -200,7 +205,18 @@ async function main() {
       || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)                        // then HV switch detection
       || (b.sales || 0) - (a.sales || 0));                           // then by value
     const reSlots = Math.min(reprobes.length, Math.round(cap * REPROBE_SHARE));
-    const takeInit = init.slice(0, Math.max(0, cap - reSlots));
+    const initSlots = Math.max(0, cap - reSlots);
+    // ZA-priority-but-not-exclusive: the cued country leads with up to ~75% of the initial slots;
+    // the other focus markets take the rest so they keep progressing (and get MORE when ZA runs short).
+    let takeInit;
+    if (priorityCC) {
+      const isPri = (r) => (r.country || "").toUpperCase() === priorityCC;
+      const pri = init.filter(isPri).slice(0, Math.round(initSlots * 0.75));
+      const rest = init.filter((r) => !isPri(r)).slice(0, initSlots - pri.length);
+      takeInit = [...pri, ...rest];
+    } else {
+      takeInit = init.slice(0, initSlots);
+    }
     const takeRe = reprobes.slice(0, cap - takeInit.length);
     const queue = [...takeInit, ...takeRe]; // never-probed (HV→new-market→value) first, re-probes last
     const reprobeCount = takeRe.length;
