@@ -24,7 +24,7 @@ const OUT = opt("--out", PLUS ? "feed/payment-queue-plus.txt" : "feed/payment-qu
 // --country ZA,KE,NG,JP scopes probing to target markets so global discoveries (ct-tail is
 // TLD-agnostic and lands the whole CT firehose) don't consume checkout probes — each probe
 // leaves an abandoned checkout in the merchant's admin, so probing off-target stores is waste.
-const CLIST = (opt("--country", null) || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
+let CLIST = (opt("--country", null) || "").toUpperCase().split(",").map((s) => s.trim()).filter(Boolean);
 // --providers "paystack,stitch,peach" — a WATCH run: re-probe the stores that CURRENTLY carry
 // one of these providers (ignoring the normal staleness gate) so we catch switches away / gateway
 // churn for named providers on a schedule (weekly Sunday → Monday inbox). Bounded cohort, so it
@@ -89,6 +89,18 @@ async function watchRun(sql) {
 
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 6 });
+
+  // Honour the ops priority cue: a "country completeness" priority scopes probing to that one
+  // country (drains it to 100% before spreading budget back out), overriding any --country passed.
+  // This is what wires the /ops Project-priority control to the actual payments probe.
+  try {
+    const [pr] = await sql`SELECT value FROM app_settings WHERE key = 'ops.priority'`;
+    const p = pr ? JSON.parse(pr.value) : null;
+    if (p && p.mode === "country" && p.country) {
+      CLIST = [String(p.country).toUpperCase()];
+      console.log(`priority cue: country-completeness ${CLIST[0]} → scoping payment queue to ${CLIST[0]} only`);
+    }
+  } catch { /* app_settings missing / bad json → fall back to --country */ }
   try {
     if (PROVIDERS.length) { await watchRun(sql); return; }
     // 1. Free parse over the imported data.
