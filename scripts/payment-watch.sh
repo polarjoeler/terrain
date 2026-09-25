@@ -42,7 +42,10 @@ node --env-file=.env.local scripts/payment-queue.mjs \
 
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
-  ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
+  # Rotate the 100-IP pool — see the note in payments-probe.sh. 3,000 stores at
+  # concurrency 10 from one residential IP is well past what Shopify's edge tolerates.
+  ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
+      "$PROBE_PY" checkout_probe.py \
       --from-file "$HOME/storepulse/$OUT" --limit 3000 --concurrency 10 ) \
     || echo "!! checkout probe failed (continuing to sync partial)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed"
