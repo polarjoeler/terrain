@@ -95,6 +95,19 @@ async function main() {
       "visa", "mastercard", "amex", "american express", "discover", "maestro",
       "diners club", "diners", "unionpay", "jcb"]);
 
+    // Collapse a sub-brand RAIL to its parent gateway for change DETECTION only (the display
+    // token is still stored verbatim). A merchant relabelling between "Paystack" and "Paystack
+    // Onsite" — or "Stitch" and "WigWag" — is the SAME gateway; logging it as a switch was the
+    // Sep-2026 Paystack-Onsite flap that spammed the change log with bogus removes/adds. Mirrors
+    // the sub-brand groups in lib/payments-taxonomy.ts (PROVIDER_SUBBRANDS) — keep in sync if
+    // more are added there. Everything else canonicalises to its own lowercase form.
+    const canonGateway = (t) => {
+      const s = t.toLowerCase();
+      if (s.includes("paystack")) return "paystack";
+      if (s.includes("wigwag") || /\bstitch\b/.test(s)) return "stitch";
+      return s;
+    };
+
     // Bounded worker pool — NOT Promise.all over the whole batch. Firing hundreds
     // of concurrent queries at a small pool makes postgres.js deadlock the ones
     // that queue beyond `max` (the sync then hangs and the pipeline skips it).
@@ -121,8 +134,13 @@ async function main() {
         if (v.payments && oldP && !bootstrap) {
           const oTok = toks(oldP).filter((t) => !PAY_NOISE.has(t.toLowerCase()));
           const nTok = toks(v.payments).filter((t) => !PAY_NOISE.has(t.toLowerCase()));
-          const added = nTok.filter((t) => !oTok.some((o) => o.toLowerCase() === t.toLowerCase()));
-          const removed = oTok.filter((t) => !nTok.some((n) => n.toLowerCase() === t.toLowerCase()));
+          // Diff on CANONICAL gateway so a sub-brand relabel (Paystack ⇄ Paystack Onsite) is not
+          // a change: a token is "added" only if its parent gateway wasn't already present, and
+          // "removed" only if its parent gateway is now gone entirely.
+          const oCanon = new Set(oTok.map(canonGateway));
+          const nCanon = new Set(nTok.map(canonGateway));
+          const added = nTok.filter((t) => !oCanon.has(canonGateway(t)));
+          const removed = oTok.filter((t) => !nCanon.has(canonGateway(t)));
           if (added.length || removed.length) {
             const recent = await sql`SELECT 1 FROM payment_changes
               WHERE domain = ${domain} AND changed_at > now() - interval '30 days'
