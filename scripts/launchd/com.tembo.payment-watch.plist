@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.payment-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/payment-watch.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+
+    <!-- Fires DAILY at 05:00 and 13:00. The script self-gates on a 5-day freshness marker, so
+         all but ~one fire per 5 days is a cheap no-op — but a missed wake (Mac asleep at a fire
+         time, as on Sun 09-21) is now caught within HOURS at the next window instead of skipping
+         a whole week. Two windows/day covers both an overnight-asleep Mac and a daytime one. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>13</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/payment-watch.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/payment-watch.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
