@@ -543,10 +543,21 @@ export async function recentPaymentShifts(limit = 40, countries?: string[]): Pro
 /* --------------------------------------------------------------- growth series --- */
 
 export type GrowthPeriod = "day" | "week" | "month" | "quarter" | "year";
-export type GrowthPoint = { date: string; newStores: number; churned: number };
+// A period's flow. Adds split into launched (new store) vs switchedIn (existing store that
+// adopted this provider); churn split into churnedDeath (store died on us) vs churnedSwitch
+// (live store that DEFECTED to a competitor). `churned` is their sum (death + switch) for the
+// combined down-bar and back-compat. Switch flows are provider-specific: on the platform-wide
+// growth view (no provider filter) they're 0 and the chart renders exactly as before.
+export type GrowthPoint = {
+  date: string; newStores: number; switchedIn: number;
+  churnedDeath: number; churnedSwitch: number; churned: number;
+};
 export type GrowthSeries = {
   period: GrowthPeriod; points: GrowthPoint[]; churnTrackedFrom: string | null;
-  totalNew: number; totalChurn: number; currentTotal: number;
+  totalNew: number; totalSwitchIn: number;
+  totalChurnDeath: number; totalChurnSwitch: number; totalChurn: number;
+  currentTotal: number;
+  hasSwitchFlows: boolean;   // true when a provider is filtered → show the switch-in/out bands
 };
 
 /** Shopify-growth series SINCE WE BEGAN — new stores per period by OUR discovery date
@@ -610,6 +621,29 @@ export async function growthSeries(opts: {
     SELECT to_char(MIN(died_at), 'YYYY-MM-DD') f FROM churn_log
     WHERE COALESCE(historic, false) = false AND died_at IS NOT NULL`.catch(() => [{ f: null }]);
 
+  // Provider SWITCH flows — merchant movement between gateways, from payment_changes (a live
+  // store that ADDED or DROPPED this provider). These are the churn a payment company actually
+  // feels: a defection to a competitor never appears in churn_log (the store is still alive), so
+  // without this the growth chart shows zero churn while the switches panel lists real losses.
+  // Keyed on changed_at (detection of the switch). Country lives on imported_stores, so join it.
+  // Only meaningful with a provider filter; the platform-wide view leaves both empty.
+  const switchIn = variants ? await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${period}::text, pc.changed_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    FROM payment_changes pc JOIN imported_stores i ON i.domain = pc.domain
+    WHERE EXISTS (SELECT 1 FROM unnest(pc.added) a WHERE lower(btrim(a)) = ANY(${variants}::text[]))
+      ${country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``}
+      ${from ? sql`AND pc.changed_at >= ${from}::date` : sql``}
+      ${to ? sql`AND pc.changed_at < (${to}::date + interval '1 day')` : sql``}
+    GROUP BY 1 ORDER BY 1`.catch(() => []) : [];
+  const switchOut = variants ? await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${period}::text, pc.changed_at), 'YYYY-MM-DD') b, COUNT(*)::int n
+    FROM payment_changes pc JOIN imported_stores i ON i.domain = pc.domain
+    WHERE EXISTS (SELECT 1 FROM unnest(pc.removed) x WHERE lower(btrim(x)) = ANY(${variants}::text[]))
+      ${country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``}
+      ${from ? sql`AND pc.changed_at >= ${from}::date` : sql``}
+      ${to ? sql`AND pc.changed_at < (${to}::date + interval '1 day')` : sql``}
+    GROUP BY 1 ORDER BY 1`.catch(() => []) : [];
+
   // Current live store base — same definition as the "stores tracked" headline in insights
   // (published, live, not dead/migrated), so the two figures always match. Provider filter
   // narrows it to that PSP's live merchants.
@@ -619,14 +653,27 @@ export async function growthSeries(opts: {
   const currentTotal = Number(gt?.n ?? 0);
 
   const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));
-  const churnMap = new Map(churned.map((r) => [r.b, Number(r.n)]));
-  const dates = [...new Set([...foundMap.keys(), ...churnMap.keys()])].sort();
-  const points: GrowthPoint[] = dates.map((d) => ({
-    date: d, newStores: foundMap.get(d) ?? 0, churned: churnMap.get(d) ?? 0,
-  }));
-  const totalNew = [...foundMap.values()].reduce((s, n) => s + n, 0);
-  const totalChurn = [...churnMap.values()].reduce((s, n) => s + n, 0);
-  return { period, points, churnTrackedFrom: cf?.f ?? null, totalNew, totalChurn, currentTotal };
+  const deathMap = new Map(churned.map((r) => [r.b, Number(r.n)]));
+  const inMap = new Map(switchIn.map((r) => [r.b, Number(r.n)]));
+  const outMap = new Map(switchOut.map((r) => [r.b, Number(r.n)]));
+  const dates = [...new Set([...foundMap.keys(), ...deathMap.keys(), ...inMap.keys(), ...outMap.keys()])].sort();
+  const points: GrowthPoint[] = dates.map((d) => {
+    const churnedDeath = deathMap.get(d) ?? 0;
+    const churnedSwitch = outMap.get(d) ?? 0;
+    return {
+      date: d, newStores: foundMap.get(d) ?? 0, switchedIn: inMap.get(d) ?? 0,
+      churnedDeath, churnedSwitch, churned: churnedDeath + churnedSwitch,
+    };
+  });
+  const sum = (m: Map<string, number>) => [...m.values()].reduce((s, n) => s + n, 0);
+  const totalNew = sum(foundMap), totalSwitchIn = sum(inMap);
+  const totalChurnDeath = sum(deathMap), totalChurnSwitch = sum(outMap);
+  return {
+    period, points, churnTrackedFrom: cf?.f ?? null,
+    totalNew, totalSwitchIn, totalChurnDeath, totalChurnSwitch,
+    totalChurn: totalChurnDeath + totalChurnSwitch, currentTotal,
+    hasSwitchFlows: !!variants,
+  };
 }
 
 /* ---------------------------------------------------- cumulative platform growth --- */
