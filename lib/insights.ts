@@ -857,6 +857,81 @@ const REPORT_SECTIONS: Record<string, SecCfg> = {
 export const REPORT_SECTION_KEYS = Object.keys(REPORT_SECTIONS);
 export function isReportSection(s: string): boolean { return s in REPORT_SECTIONS; }
 
+// Generic payment METHODS that canonicalProvider keeps (as APM) but which aren't a "provider a
+// merchant chose" — excluded from the adoption chart so the curves are real gateways/PSPs only.
+const NON_PROVIDER_METHODS = new Set([
+  "bank deposit", "bank transfer", "cash on delivery", "cheque", "credit card",
+  "manual payment", "manual", "other", "eft", "instant eft",
+]);
+
+export type AdoptionSeries = {
+  years: number[];                       // the year axis (last N years, oldest → newest)
+  startYear: number; baselineYear: number; // baselineYear = the pre-window bucket folded into years[0]
+  providers: { label: string; type: PayType; total: number; cumulative: number[] }[]; // aligned to years
+};
+
+/** Provider ADOPTION over the last N years, as a BEST ESTIMATE of when each currently-live store
+ *  chose its provider — we assume the choice was made at LAUNCH (real launch date: first product,
+ *  else launched_at). For each live store in the market we credit every provider it carries today
+ *  to its launch year, then plot the CUMULATIVE installed base per provider (a rising adoption
+ *  curve). Pre-window launches fold into the first year so the curves start at the right height.
+ *  Survivorship-adjusted (live stores only) and pre-switch-tracking, so it's an estimate; going
+ *  forward the switch log (payment_changes) refines who moved and when. */
+export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", nYears = 10, topN = 6): Promise<AdoptionSeries> {
+  const sql = db();
+  const cc = (country || "ZA").toUpperCase();
+  const nowYear = new Date().getUTCFullYear();
+  const startYear = nowYear - (nYears - 1);
+  const years = Array.from({ length: nYears }, (_, i) => startYear + i);
+  const baselineYear = startYear; // pre-window launches are credited here (curve's starting height)
+
+  // Aggregate in SQL (GROUP BY launch-year × provider), NOT by pulling every store's payments to JS
+  // — the market's whole live base is ~30k rows and streaming them all hit the pooler statement
+  // timeout. unnest the gateway list, collapse the known sub-brand rails (Paystack Onsite → Paystack,
+  // WigWag → Stitch) in SQL, and COUNT(DISTINCT domain) so a store carrying both rails counts once.
+  // Everything else stays a raw token for canonicalProvider() to clean/merge/drop in JS.
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const rows = await sql<{ yr: number; prov: string; n: number }[]>`
+    SELECT yr, prov, COUNT(DISTINCT domain)::int AS n FROM (
+      SELECT i.domain, EXTRACT(YEAR FROM ${LAUNCH})::int AS yr,
+        CASE
+          WHEN lower(btrim(tok)) LIKE '%paystack%' THEN 'Paystack'
+          WHEN lower(btrim(tok)) LIKE '%wigwag%' OR lower(btrim(tok)) ~ '\mstitch\M' THEN 'Stitch'
+          ELSE btrim(tok)
+        END AS prov
+      FROM imported_stores i, unnest(string_to_array(i.payments, ';')) AS tok
+      WHERE i.published AND (i.live_status IS NULL OR i.live_status NOT IN ('dead','migrated'))
+        AND i.country = ${cc} AND i.payments IS NOT NULL AND i.payments <> ''
+        AND i.payments_source IS DISTINCT FROM 'storecensus'  -- probe-verified only (canonical rule)
+        ${platformClause(sql, platform)}
+        AND ${LAUNCH} IS NOT NULL
+    ) s WHERE prov <> '' GROUP BY yr, prov`.catch(() => []);
+  // country is stored uppercase (index idx_is_live_universe) — match on `i.country = cc` directly;
+  // wrapping it in UPPER() defeats the index and turned this into a ~75s full scan.
+
+  // provider → year → count (fold pre-window launches into baselineYear; canonicalise/drop noise)
+  const perProv = new Map<string, Map<number, number>>();
+  const totals = new Map<string, number>();
+  for (const r of rows) {
+    const label = canonicalProvider(r.prov);
+    if (!label || NON_PROVIDER_METHODS.has(label.toLowerCase())) continue; // drop card-network/test noise + generic manual methods
+    const yr = Math.max(baselineYear, Math.min(nowYear, Number(r.yr)));
+    if (!perProv.has(label)) perProv.set(label, new Map());
+    const ym = perProv.get(label)!;
+    ym.set(yr, (ym.get(yr) ?? 0) + Number(r.n));
+    totals.set(label, (totals.get(label) ?? 0) + Number(r.n));
+  }
+
+  const top = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([label]) => label);
+  const providers = top.map((label) => {
+    const ym = perProv.get(label)!;
+    let run = 0;
+    const cumulative = years.map((y) => { run += ym.get(y) ?? 0; return run; });
+    return { label, type: classify(label), total: totals.get(label) ?? 0, cumulative };
+  });
+  return { years, startYear, baselineYear, providers };
+}
+
 /** A standalone, time-filtered report for one insights dimension. Each item shows its
  *  ALL-TIME store count plus GENUINE ADOPTIONS in the chosen period: stores DISCOVERED
  *  in the period with that value, plus (payments only) switches TO it minus switches
