@@ -868,6 +868,9 @@ export type AdoptionSeries = {
   years: number[];                       // the year axis (last N years, oldest → newest)
   startYear: number; baselineYear: number; // baselineYear = the pre-window bucket folded into years[0]
   providers: { label: string; type: PayType; total: number; cumulative: number[] }[]; // aligned to years
+  storesCumulative: number[];            // cumulative # of live stores launched by each year (the SHARE
+                                         // denominator: provider.cumulative[i] / storesCumulative[i] = that
+                                         // provider's market penetration in year i)
 };
 
 /** Provider ADOPTION over the last N years, as a BEST ESTIMATE of when each currently-live store
@@ -935,7 +938,25 @@ export async function providerAdoptionSeries(country = "ZA", platform: PlatformS
     const cumulative = years.map((y) => { run += ym.get(y) ?? 0; return run; });
     return { label, type: classify(label), total: totals.get(label) ?? 0, cumulative };
   });
-  return { years, startYear, baselineYear, providers };
+
+  // SHARE denominator — live stores per launch year (each store once, no unnest, so cheap). Cumulative
+  // so it aligns with the providers' cumulative curves: share in year i = provider/storesCumulative[i].
+  const storeYears = await sql<{ yr: number; n: number }[]>`
+    SELECT EXTRACT(YEAR FROM ${LAUNCH})::int AS yr, COUNT(*)::int AS n
+    FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND country = ${cc} AND payments IS NOT NULL AND payments <> ''
+      AND payments_source IS DISTINCT FROM 'storecensus' AND ${LAUNCH} IS NOT NULL
+    GROUP BY 1`.catch(() => []);
+  const storeYearMap = new Map<number, number>();
+  for (const r of storeYears) {
+    const yr = Math.max(baselineYear, Math.min(nowYear, Number(r.yr)));
+    storeYearMap.set(yr, (storeYearMap.get(yr) ?? 0) + Number(r.n));
+  }
+  let sRun = 0;
+  const storesCumulative = years.map((y) => { sRun += storeYearMap.get(y) ?? 0; return sRun; });
+
+  return { years, startYear, baselineYear, providers, storesCumulative };
 }
 
 /** A standalone, time-filtered report for one insights dimension. Each item shows its

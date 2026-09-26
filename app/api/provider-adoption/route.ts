@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   // one-time cold build, stale rows serve instantly and the ~minute-long recompute runs in the
   // background, so a viewer never waits on it.
   const data = await cachedAgg(
-    `insights:adoption:${country}:${platform}:v2`, // v2: payload now returns ALL providers (typed) for the client-side PSP/BNPL/APM filter
+    `insights:adoption:${country}:${platform}:v3`, // v3: adds storesCumulative (share denominator). v2 added the typed all-providers list.
     6 * 60 * 60 * 1000,
     () => providerAdoptionSeries(country, platform),
   ).catch(() => null);
