@@ -10,6 +10,12 @@
  * country=NULL so they drop out of Africa without being given a wrong new country (re-derive later
  * with a geo-probe). Everything is stamped in country_source, so the whole pass is reversible/auditable.
  *
+ * PERF (2026-09): the old single `UPPER(country)=ANY(AFRICA) AND payments ~* …` scan seq-scanned all
+ * ~500k rows and hit the DB statement_timeout, so the pass silently never completed (leaving ~1.5k
+ * mislabelled ZA Shopify-Payments stores on the books). Now it loops PER COUNTRY (each scan is small
+ * and index-friendly) and writes SET-BASED — one UPDATE per (target country) via domain = ANY(...),
+ * not a round-trip per row.
+ *
  *   node --env-file=.env.local scripts/retag-mislabeled-country.mjs --dry
  *   node --env-file=.env.local scripts/retag-mislabeled-country.mjs        # writes
  */
@@ -27,19 +33,29 @@ const derive = (domain, cur) => {
 };
 
 const DRY = process.argv.includes("--dry");
-const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4, idle_timeout: 20 });
+// Bump the statement timeout for this maintenance pass — the per-country scans are cheap but the
+// pooler can be slow; we never want a stall to leave the retag half-done.
+const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4, idle_timeout: 20, connection: { statement_timeout: 120000 } });
 
-const strict = sql`published AND UPPER(country) = ANY(${AFRICA})
-  AND payments_source IS DISTINCT FROM 'storecensus' AND payments ~* 'shopify_payments'
-  AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-  AND domain !~* '\\.za$' AND (currency IS NULL OR upper(currency) <> 'ZAR')`;
+// Per-country so each scan uses the country filter (index-friendly) instead of one all-Africa
+// seq-scan. Guard is identical to before: probe-verified shopify_payments, intl TLD, non-ZAR.
+const plan = [];
+for (const cc of AFRICA) {
+  const rows = await sql`
+    SELECT domain, UPPER(country) AS was, currency FROM imported_stores
+    WHERE published AND UPPER(country) = ${cc}
+      AND payments_source IS DISTINCT FROM 'storecensus' AND lower(payments) LIKE '%shopify_payments%'
+      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND domain NOT LIKE '%.za' AND (currency IS NULL OR upper(currency) <> 'ZAR')`.catch((e) => {
+    console.error(`  ${cc}: read failed (${e.message}) — skipping`); return [];
+  });
+  for (const r of rows) { const [to, how] = derive(r.domain, r.currency); plan.push({ domain: r.domain, was: r.was, to, how }); }
+}
 
-const rows = await sql`SELECT domain, UPPER(country) AS was, currency FROM imported_stores WHERE ${strict}`;
-console.log(`${rows.length} stores in the strict mislabel set (African-tagged, probe shopify_payments, intl TLD, non-ZAR).`);
-
-const plan = rows.map((r) => { const [cc, how] = derive(r.domain, r.currency); return { domain: r.domain, was: r.was, to: cc, how, disputed: cc == null }; });
-const byTo = {}, byHow = {};
-for (const p of plan) { byTo[p.to || "(disputed→null)"] = (byTo[p.to || "(disputed→null)"] || 0) + 1; byHow[p.how] = (byHow[p.how] || 0) + 1; }
+console.log(`${plan.length} stores in the strict mislabel set (African-tagged, probe shopify_payments, intl TLD, non-ZAR).`);
+const byTo = {}, byHow = {}, byWas = {};
+for (const p of plan) { byTo[p.to || "(disputed→null)"] = (byTo[p.to || "(disputed→null)"] || 0) + 1; byHow[p.how] = (byHow[p.how] || 0) + 1; byWas[p.was] = (byWas[p.was] || 0) + 1; }
+console.log("→ from (was):"); Object.entries(byWas).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log("   " + k.padEnd(6) + v));
 console.log("→ re-tag distribution:"); Object.entries(byTo).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => console.log("   " + k.padEnd(18) + v));
 console.log("→ method:", JSON.stringify(byHow));
 const resolved = plan.filter((p) => p.to), disputed = plan.filter((p) => !p.to);
@@ -47,12 +63,21 @@ console.log(`→ ${resolved.length} get a real country; ${disputed.length} → c
 
 if (DRY) { console.log("\nDRY RUN — no writes. Sample of resolved:"); resolved.slice(0, 8).forEach((p) => console.log(`   ${p.domain}  ${p.was} → ${p.to} (${p.how})`)); await sql.end(); process.exit(0); }
 
+// SET-BASED writes: group domains by target country → one UPDATE each (plus one for disputed),
+// instead of a round-trip per store.
 const now = new Date().toISOString();
+const groups = new Map();               // target cc → [domains]
+for (const p of resolved) { if (!groups.has(p.to)) groups.set(p.to, []); groups.get(p.to).push(p.domain); }
 let w = 0;
-for (const p of plan) {
-  if (p.to) await sql`UPDATE imported_stores SET country = ${p.to}, country_source = 'payment_geo', country_checked_at = ${now} WHERE domain = ${p.domain}`;
-  else await sql`UPDATE imported_stores SET country = NULL, country_source = 'disputed', country_checked_at = ${now} WHERE domain = ${p.domain}`;
-  if (++w % 200 === 0) console.log(`   …${w}/${plan.length}`);
+for (const [to, domains] of groups) {
+  const r = await sql`UPDATE imported_stores SET country = ${to}, country_source = 'payment_geo', country_checked_at = ${now}
+    WHERE domain = ANY(${domains}) RETURNING 1`;
+  w += r.length; console.log(`   ${to}: ${r.length}`);
+}
+if (disputed.length) {
+  const r = await sql`UPDATE imported_stores SET country = NULL, country_source = 'disputed', country_checked_at = ${now}
+    WHERE domain = ANY(${disputed.map((p) => p.domain)}) RETURNING 1`;
+  w += r.length; console.log(`   (disputed→null): ${r.length}`);
 }
 console.log(`✅ updated ${w} stores (${resolved.length} re-tagged, ${disputed.length} disputed). Reverse with: country_source IN ('payment_geo','disputed').`);
 await sql.end();
