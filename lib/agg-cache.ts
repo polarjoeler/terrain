@@ -7,6 +7,7 @@
  *  NOTE: values round-trip through JSONB, so Date fields come back as strings — only cache
  *  plain/JSON-safe shapes (numbers, strings, arrays, plain objects). */
 import postgres from "postgres";
+import { after } from "next/server";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
@@ -29,15 +30,30 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
   // postgres.js can return a jsonb column as a raw JSON string — parse defensively so callers always
   // get a real object, never a string.
   const parse = (d: T | string): T => (typeof d === "string" ? (JSON.parse(d) as T) : d);
+
   if (row && Date.now() - new Date(row.computed_at).getTime() < freshMs) return parse(row.data); // fresh → fast
-  // Stale or cold → recompute inline (no after()/background work, so no request-scope pitfalls).
-  // If the recompute fails but we have a stale row, serve it rather than error the page.
+
+  // STALE-WHILE-REVALIDATE: a stale row is served INSTANTLY and the refresh runs after the response
+  // (Next after() → Vercel waitUntil), so no viewer ever waits on a recompute. Only a genuinely COLD
+  // key (no row at all) computes inline. This is what keeps the paid insights pages fast even when
+  // the aggregate itself is slow to build on the flaky pooler.
+  if (row) {
+    let scheduled = false;
+    try {
+      after(async () => { try { await store(key, await compute()); } catch { /* refresh best-effort */ } });
+      scheduled = true;
+    } catch { /* not in a request scope (e.g. a script/warmer) → fall through to inline refresh */ }
+    if (scheduled) return parse(row.data);              // stale now, fresh next time
+    try { const data = await compute(); await store(key, data); return data; }
+    catch { return parse(row.data); }                    // inline refresh failed → serve stale
+  }
+
+  // Cold key → must compute inline (once ever per key; then SWR keeps it warm).
   try {
     const data = await compute();
     await store(key, data);
     return data;
   } catch (e) {
-    if (row) return parse(row.data);
     throw e;
   }
 }

@@ -19,10 +19,12 @@ export async function GET(req: Request) {
   const country = (p.get("country") || "ZA").toUpperCase();
   const platform = (PLATFORMS.has(p.get("platform") ?? "") ? p.get("platform") : "all") as PlatformSel;
 
-  // Viewer-agnostic + heavy-ish (scans the market's live base) → share one cached row for 30 min.
+  // Viewer-agnostic + heavy (scans the market's live base). Long TTL + SWR (in cachedAgg): after the
+  // one-time cold build, stale rows serve instantly and the ~minute-long recompute runs in the
+  // background, so a viewer never waits on it.
   const data = await cachedAgg(
     `insights:adoption:${country}:${platform}:v1`,
-    30 * 60 * 1000,
+    6 * 60 * 60 * 1000,
     () => providerAdoptionSeries(country, platform),
   ).catch(() => null);
   if (!data) return NextResponse.json({ error: "failed" }, { status: 500 });

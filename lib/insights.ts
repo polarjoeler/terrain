@@ -876,8 +876,13 @@ export type AdoptionSeries = {
  *  to its launch year, then plot the CUMULATIVE installed base per provider (a rising adoption
  *  curve). Pre-window launches fold into the first year so the curves start at the right height.
  *  Survivorship-adjusted (live stores only) and pre-switch-tracking, so it's an estimate; going
- *  forward the switch log (payment_changes) refines who moved and when. */
-export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", nYears = 10, topN = 6): Promise<AdoptionSeries> {
+ *  forward the switch log (payment_changes) refines who moved and when.
+ *
+ *  Returns ALL providers (capped) tagged with their PayType (PSP/BNPL/APM), sorted by total — the
+ *  client picks the top N to draw and can filter by type, so a type toggle is instant (no refetch)
+ *  and always shows the top providers WITHIN the selected type, not just the typed ones that made
+ *  the overall top N. */
+export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", nYears = 10, cap = 40): Promise<AdoptionSeries> {
   const sql = db();
   const cc = (country || "ZA").toUpperCase();
   const nowYear = new Date().getUTCFullYear();
@@ -922,8 +927,9 @@ export async function providerAdoptionSeries(country = "ZA", platform: PlatformS
     totals.set(label, (totals.get(label) ?? 0) + Number(r.n));
   }
 
-  const top = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([label]) => label);
-  const providers = top.map((label) => {
+  // All providers, sorted by total (capped) — tagged with type so the client can filter+slice.
+  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, cap).map(([label]) => label);
+  const providers = ranked.map((label) => {
     const ym = perProv.get(label)!;
     let run = 0;
     const cumulative = years.map((y) => { run += ym.get(y) ?? 0; return run; });
@@ -980,7 +986,7 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
   const winStart = iso(new Date(ms(viewDate) - P * MS));
   const newRows = await sql<{ payments: string }[]>`SELECT payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-      AND UPPER(country) = ${cc} AND payments IS NOT NULL AND payments <> ''
+      AND country = ${cc} AND payments IS NOT NULL AND payments <> ''  -- country stored uppercase; UPPER() defeated the index (~2s scan)
       AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) > ${winStart}::date
       AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) <= ${vIso}::date`.catch(() => []);
   const newBy = new Map<string, number>();

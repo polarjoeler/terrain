@@ -34,7 +34,7 @@ export default async function SectionReportPage({
   // Without it every request recomputed live on the (occasionally slow) pooler, which is the
   // "loads forever, no idea how long" symptom. Country list changes rarely → 30 min; the section
   // report → 15 min (its provider_snapshots source only updates ~weekly, so this is plenty fresh).
-  const countries = await cachedAgg("insights:countries:v1", 30 * 60 * 1000, availableCountries)
+  const countries = await cachedAgg("insights:countries:v1", 12 * 60 * 60 * 1000, availableCountries)
     .catch(() => [] as { country: string; stores: number }[]);
   const country = sp.country && countries.some((c) => c.country === sp.country) ? sp.country : "ZA";
   const period = (PERIODS.includes(sp.period as PeriodKey) ? sp.period : "week") as PeriodKey;
@@ -45,7 +45,7 @@ export default async function SectionReportPage({
 
   const report = await cachedAgg(
     `insights:report:${section}:${country}:${period}:${back}:${platform}:v1`,
-    15 * 60 * 1000,
+    2 * 60 * 60 * 1000, // 2h — snapshots update ~weekly, and SWR refreshes in the background anyway
     () => sectionReport(section, country, period, back, platform),
   ).catch(() => null);
   if (!report) notFound();
