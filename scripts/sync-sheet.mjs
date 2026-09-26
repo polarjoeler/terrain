@@ -120,7 +120,13 @@ async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, onnotice: () => {} });
   try {
     await sql`SELECT 1`;
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS discovered_at DATE`;
+    // Lock-free schema check. `ALTER TABLE ... IF NOT EXISTS` still takes an ACCESS
+    // EXCLUSIVE lock even when the column exists, so with the probes writing around the
+    // clock it queues behind them and dies on the statement timeout. Same bug took down
+    // CT landing for 10+ hours (see land-ct-discoveries.mjs).
+    const [hasDisc] = await sql`SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'imported_stores' AND column_name = 'discovered_at'`;
+    if (!hasDisc) await sql`ALTER TABLE imported_stores ADD COLUMN discovered_at DATE`;
 
     const rows = await readEnriched();
     // Land ALL discovered markets, not just ZA — the VPS writes ZA/KE/NG/MA/EG/JP…
@@ -176,6 +182,28 @@ async function main() {
       for (const r of batch) (existing.has(r.domain) ? updated++ : inserted++);
     }
     console.log(`sync done: ${updated} updated, ${inserted} inserted (all markets)`);
+
+    // VPS heartbeat. The VPS has no DB credentials — it reports by writing rows to the
+    // Google Sheet, which is why the fleet section of the morning digest always said
+    // "VPS: no heartbeat in 24h". A successful sync IS the VPS's proof of life, so stamp
+    // it here on the VPS's behalf, dated by the freshest first_seen the Sheet carries
+    // (its work), not by now() (our sync). If the VPS stops producing, that date stops
+    // advancing and the digest goes quiet for real rather than lying either way.
+    try {
+      const freshest = withDomain
+        .map((r) => date(r[COL.firstSeen]))
+        .filter(Boolean)
+        .sort()
+        .pop();
+      const note = `sheet sync: ${rows.length} rows, ${inserted} new, ${updated} updated` +
+        (freshest ? ` · newest find ${freshest}` : "");
+      await sql`INSERT INTO agent_heartbeat (machine, task, last_run, note)
+        VALUES ('vps', 'sheet-discovery', now(), ${note})
+        ON CONFLICT (machine, task) DO UPDATE SET last_run = now(), note = EXCLUDED.note`;
+      console.log(`heartbeat: vps/sheet-discovery — ${note}`);
+    } catch (e) {
+      console.error("vps heartbeat skipped:", e.message);
+    }
   } finally {
     await sql.end();
   }

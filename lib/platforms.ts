@@ -8,7 +8,7 @@
  *  when a platform is ready — no other code changes needed.
  */
 
-export type PlatformId = "shopify" | "woocommerce" | "wix" | "adobe_commerce";
+export type PlatformId = "shopify" | "woocommerce" | "wix" | "adobe_commerce" | "shopware" | "centra";
 
 export type Platform = {
   id: PlatformId;
@@ -27,6 +27,11 @@ export const PLATFORMS: Platform[] = [
   { id: "woocommerce",    label: "WooCommerce",    emoji: "🪵", dbValues: ["woocommerce", "WooCommerce"], customerVisible: false, hasActivityTiers: true },
   { id: "wix",            label: "Wix",            emoji: "🧩", dbValues: ["wix", "Wix"], customerVisible: false, hasActivityTiers: true },
   { id: "adobe_commerce", label: "Adobe Commerce", emoji: "🅰️", dbValues: ["adobe_commerce", "magento", "Magento"], customerVisible: false, hasActivityTiers: true },
+  { id: "shopware",       label: "Shopware",       emoji: "🧱", dbValues: ["shopware", "Shopware"], customerVisible: false, hasActivityTiers: true },
+  // Centra is headless, so HTTP fingerprinting only catches the minority of merchants
+  // that inline an API URL — expect low recall until the Playwright probe watches for
+  // runtime requests to *.centra.com. Counts here are a FLOOR, not the market size.
+  { id: "centra",         label: "Centra",         emoji: "🧵", dbValues: ["centra", "Centra"], customerVisible: false, hasActivityTiers: true },
 ];
 
 const BY_DBVALUE = new Map<string, Platform>();
