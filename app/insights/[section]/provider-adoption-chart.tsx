@@ -7,6 +7,10 @@ type Series = { years: number[]; startYear: number; baselineYear: number; provid
 
 // Distinct on the dark ground; first four are brand tokens, last two harmonise with them.
 const PALETTE = ["var(--color-cyan)", "var(--color-orange)", "var(--color-mint)", "var(--color-lilac)", "#e8c468", "#e88fb0"];
+const TYPES = [["all", "All"], ["PSP", "PSP"], ["BNPL", "BNPL"], ["APM", "APM"]] as const;
+const TYPE_HINT: Record<string, string> = {
+  all: "every gateway type", PSP: "payment gateways", BNPL: "buy-now-pay-later", APM: "alternative methods (EFT, wallets…)",
+};
 
 /** Payment-provider ADOPTION over the last 10 years — a best estimate of when each currently-live
  *  store chose its provider, assuming the choice was made at LAUNCH. Cumulative installed base per
@@ -17,6 +21,7 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [hover, setHover] = useState<number | null>(null);
+  const [ptype, setPtype] = useState<string>("all"); // PSP | BNPL | APM | all — filters the lines client-side
 
   useEffect(() => {
     const ac = new AbortController();
@@ -36,7 +41,11 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
   }, [country, platform]);
 
   const years = data?.years ?? [];
-  const provs = data?.providers ?? [];
+  const all = data?.providers ?? [];
+  // Filter by gateway type (PSP/BNPL/APM) then take the top 6 WITHIN that type — so the toggle
+  // always shows the leaders of the selected type, not just the typed few that made the overall top.
+  const provs = (ptype === "all" ? all : all.filter((p) => p.type === ptype)).slice(0, 6);
+  const typeCount = (t: string) => (t === "all" ? all.length : all.filter((p) => p.type === t).length);
   const W = 760, H = 300, padL = 44, padR = 96, padB = 34, padT = 16;
   const iw = W - padL - padR, ih = H - padT - padB;
   const maxY = Math.max(1, ...provs.flatMap((p) => p.cumulative));
@@ -53,11 +62,21 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
 
   return (
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
-      <div>
-        <h3 className="text-lg font-semibold">Payment provider adoption — last 10 years</h3>
-        <p className="mt-1 text-sm text-cream/45">
-          Cumulative merchants per provider, credited to each store&rsquo;s launch year (best estimate of when they chose it).
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold">Payment provider adoption — last 10 years</h3>
+          <p className="mt-1 text-sm text-cream/45">
+            Cumulative merchants per provider, credited to each store&rsquo;s launch year (best estimate of when they chose it).
+          </p>
+        </div>
+        <div className="flex gap-1 rounded-full border border-cream/12 p-1" title="filter by gateway type">
+          {TYPES.map(([k, l]) => (
+            <button key={k} onClick={() => setPtype(k)} title={TYPE_HINT[k]}
+              className={`rounded-full px-3 py-1 text-xs transition ${ptype === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}>
+              {l}{data && k !== "all" ? <span className="ml-1 opacity-60">{typeCount(k)}</span> : null}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* legend */}
@@ -77,7 +96,9 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
         ) : err ? (
           <div className="grid h-64 place-items-center text-sm text-orange">{err}</div>
         ) : provs.length === 0 ? (
-          <div className="grid h-64 place-items-center text-sm text-cream/40">No dated launches for this market yet.</div>
+          <div className="grid h-64 place-items-center text-sm text-cream/40">
+            {all.length > 0 && ptype !== "all" ? `No ${ptype} providers in this market.` : "No dated launches for this market yet."}
+          </div>
         ) : (
           <>
             <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
