@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.retag</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/retag-cron.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+
+    <!-- Daily at 04:30 (low traffic) + on load. Discovery keeps re-tagging international
+         Shopify-Payments stores as African, so this sweeps them back out on a fixed cadence. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>4</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/retag.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/retag.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
