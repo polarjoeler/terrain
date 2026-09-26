@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { SectionReport, ReportItem } from "@/lib/insights";
+import { ProviderAdoptionChart } from "./provider-adoption-chart";
 
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 const PERIOD_NOUN: Record<string, string> = { day: "day", week: "week", month: "month", quarter: "quarter", year: "year" };
@@ -170,6 +171,14 @@ export function ReportView({ report, country, countries, platform }: { report: S
           </div>
         ) : (
           <ul className="mt-8 space-y-1.5">{report.items.map(Row)}</ul>
+        )}
+
+        {/* 10-year adoption curve — provider growth by best-estimate choose-at-launch. Client-fetched
+            (cached), so it streams in after the report and never slows the page. */}
+        {report.section === "payments" && (
+          <div className="mt-10">
+            <ProviderAdoptionChart country={country} platform={platform} />
+          </div>
         )}
       </div>
     </main>
