@@ -33,6 +33,10 @@ PY
 
 # verify-liveness marks 402-frozen / 423-locked as dead (immediate — not 2-miss-gated); live stores
 # stay active. --from-file re-checks exactly this list regardless of value rank.
-node --env-file=.env.local scripts/verify-liveness.mjs --from-file "$LIST" --concurrency 12 \
+# CONCURRENCY 4 (not 12): these are direct products.json hits on Shopify's edge from ONE residential
+# IP, which shares a rate budget with every other store probe. The first run at 12 over ~7.6k stores
+# burned the budget — frozen stores came back throttled (429/challenge) instead of their true 402, so
+# the frozen-detector missed them and only DNS-dead ones were caught. Low concurrency gets true reads.
+node --env-file=.env.local scripts/verify-liveness.mjs --from-file "$LIST" --concurrency 4 \
   || echo "!! verify-liveness failed"
 echo "===== liveness-tail done $(date '+%T') ====="
