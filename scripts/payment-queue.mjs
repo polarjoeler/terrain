@@ -147,7 +147,7 @@ async function main() {
     const HV_REPROBE_DAYS = 7, TAIL_REPROBE_DAYS = 21;
     const eligible = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status, discovered_at, source, country,
-        (payments IS NULL OR payments = '') AS needs_initial,
+        ((payments IS NULL OR payments = '') AND payments_checked_at IS NULL) AS needs_initial,
         COALESCE(plus, false) AS plus,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-500')) AS t500,
@@ -162,7 +162,11 @@ async function main() {
         ${CLIST.length ? sql`AND UPPER(country) = ANY(${CLIST})` : sql``}
         ${PLUS ? sql`AND plus = true`
                : sql`AND (
-                   payments IS NULL OR payments = ''
+                   -- never probed → initial. A probe-exhausted store (payments empty but
+                   -- payments_checked_at STAMPED) is deliberately NOT re-selected here every run —
+                   -- it re-enters only via the tail re-probe window below. This is what unclogs the
+                   -- queue of cache-skipped zombies that starved throughput.
+                   ( (payments IS NULL OR payments = '') AND payments_checked_at IS NULL )
                    OR ( (plus = true OR domain IN (SELECT domain FROM store_tags WHERE tag IN ('top-100','top-500')))
                         AND payments_checked_at < now() - (${HV_REPROBE_DAYS}::int * interval '1 day') )
                    OR payments_checked_at < now() - (${TAIL_REPROBE_DAYS}::int * interval '1 day')

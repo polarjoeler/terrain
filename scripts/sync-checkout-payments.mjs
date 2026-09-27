@@ -61,7 +61,19 @@ async function main() {
   const checkedEmpty = Object.entries(cache)
     .filter(([, rec]) => fresh(rec) && String(rec?.note || "").startsWith("no_gateways_found"))
     .map(([d]) => clean(d));
-  console.log(`${verified.length.toLocaleString()} domains with verified checkout data · ${checkedEmpty.length.toLocaleString()} confirmed no-gateway (probed, none chosen).`);
+  // Stores checkout_probe has GIVEN UP on — a terminal note or the 3-attempt retry cap (mirrors
+  // _should_skip in checkout_probe.py). The probe skips these FOREVER, but until now the DB never
+  // learned: payments stayed NULL, so the value-ranked queue kept re-selecting them as "never
+  // probed" every run while the probe silently skipped them. That zombie backlog (~5.6k ZA) is what
+  // collapsed throughput to ~12 real probes/run. Stamp payments_checked_at (once) so they leave the
+  // initial-probe pool; they re-enter only on the slow tail re-probe cadence.
+  const _TERMINAL_NOTES = new Set(["not_accepting_orders"]);
+  const _MAX_ATTEMPTS = 3;
+  const exhausted = Object.entries(cache)
+    .filter(([, rec]) => !(rec?.gateways?.length)
+      && (_TERMINAL_NOTES.has(rec?.note) || Number(rec?.attempts || 0) >= _MAX_ATTEMPTS))
+    .map(([d]) => clean(d));
+  console.log(`${verified.length.toLocaleString()} domains with verified checkout data · ${checkedEmpty.length.toLocaleString()} confirmed no-gateway (probed, none chosen) · ${exhausted.length.toLocaleString()} probe-exhausted.`);
 
   const POOL = 8, CONCURRENCY = 6; // CONCURRENCY < POOL so queries never queue past
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: POOL });
@@ -181,6 +193,14 @@ async function main() {
       const r = await sql`UPDATE imported_stores SET payments_checked_at = now()
         WHERE domain = ANY(${checkedEmpty}) AND published AND (payments IS NULL OR payments = '')`;
       console.log(`  ↳ marked ${r.count.toLocaleString()} stores checked-but-no-gateway (probed, no provider yet).`);
+    }
+    // Park probe-exhausted stores — stamp ONCE (payments_checked_at IS NULL) so we don't keep
+    // resetting the re-try clock. This is the fix for the throughput collapse: it drains the zombie
+    // backlog out of the initial-probe queue.
+    if (exhausted.length) {
+      const r = await sql`UPDATE imported_stores SET payments_checked_at = now()
+        WHERE domain = ANY(${exhausted}) AND published AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL`;
+      console.log(`  ↳ parked ${r.count.toLocaleString()} probe-exhausted stores (terminal / max-attempts) — they leave the initial queue.`);
     }
     if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);
     // Advance the incremental watermark only after a successful pass.
