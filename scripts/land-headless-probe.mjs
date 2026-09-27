@@ -8,6 +8,7 @@
  */
 import { readFileSync, writeFileSync, statSync } from "fs";
 import postgres from "postgres";
+import { canonicalPlatform } from "../lib/platform-canon.ts";
 
 const FILE = process.argv.includes("--file")
   ? process.argv[process.argv.indexOf("--file") + 1]
@@ -37,7 +38,8 @@ async function main() {
     if (!line.trim()) continue;
     try {
       const r = JSON.parse(line);
-      if (r.domain && r.platform) rows.push({ domain: String(r.domain).toLowerCase().replace(/^www\./, ""), platform: r.platform });
+      const plat = canonicalPlatform(r.platform);
+      if (r.domain && plat) rows.push({ domain: String(r.domain).toLowerCase().replace(/^www\./, ""), platform: plat });
     } catch { /* skip malformed */ }
   }
   console.log(`read from byte ${start.toLocaleString()} of ${size.toLocaleString()} — ${rows.length} with a platform`);
