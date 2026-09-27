@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.liveness-tail</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/liveness-tail.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+
+    <!-- Weekly (Sunday 03:00) + on load. Marks 402-frozen / 423-locked stores in the no_variant
+         tail dead so they stop dragging payments coverage; live stores stay active. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>0</integer>
+        <key>Hour</key><integer>3</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/liveness-tail.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/liveness-tail.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
