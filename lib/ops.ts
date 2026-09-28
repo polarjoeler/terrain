@@ -1,13 +1,11 @@
 /** Live operations status — the numbers + machine heartbeats behind the /ops dashboard.
  *  Read fresh on every request (no cache) so it's a real-time cross-device status page. */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { cachedAgg } from "./agg-cache";
 import { regionOf } from "./countries";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 const MK = ["AO", "BW", "CI", "CM", "DZ", "EG", "ET", "GH", "KE", "LS", "LY", "MA", "MU", "MW",

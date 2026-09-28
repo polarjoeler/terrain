@@ -2,19 +2,13 @@
  *  an admin applies to stores. Powers the admin lead manager and tagged-cohort
  *  insights (e.g. "payment breakdown of the ZA Top 100"). */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { PRESET_TAGS, tagLabel } from "./tag-defs";
 
 export { PRESET_TAGS, tagLabel };
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 async function ensure() {
   await db()`CREATE TABLE IF NOT EXISTS store_tags (

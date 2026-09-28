@@ -3,18 +3,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import postgres from "postgres";
+import { db as sharedDb } from "../db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 let _ready: Promise<void> | null = null;
 
 export function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 export function ensureSchema(): Promise<void> {

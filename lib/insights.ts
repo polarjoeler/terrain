@@ -5,22 +5,12 @@
  *  the UI can drill in. Daily snapshots (insights_snapshots) power the trends.
  */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS } from "./markets";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    // connect_timeout caps how long a query waits on the (occasionally flaky) Supabase pooler —
-    // without it a stalled connection hangs the request indefinitely, which is exactly the
-    // "loads forever, no idea how long" symptom. 10s → fail fast so cachedAgg can serve a stale
-    // row (or the page shows its error state) instead of spinning.
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20, connect_timeout: 10 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 export type InsightItem = { label: string; count: number; pct: number };

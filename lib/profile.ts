@@ -9,12 +9,10 @@
  *    org_profile  (domain PK)   — company persona, CMS focus, self-tracking, extras.
  *    user_profile (email PK)    — per-seat lead cadence, focus, ingestion, digest opt-in.
  */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 // Consumer inboxes — each such email is its own company, not grouped by domain.

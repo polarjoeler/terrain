@@ -2,7 +2,7 @@
  *  Loads every live, published lead with the fields the explorer shows plus a
  *  computed Lead Fit Score, so the client can facet/sort/search instantly. */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
 // DB `platform` values NOT yet launched to customers — kept in sync with lib/platforms.ts
 // (customerVisible:false there). Inlined, like VISIBLE_MARKETS below, so the standalone
@@ -20,14 +20,8 @@ const HIDDEN_PLATFORM_DBVALUES = ["wix", "adobe_commerce", "magento"];
 // --experimental-strip-types) doesn't choke on a relative .ts import.
 const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 export type ExploreLead = {

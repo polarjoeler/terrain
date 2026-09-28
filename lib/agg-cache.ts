@@ -6,13 +6,11 @@
  *
  *  NOTE: values round-trip through JSONB, so Date fields come back as strings — only cache
  *  plain/JSON-safe shapes (numbers, strings, arrays, plain objects). */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { after } from "next/server";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 async function store(key: string, data: unknown): Promise<void> {

@@ -11,7 +11,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
-import postgres from "postgres";
+import { db } from "./db";
 import type { Subscriber } from "./subscriptions";
 
 export interface Store {
@@ -24,13 +24,8 @@ export interface Store {
 
 /* ------------------------------------------------------------- postgres --- */
 
-function makePostgresStore(url: string): Store {
-  const sql = postgres(url, {
-    // Supabase's transaction pooler doesn't support prepared statements.
-    prepare: false,
-    max: 5,
-    idle_timeout: 20,
-  });
+function makePostgresStore(): Store {
+  const sql = db();
 
   let ready: Promise<void> | null = null;
   const ensure = () => {
@@ -168,7 +163,7 @@ export function getStore(): Store {
   if (cached) return cached;
   const url = process.env.DATABASE_URL;
   if (url) {
-    cached = makePostgresStore(url);
+    cached = makePostgresStore();
   } else {
     if (process.env.NODE_ENV === "production") {
       console.warn(

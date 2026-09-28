@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { JP_REGIONS, type JpRegion } from "./japan-regions";
 export { JP_REGIONS, type JpRegion };
 
@@ -11,10 +12,8 @@ export { JP_REGIONS, type JpRegion };
 //   page says so. Totals, launch dates and CMS are real; only the region a store sits in is inferred
 //   for the unlocated majority. This all collapses to real data the moment location lands on import.
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 const FLOOR = "2015-01-01";

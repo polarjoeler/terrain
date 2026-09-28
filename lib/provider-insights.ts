@@ -9,7 +9,7 @@
  *  real positions, not guesses. Trends over time come from provider_snapshots
  *  (see snapshotProviders), not from this point-in-time read. */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
 import { classify, cleanPayments, canonicalProvider, providerVariants, PROVIDER_SUBBRANDS, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { providerSlug } from "./provider-slug";
@@ -40,14 +40,8 @@ export async function providerSubReport(canonical: string, country?: string): Pr
   return { total, subs: counts };
 }
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
