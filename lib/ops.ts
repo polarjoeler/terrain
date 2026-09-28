@@ -155,9 +155,14 @@ async function opsStatusUncached(): Promise<OpsStatus> {
       SELECT count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE)::int today,
              count(*) FILTER (WHERE source='ct_tail' AND discovered_at=CURRENT_DATE-1)::int yest
       FROM imported_stores`,
-    () => sql<{ live: number; haspay: number; backlog: number; probed12h: number }[]>`
+    () => sql<{ live: number; haspay: number; reachable: number; backlog: number; probed12h: number }[]>`
       SELECT count(*)::int live,
              count(*) FILTER (WHERE payments IS NOT NULL AND payments<>'')::int haspay,
+             -- REACHABLE denominator: has a gateway OR not yet probed. Excludes stores we've probed
+             -- and found NO gateway (payments empty but payments_checked_at set) — those are frozen /
+             -- inquiry-only / out-of-stock Shopify stores with no completable checkout, so there is
+             -- nothing to "cover". Counting them dragged coverage from a true ~90% down to ~59%.
+             count(*) FILTER (WHERE (payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL)::int reachable,
              count(*) FILTER (WHERE payments_checked_at IS NULL)::int backlog,
              count(*) FILTER (WHERE payments_checked_at > now()-interval '12 hours')::int probed12h
       FROM imported_stores WHERE published AND platform='Shopify'
@@ -180,13 +185,16 @@ async function opsStatusUncached(): Promise<OpsStatus> {
         (SELECT max(created_at) FROM imported_stores WHERE source='woo_ct')                                 lucy_woo,
         (SELECT max(catalog_checked_at) FROM imported_stores WHERE launched_source='earliest_product')      lucy_launch`,
     // Track A + Track B per platform, over the CORE markets.
-    () => sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; has_launch: number; launched30d: number }[]>`
+    () => sql<{ plat: string; tracked: number; live: number; checked30d: number; cov_pay: number; reachable_pay: number; has_launch: number; launched30d: number }[]>`
       SELECT
         CASE WHEN lower(platform) = 'woocommerce' THEN 'WooCommerce' ELSE 'Shopify' END AS plat,
         count(*)::int tracked,
         count(*) FILTER (WHERE live_status IS NULL OR live_status NOT IN ('dead','migrated'))::int live,
         count(*) FILTER (WHERE live_checked_at > now()-interval '30 days')::int checked30d,
         count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND payments IS NOT NULL AND payments<>'')::int cov_pay,
+        -- reachable denominator (see the summary query): has a gateway OR not yet probed; excludes
+        -- probed-but-no-gateway stores that have no completable checkout to read.
+        count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ((payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL))::int reachable_pay,
         count(*) FILTER (WHERE launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}-')::int has_launch,
         count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ${LAUNCH} >= CURRENT_DATE-30)::int launched30d
       FROM imported_stores
@@ -226,7 +234,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
       label: r.plat,
       tracked: Number(r.tracked), live: Number(r.live),
       scanFreshPct: pctOf(Number(r.checked30d), Number(r.tracked)),
-      paymentPct: pctOf(Number(r.cov_pay), Number(r.live)),
+      paymentPct: pctOf(Number(r.cov_pay), Number(r.reachable_pay)),
       launchPct: pctOf(Number(r.has_launch), Number(r.tracked)),
       launched30d: Number(r.launched30d),
       churned30d: r.plat === "Shopify" ? churn30 : 0,
@@ -236,7 +244,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
   return {
     at: new Date().toISOString(),
     discovery: { today: Number(disc[0].today), yesterday: Number(disc[0].yest) },
-    payments: { coverage: p.live ? Math.round((100 * p.haspay) / p.live) : 0, backlog: Number(p.backlog), probed12h: Number(p.probed12h) },
+    payments: { coverage: p.reachable ? Math.round((100 * p.haspay) / p.reachable) : 0, backlog: Number(p.backlog), probed12h: Number(p.probed12h) },
     launched: { since: Number(launch[0].since), filled12h: Number(launch[0].filled12h) },
     woo: { total: Number(woo[0].total), cohortConfirmed: Number(woo[0].confirmed), cohortReal: Number(woo[0].real) },
     platforms,
@@ -286,12 +294,15 @@ export type CoverageMatrix = {
 const pctOfC = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);
 
 // Raw counts for a (country,platform) group — numerators are already scoped to tracked stores.
-type Raw = { discovered: number; tracked: number; pay: number; launch: number; checked: number };
-const emptyRaw = (): Raw => ({ discovered: 0, tracked: 0, pay: 0, launch: 0, checked: 0 });
-const addRaw = (a: Raw, b: Raw) => { a.discovered += b.discovered; a.tracked += b.tracked; a.pay += b.pay; a.launch += b.launch; a.checked += b.checked; };
+// `reachable` = tracked stores that have a gateway OR haven't been probed yet; it's the honest
+// payment-coverage denominator (excludes probed-but-no-gateway stores that have no completable
+// checkout to read — see the summary query). `tracked` stays the denominator for launch/liveness.
+type Raw = { discovered: number; tracked: number; pay: number; reachable: number; launch: number; checked: number };
+const emptyRaw = (): Raw => ({ discovered: 0, tracked: 0, pay: 0, reachable: 0, launch: 0, checked: 0 });
+const addRaw = (a: Raw, b: Raw) => { a.discovered += b.discovered; a.tracked += b.tracked; a.pay += b.pay; a.reachable += b.reachable; a.launch += b.launch; a.checked += b.checked; };
 const toPlat = (r: Raw): PlatCoverage => ({
   discovered: r.discovered, tracked: r.tracked,
-  payPct: pctOfC(r.pay, r.tracked), launchPct: pctOfC(r.launch, r.tracked), checkedPct: pctOfC(r.checked, r.tracked),
+  payPct: pctOfC(r.pay, r.reachable), launchPct: pctOfC(r.launch, r.tracked), checkedPct: pctOfC(r.checked, r.tracked),
 });
 
 /** Per-country × platform store counts + enrichment coverage (payments / launch date / liveness).
@@ -307,18 +318,19 @@ export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
   return cachedAgg(`coverage:country:${country.toUpperCase()}`, 10 * 60 * 1000, async () => {
     const sql = db();
     const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
-    const rows = await sql<{ platform: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
+    const rows = await sql<{ platform: string; discovered: number; tracked: number; pay: number; reachable: number; launch: number; checked: number }[]>`
       SELECT COALESCE(NULLIF(platform, ''), '(unconfirmed)') platform,
         count(*)::int discovered,
         count(*) FILTER (WHERE ${TRACKED})::int tracked,
         count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
+        count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL))::int reachable,
         count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
         count(*) FILTER (WHERE ${TRACKED} AND live_checked_at IS NOT NULL)::int checked
       FROM imported_stores WHERE UPPER(country) = ${country.toUpperCase()}
       GROUP BY 1 ORDER BY discovered DESC`;
     // Normalise the display name (woocommerce → WooCommerce) and shape as PlatCoverage.
     const label = (p: string) => (p === "woocommerce" ? "WooCommerce" : p);
-    return rows.map((r) => ({ platform: label(r.platform), ...toPlat({ discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) }) }));
+    return rows.map((r) => ({ platform: label(r.platform), ...toPlat({ discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), reachable: Number(r.reachable), launch: Number(r.launch), checked: Number(r.checked) }) }));
   });
 }
 
@@ -377,7 +389,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   // Coverage numerators are scoped to TRACKED (published & live) stores — the set we enrich — so a
   // country's payment/launch/liveness % isn't diluted by unpublished imports or confirmed-dead rows.
   const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
-  const rows = await sql<{ country: string; plat: string; discovered: number; tracked: number; pay: number; launch: number; checked: number }[]>`
+  const rows = await sql<{ country: string; plat: string; discovered: number; tracked: number; pay: number; reachable: number; launch: number; checked: number }[]>`
     SELECT UPPER(country) country,
       CASE WHEN lower(platform) = 'woocommerce' THEN 'woo'
            WHEN platform = 'Shopify' OR (platform IS NULL AND published) THEN 'shopify'
@@ -390,6 +402,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
       count(*)::int discovered,
       count(*) FILTER (WHERE ${TRACKED})::int tracked,
       count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
+      count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL))::int reachable,
       count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
       count(*) FILTER (WHERE ${TRACKED} AND live_checked_at IS NOT NULL)::int checked
     FROM imported_stores
@@ -401,7 +414,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
   let gPending = 0;
   for (const r of rows) {
     if (r.plat === "checked_nonstore") continue;   // probed & not a store — not backlog, not a store
-    const raw: Raw = { discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), launch: Number(r.launch), checked: Number(r.checked) };
+    const raw: Raw = { discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), reachable: Number(r.reachable), launch: Number(r.launch), checked: Number(r.checked) };
     const c = r.country;
     if (!byCountry.has(c)) byCountry.set(c, { raw: emptyRaw(), row: { country: c, region: regionOf(c), discovered: 0, tracked: 0, focus: FOCUS_MARKETS.has(c), shopify: null, woo: null, other: null, pending: 0, combined: toPlat(emptyRaw()) } });
     const entry = byCountry.get(c)!;
