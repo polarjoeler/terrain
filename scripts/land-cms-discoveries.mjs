@@ -14,6 +14,7 @@
  */
 import postgres from "postgres";
 import { readFileSync } from "fs";
+import { canonicalPlatform } from "../lib/platform-canon.ts";
 
 const FINDS = process.env.CMS_FINDS || "/Users/joel/shopify-radar/feed/cms-discoveries.jsonl";
 const today = () => new Date().toISOString().slice(0, 10);
@@ -29,7 +30,7 @@ async function main() {
     if (!line.trim()) continue;
     let r; try { r = JSON.parse(line); } catch { continue; }
     const d = String(r.domain || "").trim().toLowerCase();
-    const platform = String(r.platform || "").trim();
+    const platform = canonicalPlatform(r.platform) ?? "";
     if (!d || !platform) continue;
     const at = (r.seen_at || "").slice(0, 10) || today();
     const country = r.country ? String(r.country).toUpperCase() : null;

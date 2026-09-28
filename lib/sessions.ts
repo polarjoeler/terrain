@@ -6,12 +6,10 @@
  *  export route blocks when that exceeds a cap, and every export is watermarked + logged, so
  *  a leaked CSV is traceable to the seat. Detection precedes hard lockout by design.
  */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 // Distinct sign-in IPs allowed per account within the window before the export action is gated.

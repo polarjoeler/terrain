@@ -1,16 +1,10 @@
 /** Full detail for a single store — every field we know — for the lead drawer.
  *  Kept out of the Explorer's bulk payload (that ships ~13k rows); fetched on click. */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 export type LeadDetail = {

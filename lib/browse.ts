@@ -13,13 +13,14 @@
  *  NOTE: queries run SEQUENTIALLY, never Promise.all — the postgres.js pool is
  *  max:3 and fanning aggregates out in parallel deadlocks the page.
  */
-import postgres from "postgres";
 import { usdSqlExpr, bandSqlExpr, revenueBand, type RevenueBand } from "./fx.ts";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
+// Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
+// a latent bug on the Supabase transaction pooler (which rejects prepared statements). The shared
+// pool sets prepare:false, so moving to it fixes that as well as the cold-start/connection cost.
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;

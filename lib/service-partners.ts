@@ -1,12 +1,10 @@
 /** Service Partners — the agencies & pros directory, synced from Africa Shop Experts (Fundi)
  *  into our own service_partners table by scripts/sync-experts.mjs. A payments co / emerging
  *  app uses it to see who's who among the builders to approach for GTM via this channel. */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 export type ServicePartner = {

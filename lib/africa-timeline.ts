@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
 // Animated "African eCommerce" replay data. Distinct from africaOverview() (a single latest-frame
 // rollup): this returns a MONTHLY time series + a sampled set of real store events so the map, the
@@ -15,10 +16,8 @@ import postgres from "postgres";
 //  - `ops` is REAL recent scan/discovery activity — the numbers and the domains in the feed are
 //    live counts, so the "constantly scanning" story is honest, not staged.
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 
 // 55 African ISO2 codes (same set the overview map uses).

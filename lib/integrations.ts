@@ -3,17 +3,11 @@
  *  uniform adapter interface (list campaigns, push leads) so each new tool is a
  *  thin addition. Currently: Instantly, Smartlead. */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 async function ensure() {
   await db()`CREATE TABLE IF NOT EXISTS integrations (

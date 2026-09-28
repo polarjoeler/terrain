@@ -2,17 +2,11 @@
  *  moment it was confirmed dead/migrated). Powers the /admin/churn report: who
  *  churned, and what the churned cohort was using (payments/shipping/platform…). */
 
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set");
-    _sql = postgres(url, { prepare: false, max: 3, idle_timeout: 20 });
-  }
-  return _sql;
+  return sharedDb();
 }
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((100 * n) / d) : 0);

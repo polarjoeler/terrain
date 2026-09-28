@@ -5,7 +5,7 @@
  * subscription status, updated by the Stripe webhook.
  */
 
-import postgres from "postgres";
+import { db } from "./db";
 import { getStore } from "./store";
 
 export const TRIAL_DAYS = 7;
@@ -16,7 +16,7 @@ export const TRIAL_DAYS = 7;
 export async function listSubscribers(): Promise<Subscriber[]> {
   const url = process.env.DATABASE_URL;
   if (!url) return [];
-  const sql = postgres(url, { prepare: false, max: 2 });
+  const sql = db();
   try {
     const rows = await sql`SELECT * FROM subscribers ORDER BY updated_at DESC`;
     return rows.map((r: any) => ({

@@ -1,12 +1,10 @@
 /** Japan-scoped read model — everything the isolated /jp locale needs, locked to country='JP'
  *  so it never bleeds into the Africa experience. Purpose-built (not the big English insights
  *  view) so the demo surfaces stay clean and fully bilingual. */
-import postgres from "postgres";
+import { db as sharedDb } from "./db";
 
-let _sql: ReturnType<typeof postgres> | null = null;
 function db() {
-  if (!_sql) _sql = postgres(process.env.DATABASE_URL!, { prepare: false, max: 3, idle_timeout: 20 });
-  return _sql;
+  return sharedDb();
 }
 const LIVE = () => db()`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND UPPER(country)='JP'`;
 
