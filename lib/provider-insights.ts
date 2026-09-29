@@ -554,6 +554,9 @@ export type GrowthSeries = {
   totalChurnDeath: number; totalChurnSwitch: number; totalChurn: number;
   currentTotal: number;
   hasSwitchFlows: boolean;   // true when a provider is filtered → show the switch-in/out bands
+  churnTracked: boolean;     // true when churn is ACTUALLY measured for this view. When false the UI
+                             // must HIDE churn + net entirely (don't imply zero churn — Woo has no
+                             // liveness/churn_log, and a scope with no churn_log at all isn't tracked).
 };
 
 /** Shopify-growth series SINCE WE BEGAN — new stores per period by OUR discovery date
@@ -669,6 +672,10 @@ export async function growthSeries(opts: {
     totalNew, totalSwitchIn, totalChurnDeath, totalChurnSwitch,
     totalChurn: totalChurnDeath + totalChurnSwitch, currentTotal,
     hasSwitchFlows: !!variants,
+    // Churn is genuinely measured only when we have a churn_log to read from AND the view isn't
+    // WooCommerce (churn_log is Shopify-liveness only). Provider views (variants) also track churn
+    // via payment_changes defections, so they count as tracked. Otherwise the UI hides churn+net.
+    churnTracked: !!variants || (opts.platform !== "woocommerce" && (cf?.f ?? null) !== null),
   };
 }
 

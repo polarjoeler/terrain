@@ -10,7 +10,7 @@ type Series = {
   period: string; points: Point[]; churnTrackedFrom: string | null;
   totalNew: number; totalSwitchIn: number;
   totalChurnDeath: number; totalChurnSwitch: number; totalChurn: number;
-  currentTotal: number; hasSwitchFlows: boolean;
+  currentTotal: number; hasSwitchFlows: boolean; churnTracked: boolean;
 };
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 
@@ -71,6 +71,7 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
   const pts = data?.points ?? [];
   const noun = provider ? "merchants" : "stores";
   const bands = !!data?.hasSwitchFlows;   // provider view → show switched-in / defected / died split
+  const churnTracked = !!data?.churnTracked; // when false, HIDE churn + net (don't imply zero churn)
   const W = 760, H = 280, padL = 44, padR = 14, padB = 40, padT = 14;
   const iw = W - padL - padR, ih = H - padT - padB;
   // Stacks: adds = launched + switched-in (up); churn = defected + died (down).
@@ -113,7 +114,9 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
           <p className="mt-1 text-sm text-cream/45">
             {bands
               ? `Merchants gained ↑ (launched + switched in) and lost ↓ (defected + died) per ${period}.`
-              : `${noun === "merchants" ? "Merchants" : "Stores"} that launched ↑ and churned ↓ per ${period}.`}
+              : churnTracked
+              ? `${noun === "merchants" ? "Merchants" : "Stores"} that launched ↑ and churned ↓ per ${period}.`
+              : `${noun === "merchants" ? "Merchants" : "Stores"} that launched per ${period}. (Churn isn't tracked for this view.)`}
           </p>
         </div>
         {!controlled && (
@@ -151,16 +154,16 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
             <div className="text-xl font-semibold text-lilac">−{data ? data.totalChurnDeath.toLocaleString() : "—"}</div>
             <div className="text-xs text-cream/45">store died</div>
           </div>
-        </>) : (
+        </>) : churnTracked ? (
           <div>
             <div className="text-xl font-semibold text-orange">−{data ? data.totalChurn.toLocaleString() : "—"}</div>
             <div className="text-xs text-cream/45">churned, this range</div>
           </div>
-        )}
-        <div>
+        ) : null}
+        {(bands || churnTracked) && <div>
           <div className={`text-xl font-semibold ${net >= 0 ? "text-mint" : "text-orange"}`}>{net >= 0 ? "+" : "−"}{Math.abs(net).toLocaleString()}</div>
           <div className="text-xs text-cream/45">net change</div>
-        </div>
+        </div>}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-cream/50">
