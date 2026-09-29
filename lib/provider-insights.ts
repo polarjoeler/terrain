@@ -11,7 +11,7 @@
 
 import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
-import { realPaymentsClause } from "./insights";
+import { realPaymentsClause, platformClause } from "./insights";
 import { classify, cleanPayments, canonicalProvider, providerVariants, PROVIDER_SUBBRANDS, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { providerSlug } from "./provider-slug";
 
@@ -567,15 +567,19 @@ export type GrowthSeries = {
  *  PSP's merchant growth (by current gateway); optional country + custom [from,to] range. */
 export async function growthSeries(opts: {
   period?: GrowthPeriod; country?: string; provider?: string; from?: string; to?: string;
-  platform?: "shopify" | "woocommerce" | "all";
+  platform?: string;
 } = {}): Promise<GrowthSeries> {
   const period = opts.period ?? "month";
   const { country, provider, from, to } = opts;
   const sql = db();
-  // Platform filter (imported_stores only — churn_log has no platform column). Default Shopify.
-  const plat = opts.platform === "woocommerce" ? sql`AND lower(platform) = 'woocommerce'`
-    : opts.platform === "all" ? sql``
-    : sql`AND lower(platform) IS DISTINCT FROM 'woocommerce'`;
+  // Platform filter (imported_stores only) — same semantics as the insights page's platformClause,
+  // so selecting ANY CMS (Shopify, Woo, Magento, Wix, BASE, …) draws that CMS's launch history, not
+  // a Shopify fallback. Default Shopify.
+  const platform = opts.platform ?? "shopify";
+  const plat = platformClause(sql, platform);
+  // churn_log is Shopify-liveness only (no platform column), so a churn series exists only for the
+  // Shopify and combined ("all") views; every other specific CMS shows launches with churn untracked.
+  const churnApplies = platform === "shopify" || platform === "all";
   const variants = provider ? providerVariants(provider) : null;
   // Both imported_stores and churn_log have a `payments` column, so one fragment works
   // for both queries — a store/churned-store counts if it uses one of the provider's tokens.
@@ -608,7 +612,7 @@ export async function growthSeries(opts: {
   // Churn plotted on the MARKET's clock: died_at (last-confirmed-live estimate of the real death),
   // NOT churned_at (detection). died_at NULL = undatable die-off → excluded, so a backlog detection
   // sweep never spikes a period. churn_log has no platform column (Shopify liveness), so Woo has none.
-  const churned = opts.platform === "woocommerce" ? [] : await sql<{ b: string; n: number }[]>`
+  const churned = !churnApplies && !variants ? [] : await sql<{ b: string; n: number }[]>`
     SELECT to_char(date_trunc(${period}::text, died_at), 'YYYY-MM-DD') b, COUNT(*)::int n
     FROM churn_log
     WHERE COALESCE(historic, false) = false AND died_at IS NOT NULL ${ctry} ${prov}
@@ -672,10 +676,11 @@ export async function growthSeries(opts: {
     totalNew, totalSwitchIn, totalChurnDeath, totalChurnSwitch,
     totalChurn: totalChurnDeath + totalChurnSwitch, currentTotal,
     hasSwitchFlows: !!variants,
-    // Churn is genuinely measured only when we have a churn_log to read from AND the view isn't
-    // WooCommerce (churn_log is Shopify-liveness only). Provider views (variants) also track churn
-    // via payment_changes defections, so they count as tracked. Otherwise the UI hides churn+net.
-    churnTracked: !!variants || (opts.platform !== "woocommerce" && (cf?.f ?? null) !== null),
+    // Churn is genuinely measured only when we have a churn_log to read from AND the view is the
+    // Shopify or combined one (churn_log is Shopify-liveness only — Woo and every other specific CMS
+    // have none). Provider views (variants) also track churn via payment_changes defections, so they
+    // count as tracked. Otherwise the UI hides churn + net change.
+    churnTracked: !!variants || (churnApplies && (cf?.f ?? null) !== null),
   };
 }
 

@@ -23,7 +23,9 @@ export async function GET(req: Request) {
     provider: p.get("provider") || undefined,
     from: p.get("from") || undefined,
     to: p.get("to") || undefined,
-    platform: plat === "woocommerce" || plat === "all" ? plat : "shopify",
+    // Pass the selected CMS straight through (growthSeries filters by it via platformClause), so the
+    // historical chart reflects whatever platform the user picked — not a Shopify fallback.
+    platform: plat || "shopify",
   }).catch(() => null);
   if (!data) return NextResponse.json({ error: "failed" }, { status: 500 });
   return NextResponse.json(data);
