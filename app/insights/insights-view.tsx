@@ -264,6 +264,48 @@ function PaymentIntelligenceCard({
   );
 }
 
+// Time-period presets (best practice): relative windows for "how are we doing lately" + calendar
+// periods for reporting, each resolving to an absolute [from,to] that drives the growth chart.
+// Grouped so the dropdown reads clearly. "Custom" / "All time" clear the range.
+const DATE_PRESETS: { key: string; label: string; group: string }[] = [
+  { key: "", label: "All time", group: "" },
+  { key: "7d", label: "Last 7 days", group: "Recent" },
+  { key: "30d", label: "Last 30 days", group: "Recent" },
+  { key: "90d", label: "Last 90 days", group: "Recent" },
+  { key: "12mo", label: "Last 12 months", group: "Recent" },
+  { key: "thisMonth", label: "This month", group: "Calendar" },
+  { key: "lastMonth", label: "Last month", group: "Calendar" },
+  { key: "thisQuarter", label: "This quarter", group: "Calendar" },
+  { key: "lastQuarter", label: "Last quarter", group: "Calendar" },
+  { key: "ytd", label: "Year to date", group: "Calendar" },
+  { key: "q1", label: "Q1", group: "Quarters" }, { key: "q2", label: "Q2", group: "Quarters" },
+  { key: "q3", label: "Q3", group: "Quarters" }, { key: "q4", label: "Q4", group: "Quarters" },
+];
+function presetRange(key: string): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getUTCFullYear(), m = now.getUTCMonth(), q = Math.floor(m / 3);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const som = (yy: number, mm: number) => iso(new Date(Date.UTC(yy, mm, 1)));
+  const eom = (yy: number, mm: number) => iso(new Date(Date.UTC(yy, mm + 1, 0)));
+  const ago = (days: number) => iso(new Date(Date.now() - days * 864e5));
+  switch (key) {
+    case "7d": return { from: ago(7), to: iso(now) };
+    case "30d": return { from: ago(30), to: iso(now) };
+    case "90d": return { from: ago(90), to: iso(now) };
+    case "12mo": return { from: iso(new Date(Date.UTC(y - 1, m, now.getUTCDate()))), to: iso(now) };
+    case "thisMonth": return { from: som(y, m), to: iso(now) };
+    case "lastMonth": return { from: som(y, m - 1), to: eom(y, m - 1) };
+    case "thisQuarter": return { from: som(y, q * 3), to: iso(now) };
+    case "lastQuarter": { const py = q === 0 ? y - 1 : y, pq = q === 0 ? 3 : q - 1; return { from: som(py, pq * 3), to: eom(py, pq * 3 + 2) }; }
+    case "ytd": return { from: som(y, 0), to: iso(now) };
+    case "q1": return { from: som(y, 0), to: eom(y, 2) };
+    case "q2": return { from: som(y, 3), to: eom(y, 5) };
+    case "q3": return { from: som(y, 6), to: eom(y, 8) };
+    case "q4": return { from: som(y, 9), to: eom(y, 11) };
+    default: return { from: "", to: "" };
+  }
+}
+
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
   platform = "all", momentumByPeriod, shifts = [],
@@ -299,7 +341,13 @@ export function InsightsView({
   // the preset periods above still drive the tiles + distribution comparisons.
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
+  const [preset, setPreset] = useState("");   // active time-period preset ("" = all time / custom)
   const rangeActive = !!(rangeFrom || rangeTo);
+  const applyPreset = (key: string) => {
+    const { from, to } = presetRange(key);
+    setPreset(key); setRangeFrom(from); setRangeTo(to); setTfTouched(true);
+  };
+  const fmtDay = (d: string) => (d ? new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "");
   // The payment "+N adoptions" column only shows once the user has ACTIVELY engaged the timeframe
   // (picked a period or set a custom range) — not on the default load, where a bare "+N" is noise.
   const [tfTouched, setTfTouched] = useState(false);
@@ -468,19 +516,36 @@ export function InsightsView({
           </div>
           {/* Report-wide custom date range — applies to the growth chart (real launch/churn
               over any window). A visible separator so it reads as its own control. */}
-          <div className="flex items-center gap-2 border-l border-cream/10 pl-6">
-            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Custom range</span>
-            <input type="date" value={rangeFrom} onChange={(e) => { setRangeFrom(e.target.value); setTfTouched(true); }}
+          <div className="flex flex-wrap items-center gap-2 border-l border-cream/10 pl-6">
+            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Period</span>
+            {/* Preset dropdown: relative windows + calendar periods (this/last month & quarter, Q1–Q4,
+                YTD). Resolves to an absolute range that drives the growth chart. */}
+            <select value={preset} onChange={(e) => applyPreset(e.target.value)}
+              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep">
+              {["", "Recent", "Calendar", "Quarters"].map((grp) => {
+                const opts = DATE_PRESETS.filter((p) => p.group === grp);
+                return grp === "" ? opts.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)
+                  : <optgroup key={grp} label={grp}>{opts.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</optgroup>;
+              })}
+            </select>
+            <span className="text-cream/30">·</span>
+            <input type="date" value={rangeFrom} onChange={(e) => { setRangeFrom(e.target.value); setPreset(""); setTfTouched(true); }}
               className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
             <span className="text-cream/30">→</span>
-            <input type="date" value={rangeTo} onChange={(e) => { setRangeTo(e.target.value); setTfTouched(true); }}
+            <input type="date" value={rangeTo} onChange={(e) => { setRangeTo(e.target.value); setPreset(""); setTfTouched(true); }}
               className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
             {rangeActive && (
-              <button onClick={() => { setRangeFrom(""); setRangeTo(""); }}
+              <button onClick={() => { setRangeFrom(""); setRangeTo(""); setPreset(""); }}
                 className="text-xs text-cream/40 hover:text-cream">clear</button>
             )}
           </div>
         </div>
+        {rangeActive && (
+          <div className="mt-2 text-xs text-cream/45">
+            Showing <b className="text-cream/70">{fmtDay(rangeFrom) || "start"} → {fmtDay(rangeTo) || "today"}</b>
+            {" "}· as of {fmtDay(data.date)}
+          </div>
+        )}
 
         {/* ── TRACK A · OUR COVERAGE — dataset progress, NOT market movement ─────────── */}
         <div className="mt-7">
