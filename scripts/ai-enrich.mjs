@@ -20,6 +20,13 @@
 
 import postgres from "postgres";
 
+// LLM backend. LOCAL-FIRST: if LOCAL_LLM_URL is set (an OpenAI-compatible endpoint, e.g. Ollama's
+// http://localhost:11434/v1), enrichment runs there at $0. The paid Anthropic API is used ONLY when
+// ALLOW_PAID_ENRICH=1 is explicitly set — so a run can never silently bill. With neither, it errors
+// out. (Joel's directive: enrichment is local/free by default; ask before paying.)
+const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || "";      // e.g. http://localhost:11434/v1
+const LOCAL_LLM_MODEL = process.env.LOCAL_LLM_MODEL || "qwen2.5:7b";
+const ALLOW_PAID = process.env.ALLOW_PAID_ENRICH === "1";
 const MODEL = "claude-haiku-4-5-20251001";
 const DRY = process.argv.includes("--dry");
 const ALL = process.argv.includes("--all");
@@ -126,6 +133,32 @@ Then write a single concise sentence (max 18 words) describing what the store se
 Respond with ONLY minified JSON: {"category":"...","description":"..."}`;
 }
 
+// Extract {category, description} from raw model text, tolerant of a local model wrapping the JSON.
+function parseEnrichment(text) {
+  const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
+  const category = TAXONOMY.includes(parsed.category) ? parsed.category : null;
+  const description = typeof parsed.description === "string" ? parsed.description.slice(0, 200) : null;
+  return { category, description };
+}
+
+// Local (OpenAI-compatible, e.g. Ollama) — $0.
+async function askLocal(g) {
+  const res = await fetch(`${LOCAL_LLM_URL.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: LOCAL_LLM_MODEL,
+      messages: [{ role: "user", content: buildPrompt(g) }],
+      max_tokens: 200, temperature: 0.2,
+      response_format: { type: "json_object" },   // Ollama/OpenAI honour this; ignored harmlessly otherwise
+    }),
+  });
+  if (!res.ok) throw new Error(`local LLM ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  return parseEnrichment(data.choices?.[0]?.message?.content ?? "");
+}
+
+// Paid Anthropic — ONLY when explicitly opted in (ALLOW_PAID_ENRICH=1).
 async function askClaude(g) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -138,19 +171,21 @@ async function askClaude(g) {
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
-  const text = data.content?.[0]?.text ?? "";
-  const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
-  // Only accept a category that's actually in our taxonomy.
-  const category = TAXONOMY.includes(parsed.category) ? parsed.category : null;
-  const description = typeof parsed.description === "string" ? parsed.description.slice(0, 200) : null;
-  return { category, description };
+  return parseEnrichment(data.content?.[0]?.text ?? "");
+}
+
+// Backend router — local-first, paid only on explicit opt-in, else refuse.
+async function askLLM(g) {
+  if (LOCAL_LLM_URL) return askLocal(g);
+  if (ALLOW_PAID) return askClaude(g);
+  throw new Error("no LLM backend: set LOCAL_LLM_URL (local, free) or ALLOW_PAID_ENRICH=1 (paid Anthropic)");
 }
 
 async function processStore(sql, row) {
   const g = await gather(row.domain);
   let category = null, description = null;
   if (!DRY && !lowInfo(g)) {
-    try { ({ category, description } = await askClaude(g)); }
+    try { ({ category, description } = await askLLM(g)); }
     catch (e) { console.log(`  ! ${g.domain}: AI failed (${e.message})`); }
   }
   if (DRY) {
@@ -173,10 +208,12 @@ async function processStore(sql, row) {
 }
 
 async function main() {
-  if (!DRY && !process.env.ANTHROPIC_API_KEY) {
-    console.error("ANTHROPIC_API_KEY not set — add it to .env.local, or run with --dry.");
+  if (!DRY && !LOCAL_LLM_URL && !ALLOW_PAID) {
+    console.error("No LLM backend. Set LOCAL_LLM_URL (local, free — e.g. http://localhost:11434/v1)\n"
+      + "or ALLOW_PAID_ENRICH=1 to use the paid Anthropic API. Or run with --dry.");
     process.exit(2);
   }
+  if (!DRY) console.log(LOCAL_LLM_URL ? `backend: LOCAL ${LOCAL_LLM_MODEL} @ ${LOCAL_LLM_URL}` : `backend: PAID Anthropic ${MODEL}`);
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONCURRENCY + 1 });
   try {
     await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ`;
