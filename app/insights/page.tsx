@@ -4,6 +4,7 @@ import {
   snapshotInsights,
   getBaselineDate,
   availableCountries,
+  availablePlatforms,
   cohortCount,
   type PlatformSel,
 } from "@/lib/insights";
@@ -43,21 +44,28 @@ export default async function Insights({
   const cohorts = [{ tag: "new", count: newCount }, ...tags];
   // Only accept a cohort that actually has stores.
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
-  // Default view is "all" — a combined Woo + Shopify (+ future platforms) growth picture per
-  // market, as the landing state. The Shopify / WooCommerce tabs then drill into one platform.
-  let platform: PlatformSel = sp.platform === "woocommerce" || sp.platform === "shopify" || sp.platform === "magento" || sp.platform === "all" ? sp.platform : "all";
+  // Which CMSs actually have a live presence in this market — the data-driven platform picker.
+  const platforms = await availablePlatforms(country).catch(() => [{ platform: "shopify", live: 0 }]);
+  // Allowed selections: "all" + every platform in the picker, plus the named ones so deep links
+  // (?platform=woocommerce) survive even in a market where that CMS is currently thin.
+  const allowed = new Set<string>(["all", "woocommerce", "magento", ...platforms.map((p) => p.platform)]);
+  // Default view is "all" — a combined Shopify + Woo (+ every other CMS) growth picture per market,
+  // as the landing state. The per-CMS chips then drill into one platform.
+  let platform: PlatformSel = sp.platform && allowed.has(sp.platform) ? sp.platform : "all";
   // Persona lens: when the user hasn't explicitly chosen a platform, default to their profile
   // focus IF it's a single specific CMS (e.g. a Woo-only shop) — otherwise stay on "all".
   if (!sp.platform) {
     const [prof, org] = await Promise.all([getUserProfile(email).catch(() => null), getOrgProfile(orgKey(email)).catch(() => null)]);
     const focus = (prof?.leadFocus?.length ? prof.leadFocus : org?.cmsFocus) ?? [];
-    const specific = focus.filter((f) => f === "shopify" || f === "woocommerce" || f === "magento");
+    const specific = focus.filter((f) => allowed.has(f));
     if (specific.length === 1) platform = specific[0] as PlatformSel;
   }
 
   const [data, baselineDate, momentumByPeriod, shifts] = await Promise.all([
     cachedInsights(country, tag, platform),
-    getBaselineDate(),
+    // Guarded: a dropped-connection blip on this tiny query must not 500 the whole page when the
+    // heavy insights data itself is served fine (cachedInsights serves stale on failure).
+    getBaselineDate().catch(() => null),
     // Momentum for EVERY timeframe (the card follows the selector client-side), scoped to this
     // market, launch-keyed among newly-launched stores (not discovered_at / snapshot counts, which
     // the payment backfill inflated). Empty maps on failure so the page still renders.
@@ -92,6 +100,7 @@ export default async function Insights({
       cohorts={cohorts}
       tag={tag ?? ""}
       platform={platform}
+      platforms={platforms}
       momentumByPeriod={momentumByPeriod}
       shifts={shifts}
     />
