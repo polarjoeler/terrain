@@ -20,13 +20,17 @@ export function ipOf(req: Request): string {
   return (xff ? xff.split(",")[0] : req.headers.get("x-real-ip") || "").trim() || "unknown";
 }
 
-async function ensure(sql: ReturnType<typeof db>) {
-  await sql`CREATE TABLE IF NOT EXISTS login_events (
-    id bigserial PRIMARY KEY, email text NOT NULL, ip text, ua text,
-    at timestamptz NOT NULL DEFAULT now())`;
-  await sql`CREATE TABLE IF NOT EXISTS export_log (
-    id bigserial PRIMARY KEY, email text NOT NULL, export_id text, rows int, ip text,
-    at timestamptz NOT NULL DEFAULT now())`;
+// Once per process — not per request (see lib/tags.ts). The DDL takes ACCESS EXCLUSIVE.
+let _ensured: Promise<void> | null = null;
+function ensure(sql: ReturnType<typeof db>): Promise<void> {
+  return (_ensured ??= (async () => {
+    await sql`CREATE TABLE IF NOT EXISTS login_events (
+      id bigserial PRIMARY KEY, email text NOT NULL, ip text, ua text,
+      at timestamptz NOT NULL DEFAULT now())`;
+    await sql`CREATE TABLE IF NOT EXISTS export_log (
+      id bigserial PRIMARY KEY, email text NOT NULL, export_id text, rows int, ip text,
+      at timestamptz NOT NULL DEFAULT now())`;
+  })().catch((e) => { _ensured = null; throw e; }));
 }
 
 /** Record a sign-in. Best-effort — never block auth on a logging failure. */

@@ -273,12 +273,14 @@ const BROWSE_TTL_MS = 5 * 60 * 1000;
 let _browse: { at: number; data: Browse } | null = null;
 let _browseInflight: Promise<Browse> | null = null;
 
-async function ensureSnapshotTable() {
-  await db()`CREATE TABLE IF NOT EXISTS browse_snapshot (
+// Once per process — not per request (see lib/tags.ts). The DDL takes ACCESS EXCLUSIVE.
+let _ensuredSnapshot: Promise<void> | null = null;
+function ensureSnapshotTable(): Promise<void> {
+  return (_ensuredSnapshot ??= db()`CREATE TABLE IF NOT EXISTS browse_snapshot (
     id int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     data jsonb NOT NULL,
     computed_at timestamptz NOT NULL DEFAULT now()
-  )`;
+  )`.then(() => {}).catch((e) => { _ensuredSnapshot = null; throw e; }));
 }
 
 /** Recompute the browse snapshot and persist it. Run OFF the request path — from the

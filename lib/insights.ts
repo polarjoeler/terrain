@@ -5,6 +5,7 @@
  *  the UI can drill in. Daily snapshots (insights_snapshots) power the trends.
  */
 
+import { after } from "next/server";
 import { db as sharedDb } from "./db";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS } from "./markets";
@@ -325,18 +326,42 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
   // A cached row from an OLDER schema (before a new field was added) must not be served — reading
   // the missing field crashes the page. Treat it as stale so it recomputes with the current shape.
   const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro;
-  if (row && Date.now() - new Date(row.computed_at).getTime() < CACHE_FRESH_MS) {
-    const parsed = parse(row.data);
-    if (currentSchema(parsed)) return parsed;
+  // A row is "usable" only if it parses AND matches the current schema (an older-schema row would
+  // crash the page reading a missing field, so it's treated as cold).
+  const usable = row && currentSchema(parse(row.data)) ? parse(row.data) : null;
+  const ageMs = row ? Date.now() - new Date(row.computed_at).getTime() : Infinity;
+
+  if (usable && ageMs < CACHE_FRESH_MS) return usable; // fresh → fast
+
+  // STALE-WHILE-REVALIDATE: a stale (but current-schema) row is served INSTANTLY and the recompute
+  // runs AFTER the response (Next after() → Vercel waitUntil), so no viewer ever blocks on the
+  // ~12-aggregate scan. This is the fix for the slow/again-slow insights pages: the warm cron had
+  // fallen behind (rows were hours stale), which meant every visit recomputed inline. Only a
+  // genuinely COLD key (no row, or an old-schema row) still computes inline — once — then SWR keeps
+  // it warm. computeInsightsUncached forces a real recompute (not the in-process cache).
+  if (usable) {
+    let scheduled = false;
+    try {
+      after(async () => {
+        // computeInsights (not …Uncached) so concurrent stale readers share ONE recompute via the
+        // inflight guard, instead of each firing a full ~12-query scan and storming the pool.
+        try { await storeInsightsCache(country, t, platform, await computeInsights(country, tag, platform)); }
+        catch { /* background refresh is best-effort */ }
+      });
+      scheduled = true;
+    } catch { /* not in a request scope (a script/warmer) → refresh inline below */ }
+    if (scheduled) return usable;                                   // stale now, fresh next time
+    try {
+      const data = await computeInsights(country, tag, platform);
+      await storeInsightsCache(country, t, platform, data);
+      return data;
+    } catch { return usable; }                                     // inline refresh failed → serve stale
   }
-  try {
-    const data = await computeInsights(country, tag, platform);
-    await storeInsightsCache(country, t, platform, data);
-    return data;
-  } catch (e) {
-    if (row) { const p = parse(row.data); if (currentSchema(p)) return p; }  // serve stale only if same shape
-    throw e;
-  }
+
+  // Cold key → compute inline (once; computeInsights' inflight guard collapses a stampede).
+  const data = await computeInsights(country, tag, platform);
+  await storeInsightsCache(country, t, platform, data);
+  return data;
 }
 
 /** Recompute + store every visible (market × platform) view — for the cron/warm job. */
