@@ -161,6 +161,24 @@ const AFRICA_ISO2 = [
   "TZ", "TG", "TN", "UG", "EH", "ZM", "ZW",
 ];
 
+// SHOPIFY PAYMENTS ORACLE (read-time, immune to the country column). Shopify Payments cannot run in
+// Africa, so a store TAGGED to an African market that carries shopify_payments but has an
+// international domain AND a non-African currency is a mislabelled international store. StoreCensus
+// keeps re-tagging these as ZA and the daily retag races the re-imports — so instead of relying on a
+// clean country column, EXCLUDE them from every payments count by construction. A `.za`/local ccTLD
+// OR a local currency keeps a genuine SA store in (matches the retag guard). Import and AND this
+// fragment into any query that counts payment providers.
+const AFRICA_LOCAL_CCTLD = "\\.(za|ke|ng|eg|gh|ma|ci|tz|ug|rw|sn|cm|et|dz|tn|mu|mw|mz|na|zm|zw|bw|ao|ls|sz|so|ly)$";
+const AFRICA_LOCAL_CCY = ["ZAR","KES","NGN","EGP","GHS","MAD","XOF","XAF","TZS","UGX","RWF","ETB","DZD","TND","MUR","MWK","MZN","NAD","ZMW","BWP","AOA","LSL","SZL","SOS","LYD"];
+export function realPaymentsClause(sql: ReturnType<typeof db>) {
+  return sql`NOT (
+    lower(payments) LIKE '%shopify_payments%'
+    AND country = ANY(${AFRICA_ISO2})
+    AND domain !~* ${AFRICA_LOCAL_CCTLD}
+    AND (currency IS NULL OR upper(currency) <> ALL(${AFRICA_LOCAL_CCY}))
+  )`;
+}
+
 /** Per-country rollup for the Africa overview map — live store count + real launches in the last
  *  30 days, per ISO2, respecting the platform toggle. Africa-only. Keyed by UPPER(country). */
 export async function africaOverview(
@@ -435,7 +453,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // snapshot-providers.mjs and lib/provider-insights.ts.
   const payRows = await sql`
     SELECT payments FROM imported_stores
-    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'`;
+    WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
+      AND ${realPaymentsClause(sql)}`;
   const providerCount = new Map<string, number>();
   const firstCount = new Map<string, number>();
   const typeStores: Record<PayType, number> = { PSP: 0, BNPL: 0, APM: 0 };
@@ -839,6 +858,10 @@ const REPORT_SECTIONS: Record<string, SecCfg> = {
   payments:   { column: "payments", multi: true, title: "Payment providers", drillParam: "payment", listNorm: (arr) => cleanPayments(arr).map(canonicalProvider) },
   leading:    { column: "payments", multi: true, title: "Leading provider at checkout", drillParam: "payment", listNorm: (arr) => cleanPayments(arr).map(canonicalProvider), firstOnly: true },
   shipping:   { column: "shipping_providers", multi: true, title: "Shipping providers", drillParam: "shipping", norm: normalizeCarrier },
+  // subscription_tools is written PRE-CANONICALISED by detect-subscriptions.mjs (Bold / Appstle /
+  // Recharge / Skio / Loop / Smartrr / Seal / Shopify Subscriptions / Woo Subscriptions / Custom),
+  // so no norm needed. Detects the recurring-billing tech regardless of the payment workaround.
+  subscriptions: { column: "subscription_tools", multi: true, title: "Subscription tools", drillParam: "subscription" },
   apps:       { column: "apps", multi: true, title: "Apps installed", drillParam: "app", norm: appSlugLabel },
   categories: { column: "category", multi: false, title: "Categories", drillParam: "category" },
   themes:     { column: "theme", multi: false, title: "Themes", drillParam: "theme" },

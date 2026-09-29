@@ -17,6 +17,15 @@ const norm = (s) => s.trim().toLowerCase();
 // lib/provider-insights.ts and lib/insights.ts — don't reintroduce vendor rows into a share base.
 const isProbeVerified = (r) => r.payments_source !== "storecensus";
 
+// SHOPIFY PAYMENTS ORACLE (mirror of realPaymentsClause in lib/insights.ts — keep in sync). Shopify
+// Payments can't run in Africa, so an African-tagged store carrying it with an intl domain AND a
+// non-African currency is a mislabelled international store (StoreCensus keeps re-tagging these ZA;
+// the daily retag races the re-imports). Exclude them so the snapshot the /insights/payments page
+// reads is correct-by-construction, not dependent on a clean country column.
+const AFRICA_ISO2 = ["DZ","AO","BJ","BW","BF","BI","CM","CV","CF","TD","KM","CG","CD","CI","DJ","EG","GQ","ER","SZ","ET","GA","GM","GH","GN","GW","KE","LS","LR","LY","MG","MW","ML","MR","MU","MA","MZ","NA","NE","NG","RW","ST","SN","SC","SL","SO","ZA","SS","SD","TZ","TG","TN","UG","EH","ZM","ZW"];
+const AFRICA_LOCAL_CCTLD = "\\.(za|ke|ng|eg|gh|ma|ci|tz|ug|rw|sn|cm|et|dz|tn|mu|mw|mz|na|zm|zw|bw|ao|ls|sz|so|ly)$";
+const AFRICA_LOCAL_CCY = ["ZAR","KES","NGN","EGP","GHS","MAD","XOF","XAF","TZS","UGX","RWF","ETB","DZD","TND","MUR","MWK","MZN","NAD","ZMW","BWP","AOA","LSL","SZL","SOS","LYD"];
+
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3 });
   try {
@@ -37,7 +46,13 @@ async function main() {
     const rows = await sql`
       SELECT country, platform, payments, discovered_at, payments_source FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-        AND payments IS NOT NULL AND payments <> ''`;
+        AND payments IS NOT NULL AND payments <> ''
+        AND NOT (
+          lower(payments) LIKE '%shopify_payments%'
+          AND country = ANY(${AFRICA_ISO2})
+          AND domain !~* ${AFRICA_LOCAL_CCTLD}
+          AND (currency IS NULL OR upper(currency) <> ALL(${AFRICA_LOCAL_CCY}))
+        )`;
 
     // Per (platform|country|gateway) counters + verified base per (platform|country). We roll a
     // combined 'all' platform (every CMS) AND each store's own CMS, and 'ALL' country AND its own

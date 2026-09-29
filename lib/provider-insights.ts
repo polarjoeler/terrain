@@ -11,6 +11,7 @@
 
 import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
+import { realPaymentsClause } from "./insights";
 import { classify, cleanPayments, canonicalProvider, providerVariants, PROVIDER_SUBBRANDS, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { providerSlug } from "./provider-slug";
 
@@ -118,7 +119,8 @@ export async function providerInsights(provider: string, country?: string): Prom
     -- CANONICAL: market share counts only PROBE-VERIFIED stores, never the StoreCensus vendor import
     -- (generic US-stack data that misses local PSPs and pads the denominator). Same rule in
     -- snapshot-providers.mjs and lib/insights.ts.
-    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'`;
+    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
+      AND ${realPaymentsClause(sql)}`;
   const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
 
   const verifiedBase = rows.length;
