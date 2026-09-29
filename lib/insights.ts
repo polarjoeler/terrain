@@ -42,7 +42,8 @@ export type InsightsData = {
     migrated: number;
     neverChecked: number;  // no liveness verdict yet
     checked30d: number;    // liveness-verified within 30 days (scan freshness)
-    paymentPct: number;    // % of LIVE stores with payment data
+    paymentPct: number;    // % of REACHABLE stores with a verified gateway (matches /ops)
+    paymentReachable: number; // verified + never-probed — the honest payment denominator
     launchPct: number;     // % of tracked stores with a known launch date
   };
   plusTotal: number;
@@ -403,7 +404,11 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE za AND live_status = 'migrated')::int               AS cov_migrated,
       COUNT(*) FILTER (WHERE za AND live_checked_at IS NULL)::int                AS cov_never_checked,
       COUNT(*) FILTER (WHERE za AND live_checked_at > now() - interval '30 days')::int AS cov_checked_30d,
-      COUNT(*) FILTER (WHERE za AND launch_date IS NOT NULL)::int                AS cov_has_launch
+      COUNT(*) FILTER (WHERE za AND launch_date IS NOT NULL)::int                AS cov_has_launch,
+      -- Live stores never payment-probed. reachable payment denominator = verified + this (a store
+      -- probed and found NO gateway has no completable checkout, so it's not coverable — same
+      -- reachable metric as /ops, so the insights page agrees with /ops instead of showing a raw %).
+      COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL)::int AS cov_pay_neverprobed
     FROM (
       SELECT *,
         (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
@@ -675,7 +680,10 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       migrated: Number(t.cov_migrated),
       neverChecked: Number(t.cov_never_checked),
       checked30d: Number(t.cov_checked_30d),
-      paymentPct: pct(verified, storesTotal),
+      // REACHABLE payment coverage (matches /ops): verified ÷ (verified + never-probed). Excludes
+      // stores probed-and-found-no-gateway (no completable checkout) from the denominator.
+      paymentReachable: verified + Number(t.cov_pay_neverprobed),
+      paymentPct: pct(verified, verified + Number(t.cov_pay_neverprobed)),
       launchPct: pct(Number(t.cov_has_launch), Number(t.churn_total)),
     },
     plusTotal: Number(t.plus_total),

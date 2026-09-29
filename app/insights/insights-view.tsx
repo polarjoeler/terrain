@@ -229,7 +229,7 @@ function PaymentIntelligenceCard({
   return (
     <Card
       title="Payment intelligence"
-      subtitle={subtitle ?? `Checkout-verified across ${data.paymentsVerifiedStores.toLocaleString()} of ${data.storesTotal.toLocaleString()} stores (${Math.round((100 * data.paymentsVerifiedStores) / Math.max(data.storesTotal, 1))}% and growing)`}
+      subtitle={subtitle ?? `Checkout-verified on ${data.coverage.paymentPct}% of reachable stores (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()}) — the rest have no completable checkout to read`}
       reportHref={`/insights/payments?country=${country}`}
     >
       {/* Headline signals for payment-company subscribers */}
