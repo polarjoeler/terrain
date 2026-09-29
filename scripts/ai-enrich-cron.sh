@@ -12,6 +12,14 @@ export NVM_DIR="$HOME/.nvm"
 
 cd /Users/joel/storepulse || exit 1
 
-echo "=== ai-enrich sweep $(date '+%Y-%m-%d %H:%M:%S') ==="
-node --env-file=.env.local scripts/ai-enrich.mjs --all
+# Scoped to a market list — NOT --all. `--all` alone swept the entire ~600k global base (~$555 in
+# Haiku) on stores in markets we don't sell. JP is the current priority (largest un-described base:
+# ~16k Shopify stores missing category/description ≈ $16). Widen FOCUS to add markets (ZA is at 88%
+# payments but its descriptions lag too; Africa ≈ +$31). Gated to rows still missing category/
+# description, so re-runs never re-charge. NOTE: ai-enrich reads products.json, so it only enriches
+# Shopify/NULL-platform stores — the non-Shopify JP CMS stores (BASE/Cafe24/EC-CUBE/Woo…) need a
+# separate enrichment path.
+FOCUS="JP"
+echo "=== ai-enrich sweep $(date '+%Y-%m-%d %H:%M:%S') (markets: $FOCUS) ==="
+node --env-file=.env.local scripts/ai-enrich.mjs --all --country "$FOCUS"
 echo "=== done $(date '+%H:%M:%S') ==="
