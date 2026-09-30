@@ -6,6 +6,11 @@ import type { NextConfig } from "next";
 const radarHost = [{ type: "host" as const, value: "radar.tembocommerce.app" }];
 
 const nextConfig: NextConfig = {
+  // The public "/" and "/africa" pages pre-render at build time and read the africa timeline from
+  // the shared agg cache; if that row is cold the build computes it inline, which can exceed the
+  // default 60s static-generation limit on a slow pooler and fail the whole deploy. Give it real
+  // headroom — normal builds finish well under this; it only matters when the cache is cold.
+  staticPageGenerationTimeout: 180,
   async rewrites() {
     // beforeFiles: these run BEFORE the filesystem, so the radar host's "/" is
     // rewritten to /radar before Next serves the real homepage. As a plain array

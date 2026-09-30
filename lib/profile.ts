@@ -52,16 +52,22 @@ export type UserProfile = {
   completedAt: string | null;
 };
 
-async function ensureTables(sql: ReturnType<typeof db>) {
-  await sql`CREATE TABLE IF NOT EXISTS org_profile (
-    org text PRIMARY KEY, company_type text, cms_focus text[] DEFAULT '{}',
-    track_own_performance boolean DEFAULT false, extras text,
-    created_by text, created_at timestamptz NOT NULL DEFAULT now())`;
-  await sql`CREATE TABLE IF NOT EXISTS user_profile (
-    email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
-    lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
-    digest boolean DEFAULT true, completed_at timestamptz)`;
-  await sql`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS last_digest_at timestamptz`;
+// Once per process — not per request (see lib/tags.ts). getUserProfile/getOrgProfile are on the
+// insights hot path; the ALTER TABLE here takes ACCESS EXCLUSIVE, so running it every request was
+// a real serialization point. Memoise the first success; reset on failure so it retries.
+let _ensured: Promise<void> | null = null;
+function ensureTables(sql: ReturnType<typeof db>): Promise<void> {
+  return (_ensured ??= (async () => {
+    await sql`CREATE TABLE IF NOT EXISTS org_profile (
+      org text PRIMARY KEY, company_type text, cms_focus text[] DEFAULT '{}',
+      track_own_performance boolean DEFAULT false, extras text,
+      created_by text, created_at timestamptz NOT NULL DEFAULT now())`;
+    await sql`CREATE TABLE IF NOT EXISTS user_profile (
+      email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
+      lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
+      digest boolean DEFAULT true, completed_at timestamptz)`;
+    await sql`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS last_digest_at timestamptz`;
+  })().catch((e) => { _ensured = null; throw e; }));
 }
 
 // Users whose digest is due now — opted in, and their cadence has elapsed since the last send.

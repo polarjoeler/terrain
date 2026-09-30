@@ -10,10 +10,16 @@ export { PRESET_TAGS, tagLabel };
 function db() {
   return sharedDb();
 }
-async function ensure() {
-  await db()`CREATE TABLE IF NOT EXISTS store_tags (
+// Ensure the table exists ONCE per process, not on every call. This DDL takes a brief
+// ACCESS EXCLUSIVE lock; running it on every request (tagCounts is on the insights hot path)
+// added latency and a serialization point. Memoise the first success; reset on failure to retry.
+let _ensured: Promise<void> | null = null;
+function ensure(): Promise<void> {
+  return (_ensured ??= db()`CREATE TABLE IF NOT EXISTS store_tags (
     domain TEXT NOT NULL, tag TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (domain, tag))`;
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (domain, tag))`
+    .then(() => {})
+    .catch((e) => { _ensured = null; throw e; }));
 }
 
 /** All distinct tags in use, with counts (preset order first). */

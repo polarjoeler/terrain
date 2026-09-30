@@ -9,11 +9,15 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:
 function db() {
   return sharedDb();
 }
-async function ensure() {
-  await db()`CREATE TABLE IF NOT EXISTS integrations (
+// Once per process — not per request (see lib/tags.ts). The DDL takes ACCESS EXCLUSIVE.
+let _ensured: Promise<void> | null = null;
+function ensure(): Promise<void> {
+  return (_ensured ??= db()`CREATE TABLE IF NOT EXISTS integrations (
     owner TEXT NOT NULL, provider TEXT NOT NULL, secret TEXT NOT NULL,
     config JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (owner, provider))`;
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (owner, provider))`
+    .then(() => {})
+    .catch((e) => { _ensured = null; throw e; }));
 }
 
 /* ---- credential encryption ------------------------------------------------ */
