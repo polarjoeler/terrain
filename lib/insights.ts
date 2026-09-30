@@ -262,14 +262,66 @@ const _insightsInflight = new Map<string, Promise<InsightsData>>();
 
 // Platform selector for insights. "shopify" (default) = everything except confirmed WooCommerce
 // (Shopify + not-yet-classified CT discoveries); "woocommerce" = confirmed Woo; "all" = both.
-export type PlatformSel = "shopify" | "woocommerce" | "magento" | "all";
+// The known CMSs get first-class labels/colours; any other detected platform slug is still a valid
+// selection (data-driven picker), so the type stays open. `(string & {})` keeps autocomplete for the
+// named ones while accepting the long tail (wix, base, cafe24, ec-cube, squarespace, …).
+export type PlatformSel = "shopify" | "woocommerce" | "magento" | "all" | (string & {});
 export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel) {
-  if (platform === "woocommerce") return sql`AND lower(platform) = 'woocommerce'`;
-  if (platform === "magento") return sql`AND lower(platform) = 'magento'`;
   if (platform === "all") return sql``;
   // "shopify" = real Shopify + not-yet-classified CT discoveries (platform NULL). Explicit rather
-  // than "not Woo" so surfaced non-Shopify platforms (Magento, later Wix…) don't leak into it.
-  return sql`AND (lower(platform) = 'shopify' OR platform IS NULL)`;
+  // than "not Woo" so surfaced non-Shopify platforms (Magento, Wix, BASE…) don't leak into it.
+  if (platform === "shopify") return sql`AND (lower(platform) = 'shopify' OR platform IS NULL)`;
+  // Every other CMS is an exact slug match. `${}` is parameterised (safe), lower-cased both sides.
+  return sql`AND lower(platform) = ${String(platform).toLowerCase()}`;
+}
+
+// Known CMS slug → display label + brand dot, for the platform picker and chart titles. The picker
+// itself is data-driven (availablePlatforms); this only decorates the slugs that show up.
+export const PLATFORM_META: Record<string, { label: string; dot: string }> = {
+  all: { label: "All", dot: "#8fb0c4" },
+  shopify: { label: "Shopify", dot: "#95BF47" },
+  woocommerce: { label: "WooCommerce", dot: "#96588a" },
+  magento: { label: "Magento", dot: "#f26322" },
+  wix: { label: "Wix", dot: "#faad4d" },
+  base: { label: "BASE", dot: "#1e88e5" },
+  squarespace: { label: "Squarespace", dot: "#111111" },
+  cafe24: { label: "Cafe24", dot: "#3fb1ce" },
+  "ec-cube": { label: "EC-CUBE", dot: "#e94709" },
+  colorme: { label: "カラーミー", dot: "#f06d6d" },
+  makeshop: { label: "MakeShop", dot: "#e2211c" },
+  "salesforce commerce cloud": { label: "Salesforce", dot: "#00a1e0" },
+  bigcommerce: { label: "BigCommerce", dot: "#121118" },
+  prestashop: { label: "PrestaShop", dot: "#df0067" },
+  webflow: { label: "Webflow", dot: "#146ef5" },
+  shopstar: { label: "ShopStar", dot: "#ff6f61" },
+  vtex: { label: "VTEX", dot: "#f71963" },
+};
+export function platformLabel(platform: PlatformSel): string {
+  const p = String(platform);
+  return PLATFORM_META[p]?.label ?? (p ? p.charAt(0).toUpperCase() + p.slice(1) : "All");
+}
+
+// Data-driven platform picker: the CMSs that actually have a live presence in a market, so the
+// insights page offers exactly the platforms worth drilling into (and surfaces new ones as we
+// enrich them) instead of a hardcoded list with mostly-empty pages. Shopify (incl. unclassified CT
+// discoveries) always leads. `minLive` keeps 1–2-store noise out of the picker.
+export async function availablePlatforms(country?: string, minLive = 10): Promise<{ platform: string; live: number }[]> {
+  const sql = db();
+  const rows = await sql<{ p: string | null; n: number }[]>`
+    SELECT lower(platform) p, COUNT(*)::int n FROM imported_stores
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      ${country ? sql`AND country = ${country}` : sql``}
+    GROUP BY 1`;
+  // Fold platform NULL (unclassified CT discoveries) into Shopify, matching platformClause.
+  let shopify = 0;
+  const others: { platform: string; live: number }[] = [];
+  for (const r of rows) {
+    const n = Number(r.n);
+    if (r.p === "shopify" || r.p == null) shopify += n;
+    else if (n >= minLive) others.push({ platform: r.p, live: n });
+  }
+  others.sort((a, b) => b.live - a.live);
+  return [{ platform: "shopify", live: shopify }, ...others];
 }
 
 export async function computeInsights(country = "ZA", tag?: string, platform: PlatformSel = "shopify"): Promise<InsightsData> {

@@ -8,7 +8,33 @@ import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
 import { marketLabel, marketAdjective } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
-import type { InsightsData, InsightItem } from "@/lib/insights";
+import type { InsightsData, InsightItem, PlatformSel } from "@/lib/insights";
+
+// CMS decoration for the picker + chart titles. Kept client-side (a copy of PLATFORM_META in
+// lib/insights) so this "use client" file doesn't pull the server-only insights module into the
+// bundle. The picker itself is data-driven — this only labels/colours the slugs that appear.
+const PLATFORM_META: Record<string, { label: string; dot: string }> = {
+  all: { label: "All", dot: "#8fb0c4" },
+  shopify: { label: "Shopify", dot: "#95BF47" },
+  woocommerce: { label: "WooCommerce", dot: "#96588a" },
+  magento: { label: "Magento", dot: "#f26322" },
+  wix: { label: "Wix", dot: "#faad4d" },
+  base: { label: "BASE", dot: "#1e88e5" },
+  squarespace: { label: "Squarespace", dot: "#111111" },
+  cafe24: { label: "Cafe24", dot: "#3fb1ce" },
+  "ec-cube": { label: "EC-CUBE", dot: "#e94709" },
+  colorme: { label: "カラーミー", dot: "#f06d6d" },
+  makeshop: { label: "MakeShop", dot: "#e2211c" },
+  "salesforce commerce cloud": { label: "Salesforce", dot: "#00a1e0" },
+  bigcommerce: { label: "BigCommerce", dot: "#121118" },
+  prestashop: { label: "PrestaShop", dot: "#df0067" },
+  webflow: { label: "Webflow", dot: "#146ef5" },
+  shopstar: { label: "ShopStar", dot: "#ff6f61" },
+  vtex: { label: "VTEX", dot: "#f71963" },
+};
+const platformLabel = (p: string): string =>
+  PLATFORM_META[p]?.label ?? (p ? p.charAt(0).toUpperCase() + p.slice(1) : "All");
+const platformDot = (p: string): string => PLATFORM_META[p]?.dot ?? "#8fb0c4";
 import { GrowthChart } from "@/app/components/growth-chart";
 import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 
@@ -308,7 +334,7 @@ function presetRange(key: string): { from: string; to: string } {
 
 export function InsightsView({
   data, history, baselineDate, countries = [], country = "ZA", cohorts = [], tag = "",
-  platform = "all", momentumByPeriod, shifts = [],
+  platform = "all", platforms = [], momentumByPeriod, shifts = [],
 }: {
   data: InsightsData;
   history: InsightsData[];
@@ -317,7 +343,8 @@ export function InsightsView({
   country?: string;
   cohorts?: { tag: string; count: number }[];
   tag?: string;
-  platform?: "shopify" | "woocommerce" | "magento" | "all";
+  platform?: PlatformSel;
+  platforms?: { platform: string; live: number }[];
   momentumByPeriod?: Record<"day" | "week" | "month" | "quarter" | "year", ProviderMomentum[]>;
   shifts?: PaymentShift[];
 }) {
@@ -439,7 +466,7 @@ export function InsightsView({
               ? <>What the newest {marketAdjective(country)} stores are choosing — </>
               : tag
                 ? <>The {marketAdjective(country)} <b className="text-cream">{tagLabel(tag)}</b> — </>
-                : <>Where the {marketAdjective(country)} {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "ecommerce"} market is heading — </>}
+                : <>Where the {marketAdjective(country)} {platform === "all" ? "ecommerce" : platformLabel(platform)} market is heading — </>}
             payment stacks, themes, apps, categories and enterprise adoption, from {data.storesTotal.toLocaleString()}{" "}
             {tag === "new" ? "stores found in the last 90 days" : tag ? "stores in this cohort" : "live stores we track"}.
           </p>
@@ -480,12 +507,15 @@ export function InsightsView({
               </select>
             </div>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
-            {([["shopify", "Shopify", "#95BF47"], ["woocommerce", "WooCommerce", "#96588a"], ["magento", "Magento", "#f26322"], ["all", "All", "#8fb0c4"]] as const).map(([key, label, dot]) => (
+            {/* Data-driven: "All" + every CMS with a live presence in this market (availablePlatforms).
+                Shopify always leads; the long tail (Wix, BASE, cafe24, …) appears where it exists. */}
+            {[{ platform: "all", live: 0 }, ...platforms].map(({ platform: key, live }) => (
               <button key={key} onClick={() => go({ platform: key })}
+                title={key === "all" ? "Every CMS combined" : `${live.toLocaleString()} live ${platformLabel(key)} stores in ${marketLabel(country)}`}
                 className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition ${platform === key ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:text-cream"}`}>
-                <span className="h-2 w-2 rounded-full" style={{ background: dot }} /> {label}
+                <span className="h-2 w-2 rounded-full" style={{ background: platformDot(key) }} /> {platformLabel(key)}
               </button>
             ))}
           </div>
@@ -570,7 +600,7 @@ export function InsightsView({
         <div className="mt-8 grid gap-5 md:grid-cols-2">
           {/* New launches vs churn per period (diverging bars). On the combined "all" view this is
               all-ecommerce; the cumulative Shopify-vs-Woo trajectory sits beside it below. */}
-          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "woocommerce" ? "WooCommerce" : platform === "all" ? "all-ecommerce" : "Shopify"} launches & churn`.replace(/\s+/g, " ")} />
+          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "all" ? "all-ecommerce" : platformLabel(platform)} launches & churn`.replace(/\s+/g, " ")} />
 
           {/* Combined view only: cumulative growth split by platform, so you can see whether Woo or
               Shopify is growing faster (hover a legend chip for its selling/active/dormant split). */}

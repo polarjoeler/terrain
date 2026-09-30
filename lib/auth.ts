@@ -132,11 +132,16 @@ export async function currentUser(): Promise<string | null> {
   return payload && payload.kind === "session" ? payload.email : null;
 }
 
+/** The admin allowlist — ADMIN_EMAILS, comma-separated (env, set at deploy). */
+export function adminEmails(): string[] {
+  return (process.env.ADMIN_EMAILS ?? "joelbronkowski@gmail.com")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 /** Owner/admin check — ADMIN_EMAILS is a comma-separated allowlist. */
 export function isAdmin(email: string | null): boolean {
   if (!email) return false;
-  const admins = (process.env.ADMIN_EMAILS ?? "joelbronkowski@gmail.com")
-    .split(",")
-    .map((s) => s.trim().toLowerCase());
-  return admins.includes(email.toLowerCase());
+  return adminEmails().includes(email.toLowerCase());
 }
