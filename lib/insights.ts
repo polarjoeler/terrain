@@ -485,7 +485,11 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       -- Live stores never payment-probed. reachable payment denominator = verified + this (a store
       -- probed and found NO gateway has no completable checkout, so it's not coverable — same
       -- reachable metric as /ops, so the insights page agrees with /ops instead of showing a raw %).
-      COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL)::int AS cov_pay_neverprobed
+      -- A store woo-checkout-probed (woo_checkout_at set) with no readable gateway counts as probed
+      -- too — its Store API / checkout has no gateway we can read — so it drops out of "reachable"
+      -- exactly like a Shopify probed-no-gateway store. Without this, ~11.5k already-probed Woo
+      -- stores sat in the denominator and dragged ZA's combined coverage to 55% (Shopify alone 85%).
+      COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int AS cov_pay_neverprobed
     FROM (
       SELECT *,
         (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,

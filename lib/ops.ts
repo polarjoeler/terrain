@@ -162,8 +162,8 @@ async function opsStatusUncached(): Promise<OpsStatus> {
              -- and found NO gateway (payments empty but payments_checked_at set) — those are frozen /
              -- inquiry-only / out-of-stock Shopify stores with no completable checkout, so there is
              -- nothing to "cover". Counting them dragged coverage from a true ~90% down to ~59%.
-             count(*) FILTER (WHERE (payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL)::int reachable,
-             count(*) FILTER (WHERE payments_checked_at IS NULL)::int backlog,
+             count(*) FILTER (WHERE (payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int reachable,
+             count(*) FILTER (WHERE payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int backlog,
              count(*) FILTER (WHERE payments_checked_at > now()-interval '12 hours')::int probed12h
       FROM imported_stores WHERE published AND platform='Shopify'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND country = ANY(${CORE})`,
@@ -194,7 +194,7 @@ async function opsStatusUncached(): Promise<OpsStatus> {
         count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND payments IS NOT NULL AND payments<>'')::int cov_pay,
         -- reachable denominator (see the summary query): has a gateway OR not yet probed; excludes
         -- probed-but-no-gateway stores that have no completable checkout to read.
-        count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ((payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL))::int reachable_pay,
+        count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ((payments IS NOT NULL AND payments<>'') OR payments_checked_at IS NULL AND woo_checkout_at IS NULL))::int reachable_pay,
         count(*) FILTER (WHERE launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}-')::int has_launch,
         count(*) FILTER (WHERE (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND ${LAUNCH} >= CURRENT_DATE-30)::int launched30d
       FROM imported_stores
@@ -323,7 +323,7 @@ export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
         count(*)::int discovered,
         count(*) FILTER (WHERE ${TRACKED})::int tracked,
         count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
-        count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL))::int reachable,
+        count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL AND woo_checkout_at IS NULL))::int reachable,
         count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
         count(*) FILTER (WHERE ${TRACKED} AND live_checked_at IS NOT NULL)::int checked
       FROM imported_stores WHERE UPPER(country) = ${country.toUpperCase()}
@@ -402,7 +402,7 @@ async function computeCoverageMatrix(): Promise<CoverageMatrix> {
       count(*)::int discovered,
       count(*) FILTER (WHERE ${TRACKED})::int tracked,
       count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
-      count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL))::int reachable,
+      count(*) FILTER (WHERE ${TRACKED} AND ((payments IS NOT NULL AND payments <> '') OR payments_checked_at IS NULL AND woo_checkout_at IS NULL))::int reachable,
       count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
       count(*) FILTER (WHERE ${TRACKED} AND live_checked_at IS NOT NULL)::int checked
     FROM imported_stores
