@@ -192,6 +192,7 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
       <p className="mt-3 text-xs text-cream/35">
         Each line starts from the {noun} already live at {startYear} (plus any not yet launch-dated) and adds each month&rsquo;s launches, so it ends at that platform&rsquo;s current total — the slope is the observed growth. {expanded ? <>Older cohorts use StoreLeads&rsquo; store-creation date as a launch proxy (approximate); recent months use our own product/cert dates. </> : null}Hover a legend chip for the live selling/active/dormant split.
         {data && !wooHasData && <span className="text-orange/70"> WooCommerce launch-dating is still being built, so only its current total &amp; status split show for now — the Shopify trajectory is live.</span>}
+        <span className="text-cream/30"> Shopify and WooCommerce carry the market; other CMSs (Wix, Magento, BASE, …) are too small to chart a trajectory here — drill into them with the Platform picker above.</span>
       </p>
     </div>
   );
