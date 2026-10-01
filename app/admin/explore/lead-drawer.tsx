@@ -13,6 +13,25 @@ const fmtLaunch = (v: string | null, source: string | null) =>
   source === "storeleads_created" ? fmtMonth(v) : fmtDate(v);
 const chips = (v: string | null) => (v ? v.split(";").map((x) => x.trim()).filter(Boolean) : []);
 
+// Choose which email to display. `email` comes from the per-domain data import and is authoritative
+// for this store — even when it's a personal gmail/hotmail (a legitimate owner contact) — so it
+// wins. `contact_email` is scraped from the homepage and can be a third-party / agency / redirect-
+// target address, so it's only trusted as a fallback when its own domain matches the store's.
+const emailDomain = (e: string | null): string | null => {
+  const m = /@([a-z0-9.-]+\.[a-z]{2,})/i.exec(e ?? "");
+  return m ? m[1].toLowerCase() : null;
+};
+const sameOrg = (emailDom: string | null, storeDomain: string | null): boolean => {
+  if (!emailDom || !storeDomain) return false;
+  const sd = storeDomain.toLowerCase().replace(/^www\./, "");
+  return emailDom === sd || emailDom.endsWith("." + sd) || sd.endsWith("." + emailDom);
+};
+const bestEmail = (d: LeadDetail): string | null => {
+  if (d.email) return d.email;
+  if (d.contact_email && sameOrg(emailDomain(d.contact_email), d.domain)) return d.contact_email;
+  return null;
+};
+
 // How we know the store: our own crawlers (Scanned) vs a data import (Imported).
 // Don't leak the raw source name (e.g. "storeleads-2026-08") to the surface.
 function sourceLabel(source: string | null): string {
@@ -180,7 +199,7 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             </Section>
 
             <Section title="Contact">
-              <Row label="Email" value={data.contact_email || data.email} />
+              <Row label="Email" value={bestEmail(data)} />
               <Row label="Phone" value={data.contact_phone} />
             </Section>
 

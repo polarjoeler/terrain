@@ -36,6 +36,17 @@ const FINGERPRINTS = {
 };
 const THEME_RE = /Shopify\.theme\s*=\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/i;
 
+// Only attribute an email to a store when the email's domain matches the store's — otherwise a
+// scraped page can hand us an agency / host / embedded-widget / redirect-target address that belongs
+// to someone else (the "wrong email on a lead" bug). Allow www. and sub/parent-domain variants.
+const emailHost = (e) => { const m = /@([a-z0-9.-]+\.[a-z]{2,})/i.exec(e || ""); return m ? m[1].toLowerCase() : null; };
+const urlHost = (u) => { try { return new URL(u).host.toLowerCase().replace(/^www\./, ""); } catch { return null; } };
+const sameOrg = (host, storeDomain) => {
+  if (!host || !storeDomain) return false;
+  const sd = String(storeDomain).toLowerCase().replace(/^www\./, "");
+  return host === sd || host.endsWith("." + sd) || sd.endsWith("." + host);
+};
+
 async function scan(domain) {
   try {
     const res = await fetch(`https://${domain}/`, {
@@ -44,6 +55,9 @@ async function scan(domain) {
     });
     if (res.status === 429 || res.status >= 500) return { retriable: true };
     if (!res.ok) return { retriable: false };
+    // If the store 301'd to a DIFFERENT org (parked/for-sale/migrated/reseller), the HTML — and any
+    // email in it — belongs to that other site, not this store. Don't attribute contact details.
+    const crossOrg = !sameOrg(urlHost(res.url), domain);
     const raw = await res.text();
     const html = raw.toLowerCase();
     const hits = [];
@@ -57,9 +71,12 @@ async function scan(domain) {
     // business inbox (info@/sales@/support@…) over the first random match.
     const JUNK = /(@2x|\.png|\.jpg|\.gif|\.svg|\.webp|sentry|wixpress|example\.|@sentry|@email\b|domain\.com|placeholder|myshopify|\.wixpress|godaddy|x{3,}|@x+\.|^(?:example|you|your|yourname|youremail|email|name|username|user|test|sample|demo|firstname|lastname|johndoe|janedoe|no-?reply|donotreply)@)/i;
     const cands = [...new Set([...raw.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)].map((m) => m[0].toLowerCase()))]
-      .filter((e) => !JUNK.test(e) && !/\.\./.test(e) && e.length < 80);
+      .filter((e) => !JUNK.test(e) && !/\.\./.test(e) && e.length < 80)
+      // Only this store's OWN emails — reject agency/host/widget/redirect-target addresses.
+      .filter((e) => sameOrg(emailHost(e), domain));
     const BIZ = /^(info|sales|hello|contact|support|admin|orders|shop|help|enquiries|hi|care|customercare|customerservice)@/;
-    let email = cands.find((e) => BIZ.test(e)) || cands[0] || null;
+    // Skip email entirely on a cross-org redirect (the page isn't this store's).
+    let email = crossOrg ? null : (cands.find((e) => BIZ.test(e)) || cands[0] || null);
     let phone = (/(?:tel:|href="tel:)\s*([+0-9][+0-9()\s.\-]{6,20})/.exec(raw) || [])[1] || null;
     if (phone) phone = phone.replace(/[^\d+]/g, "").slice(0, 20);
     if (phone && phone.replace(/\D/g, "").length < 8) phone = null;
