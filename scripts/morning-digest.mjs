@@ -50,12 +50,20 @@ const byCountry = await sql`SELECT upper(country) c,
   WHERE (live_checked_at > now()-interval '24 hours' OR payments_checked_at > now()-interval '24 hours' OR woo_checkout_at > now()-interval '24 hours')
     AND country IS NOT NULL
   GROUP BY 1 ORDER BY (count(*) FILTER (WHERE live_checked_at > now()-interval '24 hours') + count(*) FILTER (WHERE payments_checked_at > now()-interval '24 hours' OR woo_checkout_at > now()-interval '24 hours')) DESC LIMIT 8`;
-const byCms = await sql`SELECT coalesce(lower(platform),'unknown') p,
-    count(*) FILTER (WHERE live_checked_at > now()-interval '24 hours')::int live,
-    count(*) FILTER (WHERE payments_checked_at > now()-interval '24 hours' OR woo_checkout_at > now()-interval '24 hours')::int pay
+// Per-CMS COVERAGE in the focus markets (where we actually enrich) — so "is each CMS coming in
+// and getting enriched?" is answerable at a glance: live base, discovered in the last 7d, % with
+// payments, % with tech (theme/deep-enrich), and the deep-enrich backlog (non-Shopify not yet
+// deep-scanned). Scoped to focus markets so the global background lake doesn't drown the signal.
+const FOCUS_MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
+const cmsCov = await sql`SELECT coalesce(lower(platform),'unknown') p,
+    count(*)::int live,
+    count(*) FILTER (WHERE discovered_at > now()-interval '7 days')::int disc7d,
+    count(*) FILTER (WHERE payments IS NOT NULL AND payments <> '')::int pay,
+    count(*) FILTER (WHERE theme IS NOT NULL OR deep_enriched_at IS NOT NULL)::int tech,
+    count(*) FILTER (WHERE lower(coalesce(platform,'')) <> 'shopify' AND deep_enriched_at IS NULL)::int deep_backlog
   FROM imported_stores
-  WHERE (live_checked_at > now()-interval '24 hours' OR payments_checked_at > now()-interval '24 hours' OR woo_checkout_at > now()-interval '24 hours')
-  GROUP BY 1 ORDER BY 2 DESC LIMIT 6`;
+  WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND upper(country) = ANY(${FOCUS_MARKETS})
+  GROUP BY 1 HAVING count(*) >= 10 ORDER BY live DESC LIMIT 14`.catch(() => []);
 
 // ── Migrations & surprising tech (24h) ──────────────────────────────────────────────────────
 const migrations = await sql`SELECT domain, live_platform, country FROM imported_stores
@@ -89,8 +97,13 @@ L.push(`── ENRICHMENT (24h) ──`);
 L.push(`Liveness ${n(h.live24)} · Payments ${n(h.pay24)} · Catalog/launch ${n(h.cat24)}`);
 L.push(`Top countries:`);
 for (const r of byCountry) L.push(`   ${r.c.padEnd(4)} liveness ${n(r.live)}, payments ${n(r.pay)}`);
-L.push(`By CMS:`);
-for (const r of byCms) L.push(`   ${r.p.padEnd(12)} liveness ${n(r.live)}, payments ${n(r.pay)}`);
+L.push(``);
+L.push(`── CMS COVERAGE (focus markets) ──`);
+const pctOf = (a, b) => (b > 0 ? Math.round((100 * a) / b) + "%" : "—");
+for (const r of cmsCov) {
+  const backlog = r.p !== "shopify" && r.deep_backlog > 0 ? ` · ${n(r.deep_backlog)} to deep-enrich` : "";
+  L.push(`   ${r.p.padEnd(13)} ${n(r.live).padStart(8)} live · +${n(r.disc7d)}/7d · pay ${pctOf(r.pay, r.live)} · tech ${pctOf(r.tech, r.live)}${backlog}`);
+}
 L.push(``);
 L.push(`── MIGRATIONS & TECH ──`);
 L.push(`${n(h.migrated24)} migrated off-platform · ${n(h.dead24)} found dead · ${n(switchN.c)} payment-provider changes`);
