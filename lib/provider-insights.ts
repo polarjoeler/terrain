@@ -687,24 +687,51 @@ export async function growthSeries(opts: {
 /* ---------------------------------------------------- cumulative platform growth --- */
 
 export type PlatformStatus = { selling: number; active: number; dormant: number; other: number; total: number };
-export type PlatformGrowthPoint = { date: string; shopify: number; woo: number };
+export type PlatformSeries = {
+  id: string;            // canonical platform name, or "Other" for the folded tail
+  now: number;           // current live total (all live stores, incl. undated) — the line ends here
+  dated: number;         // dated launches in-window = the observed-growth portion (drives the draw gate)
+  status: PlatformStatus;
+};
+export type PlatformGrowthPoint = { date: string; v: Record<string, number> };
 export type PlatformGrowth = {
-  points: PlatformGrowthPoint[];      // MONTHLY CUMULATIVE live-store count, per platform — starts at a
-                                      // baseline (pre-window + undated) so it ENDS at the current total
-  shopifyNow: number; wooNow: number; // current live totals (all live stores, incl. undated) = line ends here
-  shopifyDated: number; wooDated: number; // dated launches in-window (the observed-growth slope; drives the draw gate)
-  shopifyStatus: PlatformStatus;      // current selling/active/dormant split (for the hover)
-  wooStatus: PlatformStatus;
-  since: string;                      // first cohort month shown
+  points: PlatformGrowthPoint[];   // MONTHLY CUMULATIVE live count per platform, from a baseline
+  series: PlatformSeries[];        // ordered by `now` desc; tail folded into "Other"
+  since: string;
+  scope: GrowthScope;
 };
 
+/** Which universe the chart counts.
+ *  - "published": stores we have confirmed and surface to customers. This is ~all Shopify plus
+ *    WooCommerce, because every other platform is landed unpublished pending verification
+ *    (WordPress 0 published / 32,486 banked; storesjp 0/5,031; colorme 0/3,034; BASE 78/2,070).
+ *    So a published-scope chart can only ever show Shopify vs Woo — not a bug, a gate.
+ *  - "detected": everything the crawlers have classified, published or not. This is what "growth
+ *    across all CMSs" actually means, at the cost of mixing confirmed with unconfirmed.
+ *  Two tracks rather than one number, matching how insights already separates our coverage from
+ *  market movement. */
+export type GrowthScope = "published" | "detected";
+
+/** How many platforms get their own line before the tail is folded into "Other". The corpus
+ *  carries 20+ distinct platforms; drawing them all is unreadable and most are <300 stores. */
+const MAX_SERIES = 6;
+
 /** Cumulative platform-growth series for the combined ("all") insights view: how the LIVE store
- *  base has grown month-by-month, split Shopify vs WooCommerce, so a viewer can see which platform
- *  is growing faster. The line starts from a baseline (stores already live before the window, plus
- *  any not yet launch-dated) and adds each month's dated launches, so it ENDS at each platform's
- *  real current total — the observed growth is the slope on top of the baseline. Paired with a
- *  current selling/active/dormant status split per platform for the hover breakdown. */
-export async function platformGrowthSeries(country?: string, provider?: string): Promise<PlatformGrowth> {
+ *  base has grown month-by-month, split per platform, so a viewer can see which is growing faster.
+ *
+ *  This used to be two hardcoded buckets: WooCommerce, and "everything that is not WooCommerce"
+ *  counted as Shopify. That silently drew ~40,000 non-Shopify stores — WordPress (26,001),
+ *  storesjp, colorme, BASE, Wix, Magento, Shopware — as part of the Shopify line, inflating it.
+ *  Now every platform is its own series.
+ *
+ *  Each line starts from a baseline (stores already live before the window, plus any not yet
+ *  launch-dated) and adds each month's dated launches, so it ENDS at that platform's real current
+ *  total — the observed growth is the slope on top of the baseline. */
+export async function platformGrowthSeries(
+  country?: string,
+  provider?: string,
+  scope: GrowthScope = "published",
+): Promise<PlatformGrowth> {
   const sql = db();
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   // Optional provider scope — cohorts, totals and status become that gateway's MERCHANTS (stores
@@ -713,71 +740,97 @@ export async function platformGrowthSeries(country?: string, provider?: string):
   const prov = variants
     ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
     : sql``;
-  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  // "detected" drops the published gate — that gate is the entire reason non-Shopify platforms
+  // never appeared on this chart. Liveness still applies either way: a dead store is not growth.
+  const LIVE = scope === "detected"
+    ? sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`
+    : sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
   // Show the FULL vintage arc, not just recent years — live stores date back to ~2012. Pre-2013 is
   // negligible (<20/yr), so 2013 is a clean left edge without a decade of near-flat tail. Caveat
   // (surfaced in the chart footnote): older cohorts lean on StoreLeads' store-creation date as a
   // launch proxy; recent months use our own product/cert dates — early vintage is approximate.
   const SINCE = "2013-01-01";
+  const n = (v: unknown) => Number(v ?? 0);
 
-  // Monthly launches of currently-live stores, split by platform → cumulative in JS.
-  const rows = await sql<{ b: string; woo: number; shop: number }[]>`
+  // 1. Current live totals + status per platform. Sequential, never Promise.all — the pool is
+  //    max:3 and fanning aggregates out in parallel deadlocks the page.
+  //    Status generalises what the two-series version did for Shopify ("selling ≈ has verified
+  //    payments, the rest active") to every platform, while still honouring a real activity_tier
+  //    where one exists (Woo carries selling/active/dormant; nothing else does).
+  const totals = await sql<{ p: string; total: number; selling: number; active: number; dormant: number }[]>`
+    SELECT COALESCE(NULLIF(btrim(platform), ''), '(unclassified)') p,
+      COUNT(*)::int total,
+      COUNT(*) FILTER (WHERE activity_tier = 'selling'
+        OR (activity_tier IS NULL AND payments IS NOT NULL AND payments <> ''))::int selling,
+      COUNT(*) FILTER (WHERE activity_tier = 'active'
+        OR (activity_tier IS NULL AND (payments IS NULL OR payments = '')))::int active,
+      COUNT(*) FILTER (WHERE activity_tier = 'dormant')::int dormant
+    FROM imported_stores WHERE ${LIVE} ${ctry} ${prov}
+    GROUP BY 1 ORDER BY total DESC`.catch(() => []);
+
+  // 2. Monthly dated launches per platform.
+  const rows = await sql<{ b: string; p: string; n: number }[]>`
     SELECT to_char(date_trunc('month', ${LAUNCH}), 'YYYY-MM-DD') b,
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce')::int woo,
-      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce')::int shop
+           COALESCE(NULLIF(btrim(platform), ''), '(unclassified)') p,
+           COUNT(*)::int n
     FROM imported_stores
     WHERE ${LIVE} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry} ${prov}
-    GROUP BY 1 ORDER BY 1`.catch(() => []);
-  let cw = 0, cs = 0;
-  const rawPoints = rows.map((r) => {
-    cs += Number(r.shop); cw += Number(r.woo);
-    return { date: r.b, shop: cs, woo: cw };
-  });
-  const shopDated = cs, wooDated = cw; // dated launches in-window = the observed-growth portion
+    GROUP BY 1, 2 ORDER BY 1`.catch(() => []);
 
-  // Current live totals (ALL live stores, dated or not) + status split. Woo carries a real
-  // activity_tier (selling/active/dormant/not_a_store); Shopify has no equivalent tier, so its
-  // "selling" ≈ has verified payments, the rest counted as active — enough for an at-a-glance split.
-  const [st] = await sql<{
-    woo_total: number; woo_selling: number; woo_active: number; woo_dormant: number; woo_other: number;
-    shop_total: number; shop_paid: number;
-  }[]>`
-    SELECT
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce')::int woo_total,
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'selling')::int woo_selling,
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'active')::int woo_active,
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND activity_tier = 'dormant')::int woo_dormant,
-      COUNT(*) FILTER (WHERE lower(platform) = 'woocommerce' AND (activity_tier IS NULL OR activity_tier NOT IN ('selling','active','dormant')))::int woo_other,
-      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce')::int shop_total,
-      COUNT(*) FILTER (WHERE lower(platform) IS DISTINCT FROM 'woocommerce' AND payments IS NOT NULL AND payments <> '')::int shop_paid
-    FROM imported_stores WHERE ${LIVE} ${ctry} ${prov}`.catch(() => [{
-      woo_total: 0, woo_selling: 0, woo_active: 0, woo_dormant: 0, woo_other: 0, shop_total: 0, shop_paid: 0,
-    }]);
-  const n = (v: number) => Number(v ?? 0);
-  const wooStatus: PlatformStatus = {
-    selling: n(st.woo_selling), active: n(st.woo_active), dormant: n(st.woo_dormant),
-    other: n(st.woo_other), total: n(st.woo_total),
-  };
-  const shopifyStatus: PlatformStatus = {
-    selling: n(st.shop_paid), active: n(st.shop_total) - n(st.shop_paid), dormant: 0,
-    other: 0, total: n(st.shop_total),
-  };
+  // Top MAX_SERIES by current total keep their own line; everything else folds into "Other".
+  const keep = new Set(totals.slice(0, MAX_SERIES).map((t) => t.p));
+  const bucket = (plat: string) => (keep.has(plat) ? plat : "Other");
+
+  // Dated-in-window totals per bucket (the observed slope).
+  const dated = new Map<string, number>();
+  for (const r of rows) dated.set(bucket(r.p), (dated.get(bucket(r.p)) ?? 0) + n(r.n));
+
+  // Status + current totals per bucket.
+  const statusOf = new Map<string, PlatformStatus>();
+  const nowOf = new Map<string, number>();
+  for (const t of totals) {
+    const k = bucket(t.p);
+    const prev = statusOf.get(k) ?? { selling: 0, active: 0, dormant: 0, other: 0, total: 0 };
+    const total = n(t.total), selling = n(t.selling), active = n(t.active), dormant = n(t.dormant);
+    statusOf.set(k, {
+      selling: prev.selling + selling,
+      active: prev.active + active,
+      dormant: prev.dormant + dormant,
+      other: prev.other + Math.max(0, total - selling - active - dormant),
+      total: prev.total + total,
+    });
+    nowOf.set(k, (nowOf.get(k) ?? 0) + total);
+  }
+
+  const series: PlatformSeries[] = [...nowOf.entries()]
+    .map(([id, now]) => ({
+      id,
+      now,
+      dated: dated.get(id) ?? 0,
+      status: statusOf.get(id) ?? { selling: 0, active: 0, dormant: 0, other: 0, total: now },
+    }))
+    // "Other" always sorts last however big it is, so the named platforms read in order.
+    .sort((a, b) => (a.id === "Other" ? 1 : b.id === "Other" ? -1 : b.now - a.now));
+
   // Baseline = live stores NOT in the dated in-window cohorts (launched before SINCE, or not yet
-  // launch-dated). Start the cumulative there so the line climbs to TODAY's real total instead of
-  // stopping at the dated-since-2022 slice — otherwise the Shopify line ends well short of its own
-  // headline number. The observed growth is the slope ON TOP of that baseline.
-  const shopBase = Math.max(0, n(st.shop_total) - shopDated);
-  const wooBase = Math.max(0, n(st.woo_total) - wooDated);
-  const points: PlatformGrowthPoint[] = rawPoints.map((p) => ({
-    date: p.date, shopify: shopBase + p.shop, woo: wooBase + p.woo,
-  }));
-  return {
-    points, since: SINCE,
-    shopifyNow: n(st.shop_total), wooNow: n(st.woo_total),
-    shopifyDated: shopDated, wooDated: wooDated,
-    shopifyStatus, wooStatus,
-  };
+  // launch-dated). Start the cumulative there so each line climbs to TODAY's real total instead of
+  // stopping at the dated slice — otherwise a line ends well short of its own headline number.
+  const base = new Map(series.map((x) => [x.id, Math.max(0, x.now - x.dated)]));
+  const running = new Map(series.map((x) => [x.id, base.get(x.id) ?? 0]));
+  const byMonth = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const m = byMonth.get(r.b) ?? new Map<string, number>();
+    m.set(bucket(r.p), (m.get(bucket(r.p)) ?? 0) + n(r.n));
+    byMonth.set(r.b, m);
+  }
+  const points: PlatformGrowthPoint[] = [...byMonth.keys()].sort().map((date) => {
+    const add = byMonth.get(date)!;
+    for (const [k, v] of add) running.set(k, (running.get(k) ?? 0) + v);
+    return { date, v: Object.fromEntries(series.map((x) => [x.id, running.get(x.id) ?? 0])) };
+  });
+
+  return { points, series, since: SINCE, scope };
 }
 
 const PAY_SHIFT_NOISE = new Set(["instant eft", "bank deposit", "eft", "bank transfer",

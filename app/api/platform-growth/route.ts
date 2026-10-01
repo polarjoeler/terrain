@@ -14,7 +14,8 @@ export async function GET(req: Request) {
   if (!hasAccess(subscriber) && !isAdmin(email)) return NextResponse.json({ error: "No access" }, { status: 403 });
 
   const p = new URL(req.url).searchParams;
-  const data = await platformGrowthSeries(p.get("country") || undefined, p.get("provider") || undefined).catch(() => null);
+  const scope = p.get("scope") === "detected" ? "detected" as const : "published" as const;
+  const data = await platformGrowthSeries(p.get("country") || undefined, p.get("provider") || undefined, scope).catch(() => null);
   if (!data) return NextResponse.json({ error: "failed" }, { status: 500 });
   return NextResponse.json(data);
 }
