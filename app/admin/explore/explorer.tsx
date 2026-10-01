@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
 import { revenueBand, bandTone, scoreColor, REVENUE_BANDS, type RevenueBand } from "@/lib/revenue";
@@ -141,6 +141,11 @@ export function Explorer({ leads, total, initial, showStats }: {
   showStats?: boolean;
 }) {
   const [q, setQ] = useState(initial?.q ?? "");
+  // The search box updates `q` instantly (responsive input), but the heavy work — the full
+  // filter+sort and all 11 facet counts, each a scan of every loaded row — keys off this DEBOUNCED
+  // value, so it runs once ~220ms after typing stops instead of ~13× on every keystroke.
+  const [qDebounced, setQDebounced] = useState(initial?.q ?? "");
+  useEffect(() => { const t = setTimeout(() => setQDebounced(q), 220); return () => clearTimeout(t); }, [q]);
   const [country, setCountry] = useState<Set<string>>(new Set(initial?.country));
   const [category, setCategory] = useState<Set<string>>(new Set(initial?.category));
   const [band, setBand] = useState<Set<string>>(new Set(initial?.band));
@@ -167,8 +172,8 @@ export function Explorer({ leads, total, initial, showStats }: {
 
   // Faceted matcher — `skip` lets a facet's own counts ignore its own selection.
   const passes = (l: ExploreLead, skip?: string) => {
-    if (skip !== "q" && q) {
-      const needle = q.toLowerCase();
+    if (skip !== "q" && qDebounced) {
+      const needle = qDebounced.toLowerCase();
       if (!l.domain.toLowerCase().includes(needle) && !(l.name ?? "").toLowerCase().includes(needle)) return false;
     }
     if (skip !== "country" && country.size && !country.has((l.country ?? "??").toUpperCase())) return false;
@@ -216,7 +221,7 @@ export function Explorer({ leads, total, initial, showStats }: {
       : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
       : b.score - a.score);
     return out;
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched, sort]);
+  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched, sort]);
 
   const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
     const m = new Map<string, number>();
@@ -248,7 +253,7 @@ export function Explorer({ leads, total, initial, showStats }: {
       apps: multiCount("app", (l) => l.apps),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched]);
+  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched]);
 
   // Rows written into browse_snapshot before launchedAt existed carry null, which
   // would render the whole Launched control as a column of zeroes. Hide it until a
@@ -288,13 +293,13 @@ export function Explorer({ leads, total, initial, showStats }: {
     out[""] = base.filter((l) => l.launchedAt == null).length;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
+  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
 
   const recencyCounts = useMemo(() => {
     const base = leads.filter((l) => passes(l, "recency"));
     return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, launched]);
+  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, launched]);
 
   const exportCsv = () => {
     const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
