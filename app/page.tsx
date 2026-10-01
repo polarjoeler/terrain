@@ -123,7 +123,7 @@ export default async function Home() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
           <Link href="/" className="text-cream/80"><Wordmark size="text-base" /></Link>
           <span>Africa &amp; global · <Link href="/insights/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link> · a Tembo Commerce product</span>
-          <a href="mailto:hello@tembocommerce.com" className="underline">hello@tembocommerce.com</a>
+          <a href="mailto:hello@tembocommerce.app" className="underline">hello@tembocommerce.app</a>
         </div>
       </footer>
     </main>

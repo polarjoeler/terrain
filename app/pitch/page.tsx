@@ -429,7 +429,7 @@ const plans = [
     ],
     featured: false,
     cta: "Contact us",
-    href: "mailto:hello@tembocommerce.com",
+    href: "mailto:hello@tembocommerce.app",
   },
 ];
 
@@ -610,8 +610,8 @@ function Footer() {
             <span className="text-cream/70">Tembo Commerce</span> family · Built
             in Cape Town 🧡
           </span>
-          <a href="mailto:hello@tembocommerce.com" className="underline">
-            hello@tembocommerce.com
+          <a href="mailto:hello@tembocommerce.app" className="underline">
+            hello@tembocommerce.app
           </a>
         </div>
       </div>

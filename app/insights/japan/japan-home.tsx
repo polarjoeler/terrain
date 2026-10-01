@@ -228,7 +228,7 @@ export function JapanHome({ data, initialLang = "en" }: { data: JapanTimeline; i
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
           <Link href="/japan" className="text-cream/80"><Wordmark size="text-base" /></Link>
           <span>{L.footer} · <Link href="/?geo=off" className="text-cream/70 hover:text-cream">{L.nav.global}</Link></span>
-          <a href="mailto:hello@tembocommerce.com" className="underline">hello@tembocommerce.com</a>
+          <a href="mailto:hello@tembocommerce.app" className="underline">hello@tembocommerce.app</a>
         </div>
       </footer>
     </main>
