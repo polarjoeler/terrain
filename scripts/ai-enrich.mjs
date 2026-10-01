@@ -48,6 +48,15 @@ const TAXONOMY = [
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
 
+// Only attribute an email to a store when its domain matches the store's — a scraped page can carry
+// an agency/host/widget address that isn't the store's (the "wrong email on a lead" bug).
+const emailHost = (e) => { const m = /@([a-z0-9.-]+\.[a-z]{2,})/i.exec(e || ""); return m ? m[1].toLowerCase() : null; };
+const sameOrg = (host, storeDomain) => {
+  if (!host || !storeDomain) return false;
+  const sd = String(storeDomain).toLowerCase().replace(/^www\./, "");
+  return host === sd || host.endsWith("." + sd) || sd.endsWith("." + host);
+};
+
 async function get(url, ms = 8000) {
   try {
     const r = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(ms) });
@@ -75,14 +84,15 @@ function extractSocials(html) {
 // Placeholder / template emails that leak into theme markup — never real contacts.
 const EMAIL_JUNK = /(sentry|wixpress|example\.|godaddy|shopify\.com|fakedomain|yourdomain|your@|youremail|email@|no-?reply|donotreply|placeholder|test@|sample@|domain\.com)/i;
 
-function firstRealEmail(html) {
+function firstRealEmail(html, domain) {
+  const ok = (e) => !EMAIL_JUNK.test(e) && !/\.(png|jpe?g|gif|svg|webp)$/.test(e) && sameOrg(emailHost(e), domain);
   for (const m of html.matchAll(/mailto:([^"'?]+)/gi)) {
     const e = m[1].trim().toLowerCase();
-    if (!EMAIL_JUNK.test(e) && !/\.(png|jpe?g|gif|svg|webp)$/.test(e)) return e;
+    if (ok(e)) return e;
   }
   for (const m of html.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)) {
     const e = m[0].toLowerCase();
-    if (!EMAIL_JUNK.test(e) && !/\.(png|jpe?g|gif|svg|webp)$/.test(e)) return e;
+    if (ok(e)) return e;
   }
   return null;
 }
@@ -110,7 +120,7 @@ async function gather(domain) {
       || html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)/i)?.[1]
       || "").trim().slice(0, 300);
     socials = extractSocials(html);
-    email = firstRealEmail(html);
+    email = firstRealEmail(html, d);
   }
   return { domain: d, title, metaDesc, types: [...types].slice(0, 10), titles, nProducts, socials, email };
 }
