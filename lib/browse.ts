@@ -40,6 +40,7 @@ export type BrowseFilters = {
   discoveredDays?: number;    // we first tracked it within N days
   sort?: SortKey;
   limit?: number; offset?: number;
+  refresh?: boolean;          // internal: force a fresh aggregate (bypass caches) — used by refresh-browse
 };
 
 /** One table row. Only the fields the leads table actually renders — apps, hosting,
@@ -153,8 +154,30 @@ const AGG_TTL_MS = 5 * 60_000;
 const _aggCache = new Map<string, { at: number; v: AggParsed }>();
 /** Cache key: every filter EXCEPT paging + sort, which don't affect counts or facets. */
 function aggKey(f: BrowseFilters): string {
-  const { limit: _l, offset: _o, sort: _s, ...rest } = f;
+  const { limit: _l, offset: _o, sort: _s, refresh: _r, ...rest } = f;
   return JSON.stringify(rest);
+}
+
+// L2: a durable, cross-instance aggregate cache in Postgres. The in-process Map above only warms a
+// single serverless instance for 5 min; a cold instance (or one past the TTL) otherwise re-runs the
+// 3–30s scan — the exact cold-load pain. browse_cache persists each computed aggregate so ANY cold
+// instance reads it back in one indexed lookup (~a round-trip) instead of re-aggregating, and
+// refresh-browse keeps the hot keys (unfiltered + per-country) fresh ahead of traffic. Reads/writes
+// are best-effort: if the table is missing or the DB is busy, we silently fall back to a live scan.
+const BROWSE_CACHE_TTL = "90 minutes";     // serve-stale window; refresh-browse rewrites hot keys well inside it
+async function dbAggGet(sql: ReturnType<typeof db>, key: string): Promise<AggParsed | null> {
+  try {
+    const [row] = await sql<{ data: AggParsed }[]>`
+      SELECT data FROM browse_cache
+      WHERE key = ${key} AND updated_at > now() - ${BROWSE_CACHE_TTL}::interval`;
+    return row?.data ?? null;
+  } catch { return null; }
+}
+async function dbAggSet(sql: ReturnType<typeof db>, key: string, v: AggParsed): Promise<void> {
+  try {
+    await sql`INSERT INTO browse_cache (key, data, updated_at) VALUES (${key}, ${sql.json(v as never)}, now())
+      ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`;
+  } catch { /* table missing or DB busy — caching is best-effort */ }
 }
 
 export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
@@ -201,10 +224,11 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     Object.fromEntries(Object.entries((v ?? {}) as Record<string, number>).map(([k, n]) => [Number(k), Number(n)]));
 
   const key = aggKey(f);
-  const hit = _aggCache.get(key);
-  let A: AggParsed;
-  if (hit && Date.now() - hit.at < AGG_TTL_MS) {
-    A = hit.v;
+  const memHit = f.refresh ? undefined : _aggCache.get(key);
+  let A: AggParsed | null = memHit && Date.now() - memHit.at < AGG_TTL_MS ? memHit.v : null;
+  if (!A && !f.refresh) A = await dbAggGet(sql, key);   // L2: durable cross-instance cache, read before the heavy scan
+  if (A) {
+    _aggCache.set(key, { at: Date.now(), v: A });
   } else {
     const [agg] = await sql<Record<string, unknown>[]>`
     WITH f AS MATERIALIZED (
@@ -252,6 +276,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
       recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
     };
     _aggCache.set(key, { at: Date.now(), v: A });
+    void dbAggSet(sql, key, A);   // write-through so the next cold instance reads it back instead of re-scanning
   }
 
   const rows = await sql<Record<string, unknown>[]>`
@@ -292,6 +317,28 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     facets: A.facets,
     recency: A.recency,
   };
+}
+
+// The hot keys worth keeping permanently warm: the unfiltered default (every page's first load) and
+// each market on its own. These cover the overwhelming majority of cold loads; every other filter
+// combination still write-throughs on its first live computation.
+const HOT_KEYS: BrowseFilters[] = [
+  {}, { country: ["ZA"] }, { country: ["KE"] }, { country: ["NG"] },
+];
+
+/** Recompute the hot-key aggregates and write them to browse_cache, so cold page loads read a
+ *  precomputed result instead of running the 3–30s scan. Called on a schedule by
+ *  /api/cron/refresh-browse. Forces a fresh scan (refresh:true) so it actually rewrites, not re-reads
+ *  its own cache. Returns how many keys were warmed. */
+export async function refreshBrowseCache(): Promise<number> {
+  const sql = db();
+  // One-time table create (idempotent); this runs on a schedule, not per request, so the brief lock is fine.
+  await sql`CREATE TABLE IF NOT EXISTS browse_cache (key TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`.catch(() => {});
+  let warmed = 0;
+  for (const f of HOT_KEYS) {
+    try { await browseQuery({ ...f, refresh: true, limit: 1 }); warmed++; } catch { /* skip a failed key */ }
+  }
+  return warmed;
 }
 
 /** CSV of the FULL filtered set (every matching row, full field set) — the Explorer's "Export → CSV".
