@@ -185,6 +185,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   const where = buildWhere(f);
   const usd = sql.unsafe(usdSqlExpr());
   const band = sql.unsafe(bandSqlExpr());
+  // The Apps facet is a regex over every row's app-store URLs — the single most expensive sub-query.
+  // Apps exist only on Shopify stores and the UI only shows the Apps facet when Shopify is selected,
+  // so compute it ONLY then; otherwise return an empty facet and skip the scan.
+  const wantApps = f.platform?.some((p) => p.toLowerCase() === "shopify") ?? false;
   const launchSel = sql.unsafe(
     `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on`,
   );
@@ -253,7 +257,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            ${sql.unsafe(facetSub("hosting_provider"))} AS f_hosting,
            ${sql.unsafe(multiFacet("payments"))}         AS f_payment,
            ${sql.unsafe(multiFacet("shipping_providers"))} AS f_shipping,
-           ${sql.unsafe(appsFacet)}                   AS f_apps,
+           ${sql.unsafe(wantApps ? appsFacet : "'[]'::jsonb")}                   AS f_apps,
            (SELECT jsonb_build_object(
               '7',   count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 30),
@@ -319,23 +323,38 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   };
 }
 
-// The hot keys worth keeping permanently warm: the unfiltered default (every page's first load) and
-// each market on its own. These cover the overwhelming majority of cold loads; every other filter
-// combination still write-throughs on its first live computation.
-const HOT_KEYS: BrowseFilters[] = [
-  {}, { country: ["ZA"] }, { country: ["KE"] }, { country: ["NG"] },
-];
-
-/** Recompute the hot-key aggregates and write them to browse_cache, so cold page loads read a
- *  precomputed result instead of running the 3–30s scan. Called on a schedule by
- *  /api/cron/refresh-browse. Forces a fresh scan (refresh:true) so it actually rewrites, not re-reads
- *  its own cache. Returns how many keys were warmed. */
+/** Recompute the hot-filter aggregates and write them to browse_cache, so cold page loads (default
+ *  view AND the common filter drill-downs) read a precomputed result instead of running the 3–30s
+ *  scan on the busy pooler. Called on a schedule by /api/cron/refresh-browse. refresh:true forces a
+ *  fresh scan so it rewrites rather than re-reading its own cache. Returns how many keys were warmed.
+ *
+ *  Which combos: the unfiltered default, each market, each top CMS, the main market × each top CMS,
+ *  and the "no payment gateway yet" prospect list (per market). The country/CMS VALUES are read from
+ *  the live facets — they're mixed-case in the data ("Shopify", "wix") and must match what the UI
+ *  sends on a click, so we derive them rather than hardcode. Every other combination still
+ *  write-throughs on its first live computation. */
 export async function refreshBrowseCache(): Promise<number> {
   const sql = db();
   // One-time table create (idempotent); this runs on a schedule, not per request, so the brief lock is fine.
   await sql`CREATE TABLE IF NOT EXISTS browse_cache (key TEXT PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`.catch(() => {});
-  let warmed = 0;
-  for (const f of HOT_KEYS) {
+
+  // The unfiltered aggregate both warms the default view AND gives us the real facet VALUES to warm
+  // per-dimension (exact, mixed-case). If even this can't run, bail — the DB is too busy to warm.
+  let base: BrowseResult;
+  try { base = await browseQuery({ refresh: true, limit: 1 }); } catch { return 0; }
+  let warmed = 1;
+
+  const countries = base.facets.country.slice(0, 3).map((f) => f.value);       // ZA, KE, NG
+  const platforms = base.facets.platform.slice(0, 3).map((f) => f.value);      // top 3 CMSs
+  const main = countries[0];                                                   // primary market (ZA)
+  const combos: BrowseFilters[] = [
+    ...countries.map((c) => ({ country: [c] })),
+    ...platforms.map((p) => ({ platform: [p] })),
+    ...(main ? platforms.map((p) => ({ country: [main], platform: [p] })) : []),
+    { noPayment: true },
+    ...countries.map((c) => ({ country: [c], noPayment: true })),
+  ];
+  for (const f of combos) {
     try { await browseQuery({ ...f, refresh: true, limit: 1 }); warmed++; } catch { /* skip a failed key */ }
   }
   return warmed;
