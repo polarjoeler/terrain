@@ -168,14 +168,6 @@ export function Explorer({ initialData, initial, showStats }: {
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
   const [data, setData] = useState<BrowseResult>(initialData);
   const [loading, setLoading] = useState(false);
-  // Full option set for the multi-select primary filters (Country, CMS), captured from the first
-  // (unfiltered) load. Server facets count over the FILTERED set, so once you pick one country the
-  // others vanish — overlaying this keeps them visible so you can add a second. Counts are exact when
-  // these are the only active filter (the common case); a follow-up adds server-side skip-self counts.
-  const full = useRef({
-    country: initialData.facets.country.map((x) => [x.value, x.count] as [string, number]),
-    platform: initialData.facets.platform.map((x) => [x.value, x.count] as [string, number]),
-  });
 
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (v: string) =>
     set((prev) => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n; });
@@ -240,17 +232,6 @@ export function Explorer({ initialData, initial, showStats }: {
     shipping: fv(data.facets.shipping),
     apps: fv(data.facets.apps),
   };
-  // Keep every Country / CMS option visible even after one is picked (so you can add a second):
-  // overlay the current counts onto the full captured set, keeping any currently-selected value.
-  const mergeFull = (fullSet: [string, number][], current: [string, number][], selected: Set<string>): [string, number][] => {
-    const cur = new Map(current);
-    const out = fullSet.map(([v, n]) => [v, cur.get(v) ?? n] as [string, number]);
-    for (const [v, n] of current) if (!cur.has(v) || !fullSet.some(([fv]) => fv === v)) out.push([v, n]);
-    for (const v of selected) if (!out.some(([ov]) => ov === v)) out.push([v, 0]);
-    return out.filter(([v], i) => out.findIndex(([ov]) => ov === v) === i);
-  };
-  const countryFacet = mergeFull(full.current.country, facets.country, country);
-  const platformFacet = mergeFull(full.current.platform, facets.platform, platform);
 
   // Launch dates only populate once a snapshot carries them; hide the Launched control until then.
   const hasLaunchData = Object.values(data.recency.launched).some((n) => n > 0);
@@ -291,8 +272,10 @@ export function Explorer({ initialData, initial, showStats }: {
   // Platform-aware filter visibility: Shopify-only controls (Plus, the Shopify app-store facet) show
   // only when Shopify is in the filter; Hosting shows only for self-hosted platforms, since for SaaS
   // platforms (Shopify/Wix) the host is always the vendor and tells you nothing.
-  const shopifySelected = platform.has("shopify");
-  const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p));
+  // Platform values come in mixed case ('shopify' from discovery, 'Wix' from imports), so compare
+  // case-insensitively — otherwise selecting "Shopify" wouldn't reveal the Plus / Apps controls.
+  const shopifySelected = [...platform].some((p) => p.toLowerCase() === "shopify");
+  const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p.toLowerCase()));
 
   return (
     <div className="flex min-h-screen gap-0">
@@ -304,8 +287,8 @@ export function Explorer({ initialData, initial, showStats }: {
         </div>
         {/* Country + CMS are the primary filters — they lead the rail, and keep all options visible
             (countryFacet/platformFacet) so you can multi-select across them. */}
-        <Facet title="Country" values={countryFacet} selected={country} onToggle={toggle(setCountry)} />
-        {platformFacet.length > 1 && <Facet title="CMS / platform" values={platformFacet} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
+        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        {(facets.platform.length > 1 || platform.size > 0) && <Facet title="CMS / platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
 
         {/* Quick toggles. Shopify-specific controls appear only when Shopify is in the platform filter. */}
         <div className="mt-3 space-y-1">
