@@ -395,3 +395,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value      TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Durable cross-instance cache for the leads-browse AGGREGATE (counts + facets per filter). The live
+-- aggregate is a 3–30s scan on the busy pooler; an in-process Map only warms one serverless instance.
+-- browseQuery (lib/browse.ts) reads this before scanning and write-throughs after, and
+-- /api/cron/refresh-browse keeps the hot keys (unfiltered + per-country) fresh. `key` = the filter
+-- JSON (sans paging/sort); `data` = the parsed aggregate.
+CREATE TABLE IF NOT EXISTS browse_cache (
+  key        TEXT PRIMARY KEY,
+  data       JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
