@@ -162,7 +162,7 @@ export default async function Dashboard({
             Welcome back
           </h1>
           <p className="mt-2 text-cream/60">
-            Signed in as {email} · fresh South African Shopify stores,
+            Signed in as {email} · fresh ecommerce stores across your markets,
             discovered as they launch.
           </p>
           <div className="mt-3">

@@ -25,9 +25,8 @@ function db() {
 }
 
 const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
-const HIDDEN_PLATFORMS = ["wix", "adobe_commerce", "magento"];
 
-export type SortKey = "score" | "sales" | "name" | "launched" | "discovered";
+export type SortKey = "new" | "score" | "sales" | "name" | "launched" | "discovered";
 
 export type BrowseFilters = {
   q?: string;
@@ -91,7 +90,6 @@ function buildWhere(f: BrowseFilters) {
     sql`published`,
     sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`,
     sql`country = ANY(${[...VISIBLE_MARKETS]})`,
-    sql`(platform IS NULL OR lower(platform) <> ALL(${HIDDEN_PLATFORMS}))`,
     // Parked Woo installs are captured elsewhere but aren't leads.
     sql`(lower(platform) IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')`,
   ];
@@ -117,6 +115,11 @@ function buildWhere(f: BrowseFilters) {
 }
 
 const ORDER: Record<SortKey, string> = {
+  // Default view: most-recently-discovered first (the primary driver). Pure discovered_at DESC, so
+  // today's live CT finds lead page 1; revenue breaks ties within a day's batch. A blended "new in
+  // last N days then by revenue" was useless here — ~84% of rows were stamped this month by bulk
+  // imports, so the window didn't discriminate and it collapsed back to a revenue sort.
+  new: "discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST",
   sales: "estimated_monthly_sales DESC NULLS LAST",
   name: "COALESCE(name, domain) ASC",
   launched: "launched_on DESC NULLS LAST",
@@ -164,7 +167,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   );
   const limit = Math.min(f.limit ?? 50, 1000);
   const offset = f.offset ?? 0;
-  const order = sql.unsafe(ORDER[f.sort ?? "score"]);
+  const order = sql.unsafe(ORDER[f.sort ?? "new"]);
 
   // ONE scan for every aggregate. The first cut ran 16 sequential queries (total,
   // universe, 6 facets, 7 recency counts) at ~1s each — 15.8s for a page view.

@@ -4,13 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
 import { scoreColor } from "@/lib/revenue";
-import { bandTone, REVENUE_BANDS } from "@/lib/fx";
+import { bandTone, REVENUE_BANDS, bandDisplay } from "@/lib/fx";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
 import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
 
 const PAGE = 60;
-type SortKey = "score" | "sales" | "name";
+// "new" surfaces freshly-discovered stores first (the primary driver) — see lib/browse.ts ORDER.
+type SortKey = "new" | "score" | "sales" | "name";
+// Platforms whose stores are self-hosted, so a hosting provider is a meaningful lead signal. The
+// Hosting facet only makes sense for these — Shopify/Wix are SaaS (hosting is always the vendor).
+const OPEN_SOURCE_PLATFORMS = ["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart"];
 
 // Recency = how recently WE first tracked the store (discoveredAt), so "new this
 // week/month/year" means newly-discovered leads. Windows are nested, so it's a
@@ -32,9 +36,6 @@ const LAUNCH_OPTS: { key: LaunchKey; label: string; days: number }[] = [
   { key: "90d", label: "Launched this quarter", days: 90 },
   { key: "365d", label: "Launched this year", days: 365 },
 ];
-const usd = (n: number | null) =>
-  n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
-
 // A real Shopify theme name is short and word-like (Dawn, Debut, Focal, Shrine PRO).
 // The imported `theme` field is polluted with release notes / version strings for
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
@@ -162,7 +163,7 @@ export function Explorer({ initialData, initial, showStats }: {
   const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
-  const [sort, setSort] = useState<SortKey>("score");
+  const [sort, setSort] = useState<SortKey>("new");
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
   const [data, setData] = useState<BrowseResult>(initialData);
@@ -268,6 +269,12 @@ export function Explorer({ initialData, initial, showStats }: {
     } finally { setExporting(false); }
   };
 
+  // Platform-aware filter visibility: Shopify-only controls (Plus, the Shopify app-store facet) show
+  // only when Shopify is in the filter; Hosting shows only for self-hosted platforms, since for SaaS
+  // platforms (Shopify/Wix) the host is always the vendor and tells you nothing.
+  const shopifySelected = platform.has("shopify");
+  const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p));
+
   return (
     <div className="flex min-h-screen gap-0">
       {/* filter rail */}
@@ -276,10 +283,17 @@ export function Explorer({ initialData, initial, showStats }: {
           <span className="text-sm font-semibold text-cream">Filters {activeCount > 0 && <span className="ml-1 rounded-full bg-cyan/20 px-1.5 text-xs text-cyan">{activeCount}</span>}</span>
           {activeCount > 0 && <button onClick={clearAll} className="text-xs text-cream/45 hover:text-cream">Clear all</button>}
         </div>
+        {/* Country + CMS are the primary filters — they lead the rail. */}
+        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        {(facets.platform.length > 1 || platform.size > 0) && <Facet title="CMS / platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
+
+        {/* Quick toggles. Shopify-specific controls appear only when Shopify is in the platform filter. */}
         <div className="mt-3 space-y-1">
-          <button onClick={() => setPlusOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${plusOnly ? "bg-lilac/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-            <span className={`h-3 w-3 rounded border ${plusOnly ? "border-lilac bg-lilac" : "border-cream/25"}`} /> Shopify Plus only
-          </button>
+          {shopifySelected && (
+            <button onClick={() => setPlusOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${plusOnly ? "bg-lilac/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+              <span className={`h-3 w-3 rounded border ${plusOnly ? "border-lilac bg-lilac" : "border-cream/25"}`} /> Shopify Plus only
+            </button>
+          )}
           <button onClick={() => setEmailOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${emailOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
@@ -292,6 +306,26 @@ export function Explorer({ initialData, initial, showStats }: {
               className={`flex-1 rounded-lg px-2 py-1.5 text-sm transition ${tier === "top100" ? "bg-cyan/20 font-medium text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>Top 100</button>
             <button onClick={() => setTier((t) => (t === "top500" ? "" : "top500"))}
               className={`flex-1 rounded-lg px-2 py-1.5 text-sm transition ${tier === "top500" ? "bg-cyan/20 font-medium text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>Top 500</button>
+          </div>
+        </div>
+
+        {/* Newly discovered — when WE first saw it. The key control for new stores. Single-select. */}
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
+          <div className="mt-2 space-y-1">
+            {RECENCY_OPTS.map((o) => {
+              const on = recency === o.key;
+              return (
+                <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
+                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
+                    {o.label}
+                  </span>
+                  <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -317,35 +351,16 @@ export function Explorer({ initialData, initial, showStats }: {
           </div>
         )}
 
-        {/* Recently discovered — when WE first saw it. Single-select (nested windows). */}
-        <div className="mt-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
-          <div className="mt-2 space-y-1">
-            {RECENCY_OPTS.map((o) => {
-              const on = recency === o.key;
-              return (
-                <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                  <span className="flex items-center gap-2">
-                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                    {o.label}
-                  </span>
-                  <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
+        {/* Secondary facets. Woo activity shows only when there's Woo data; Hosting only for self-hosted
+            platforms; the Shopify app-store facet only when Shopify is selected. */}
         {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
-        {facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
-        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} />
-        <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />
+        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />}
         <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
       </aside>
 
@@ -377,6 +392,7 @@ export function Explorer({ initialData, initial, showStats }: {
           <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(PAGE); }} placeholder="Search domain or store…"
             className="w-72 rounded-full border border-cream/15 bg-transparent px-4 py-2 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50" />
           <select value={sort} onChange={(e) => { setSort(e.target.value as SortKey); setLimit(PAGE); }} className="rounded-full border border-cream/15 bg-transparent px-3 py-2 text-sm text-cream outline-none">
+            <option value="new" className="text-ink">Sort: Newest first</option>
             <option value="score" className="text-ink">Sort: Lead Fit Score</option>
             <option value="sales" className="text-ink">Sort: Revenue</option>
             <option value="name" className="text-ink">Sort: Name</option>
@@ -401,6 +417,7 @@ export function Explorer({ initialData, initial, showStats }: {
             <tbody>
               {rows.map((l) => {
                 const b = l.band;
+                const bd = bandDisplay(l.band, l.country);
                 return (
                   <tr key={l.domain} onClick={() => setSelected(l.domain)} className="cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05]" title="View all known data">
                     <td className="px-4 py-2.5">
@@ -422,7 +439,10 @@ export function Explorer({ initialData, initial, showStats }: {
                     </td>
                     <td className="px-4 py-2.5 text-cream/60">{l.category ?? "—"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? marketLabel(l.country) : "—"}</td>
-                    <td className="px-4 py-2.5"><span className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{b}</span> <span className="ml-1 text-xs text-cream/30">{usd(l.estMonthlySales)}</span></td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{bd.local}</span>
+                      <span className="ml-1 text-xs text-cream/30">{bd.usd}</span>
+                    </td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-xs text-cream/50">
                       {l.productCount != null ? `${l.productCount >= 250 ? "250+" : l.productCount} products` : <span className="text-cream/25">—</span>}
                       {l.aovUsd != null && <span className="text-cream/30"> · ${Math.round(l.aovUsd)} AOV</span>}
