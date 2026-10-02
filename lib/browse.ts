@@ -13,7 +13,8 @@
  *  NOTE: queries run SEQUENTIALLY, never Promise.all — the postgres.js pool is
  *  max:3 and fanning aggregates out in parallel deadlocks the page.
  */
-import { usdSqlExpr, bandSqlExpr, revenueBand, type RevenueBand } from "./fx.ts";
+import { usdSqlExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
+import { scoreLead } from "./leads-explore.ts";
 import { db as sharedDb } from "./db";
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
@@ -32,7 +33,8 @@ export type BrowseFilters = {
   q?: string;
   country?: string[]; platform?: string[]; category?: string[];
   band?: string[]; theme?: string[]; city?: string[];
-  payment?: string[]; shipping?: string[];
+  payment?: string[]; shipping?: string[]; app?: string[];
+  activity?: string[]; hosting?: string[];
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
   tier?: "top100" | "top500";
   launchedDays?: number;      // launched within N days
@@ -41,17 +43,18 @@ export type BrowseFilters = {
   limit?: number; offset?: number;
 };
 
-/** Lean row: what the table renders and nothing else. Contact details, socials,
- *  catalog depth, apps and hosting load from the drawer on click — they were
- *  ~40% of the old payload and none of them are table columns. `hasEmail` is a
- *  boolean rather than the address, so 6,000 contact addresses stop being
- *  broadcast to every browser session. */
+/** One table row. Only the fields the leads table actually renders — apps, hosting,
+ *  plugins, platform_version, product titles, full socials etc. still load from the
+ *  drawer on click. The payload win is PAGINATION (50 rows, not ~13k), so these rows
+ *  carry what the table shows rather than being stripped bare. */
 export type BrowseRow = {
   domain: string; name: string | null; category: string | null;
   country: string | null; city: string | null;
   platform: string | null; theme: string | null;
-  plus: boolean; hasEmail: boolean;
+  plus: boolean; activityTier: string | null;
   estMonthlySales: number | null; band: RevenueBand;
+  productCount: number | null; aovUsd: number | null;
+  email: string | null; instagram: string | null; facebook: string | null; tiktok: string | null;
   launchedAt: string | null; discoveredAt: string | null;
   top100: boolean; top500: boolean;
   score: number;
@@ -63,9 +66,13 @@ export type BrowseResult = {
   rows: BrowseRow[];
   total: number;              // true count for the current filters
   universe: number;           // true count with no filters at all
+  // Live-stat tiles — true over the whole filtered set, not just the page.
+  stats: { plus: number; email: number };
   facets: {
     country: Facet; platform: Facet; band: Facet;
     category: Facet; city: Facet; theme: Facet;
+    activity: Facet; hosting: Facet;
+    payment: Facet; shipping: Facet; apps: Facet;   // multi-token (a store has several)
   };
   recency: {
     launched: Record<number, number>;
@@ -97,6 +104,9 @@ function buildWhere(f: BrowseFilters) {
   if (f.band?.length) conds.push(sql`${sql.unsafe(bandSqlExpr())} = ANY(${f.band})`);
   if (f.payment?.length) conds.push(sql`payments ILIKE ANY(${f.payment.map((p) => `%${p}%`)})`);
   if (f.shipping?.length) conds.push(sql`shipping_providers ILIKE ANY(${f.shipping.map((s) => `%${s}%`)})`);
+  if (f.app?.length) conds.push(sql`apps ILIKE ANY(${f.app.map((a) => `%${a}%`)})`);
+  if (f.activity?.length) conds.push(sql`activity_tier = ANY(${f.activity})`);
+  if (f.hosting?.length) conds.push(sql`hosting_provider = ANY(${f.hosting})`);
   if (f.plus) conds.push(sql`plus`);
   if (f.hasEmail) conds.push(sql`email IS NOT NULL AND email <> ''`);
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
@@ -141,27 +151,51 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   // A MATERIALIZED CTE scans the filtered set once; the facet GROUP BYs and the
   // recency FILTER counts then run over that result in memory. Two queries total:
   // this one, and the page of rows below.
+  // Single-column facet (country/platform/band/…): group the materialized set.
   const facetSub = (expr: string) =>
     `(SELECT COALESCE(jsonb_agg(jsonb_build_array(v, n) ORDER BY n DESC), '[]'::jsonb)
         FROM (SELECT ${expr} AS v, count(*)::int n FROM f
               WHERE ${expr} IS NOT NULL AND btrim(${expr}::text) <> ''
               GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
+  // Multi-token facet (payments/shipping): a store has several, so split on ';' and count each.
+  const multiFacet = (col: string) =>
+    `(SELECT COALESCE(jsonb_agg(jsonb_build_array(v, n) ORDER BY n DESC), '[]'::jsonb)
+        FROM (SELECT btrim(tok) AS v, count(*)::int n
+              FROM f, unnest(string_to_array(COALESCE(f.${col}, ''), ';')) AS tok
+              WHERE btrim(tok) <> '' GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
+  // Apps are concatenated Shopify app-store URLs — pull every slug and count it. The facet VALUE is
+  // the slug (so the `apps ILIKE %slug%` filter matches the stored URL); the UI title-cases it.
+  const appsFacet =
+    `(SELECT COALESCE(jsonb_agg(jsonb_build_array(v, n) ORDER BY n DESC), '[]'::jsonb)
+        FROM (SELECT lower(m[1]) AS v, count(*)::int n
+              FROM f, regexp_matches(COALESCE(f.apps, ''), 'apps\\.shopify\\.com/([a-z0-9][a-z0-9-]*)', 'g') AS m
+              WHERE m[1] NOT IN ('partners','collections','browse','categories','stores')
+              GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
 
   const [agg] = await sql<Record<string, unknown>[]>`
     WITH f AS MATERIALIZED (
       SELECT country, platform, city, category, btrim(theme) AS theme,
-             ${band} AS band,
+             ${band} AS band, activity_tier, hosting_provider,
+             payments, shipping_providers, apps, plus,
+             (email IS NOT NULL AND email <> '') AS has_email,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on,
              discovered_at
       FROM imported_stores WHERE ${where}
     )
     SELECT (SELECT count(*)::int FROM f) AS total,
-           ${sql.unsafe(facetSub("country"))}  AS f_country,
-           ${sql.unsafe(facetSub("platform"))} AS f_platform,
-           ${sql.unsafe(facetSub("band"))}     AS f_band,
-           ${sql.unsafe(facetSub("category"))} AS f_category,
-           ${sql.unsafe(facetSub("city"))}     AS f_city,
-           ${sql.unsafe(facetSub("theme"))}    AS f_theme,
+           (SELECT count(*)::int FILTER (WHERE plus) FROM f)       AS c_plus,
+           (SELECT count(*)::int FILTER (WHERE has_email) FROM f)  AS c_email,
+           ${sql.unsafe(facetSub("country"))}       AS f_country,
+           ${sql.unsafe(facetSub("platform"))}      AS f_platform,
+           ${sql.unsafe(facetSub("band"))}          AS f_band,
+           ${sql.unsafe(facetSub("category"))}      AS f_category,
+           ${sql.unsafe(facetSub("city"))}          AS f_city,
+           ${sql.unsafe(facetSub("theme"))}         AS f_theme,
+           ${sql.unsafe(facetSub("activity_tier"))} AS f_activity,
+           ${sql.unsafe(facetSub("hosting_provider"))} AS f_hosting,
+           ${sql.unsafe(multiFacet("payments"))}         AS f_payment,
+           ${sql.unsafe(multiFacet("shipping_providers"))} AS f_shipping,
+           ${sql.unsafe(appsFacet)}                   AS f_apps,
            (SELECT jsonb_build_object(
               '7',   count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 30),
@@ -180,8 +214,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
 
   const rows = await sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
-           (email IS NOT NULL AND email <> '') AS has_email,
-           ${usd}::int AS usd, ${band} AS band, discovered_at, ${launchSel},
+           activity_tier, email, instagram, facebook, tiktok,
+           instagram_followers, facebook_followers, product_count, avg_product_price, currency,
+           ${usd}::int AS usd, discovered_at, ${launchSel},
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500
     FROM imported_stores WHERE ${where}
@@ -191,22 +226,33 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   return {
     total,
     universe: await universeCount(),
-    rows: rows.map((r) => ({
-      domain: r.domain as string, name: (r.name as string) ?? null, category: (r.category as string) ?? null,
-      country: (r.country as string) ?? null, city: (r.city as string) ?? null,
-      platform: (r.platform as string) ?? null, theme: (r.theme as string) ?? null,
-      plus: !!r.plus, hasEmail: !!r.has_email,
-      estMonthlySales: r.usd == null ? null : Number(r.usd),
-      band: revenueBand(r.usd == null ? null : Number(r.usd)),
-      launchedAt: d(r.launched_on ? String(r.launched_on) : null),
-      discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
-      top100: !!r.top100, top500: !!r.top500,
-      score: 0,
-    })),
+    stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0) },
+    rows: rows.map((r) => {
+      const sales = r.usd == null ? null : Number(r.usd);
+      const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
+      const social = (Number(r.instagram_followers) || 0) + (Number(r.facebook_followers) || 0);
+      const email = (r.email as string) || null;
+      const catalog = Number(r.product_count) || 0;
+      return {
+        domain: r.domain as string, name: (r.name as string) ?? null, category: (r.category as string) ?? null,
+        country: (r.country as string) ?? null, city: (r.city as string) ?? null,
+        platform: (r.platform as string) ?? null, theme: (r.theme as string) ?? null,
+        plus: !!r.plus, activityTier: (r.activity_tier as string) ?? null,
+        estMonthlySales: sales, band: revenueBand(sales),
+        productCount: r.product_count == null ? null : Number(r.product_count), aovUsd: aov,
+        email, instagram: (r.instagram as string) ?? null, facebook: (r.facebook as string) ?? null, tiktok: (r.tiktok as string) ?? null,
+        launchedAt: d(r.launched_on ? String(r.launched_on) : null),
+        discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
+        top100: !!r.top100, top500: !!r.top500,
+        score: scoreLead(sales ?? 0, !!email, !!r.plus, social, r.discovered_at ? new Date(r.discovered_at as string) : null, catalog, aov ?? 0),
+      };
+    }),
     facets: {
       country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
       band: toFacet(agg.f_band), category: toFacet(agg.f_category),
       city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
+      activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
+      payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps),
     },
     recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
   };
