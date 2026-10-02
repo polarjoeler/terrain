@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
-import { revenueBand, bandTone, scoreColor, REVENUE_BANDS, type RevenueBand } from "@/lib/revenue";
-import type { ExploreLead } from "@/lib/leads-explore";
+import { scoreColor } from "@/lib/revenue";
+import { bandTone, REVENUE_BANDS, bandDisplay } from "@/lib/fx";
+import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
+import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
 
 const PAGE = 60;
-type SortKey = "score" | "sales" | "name";
+// "new" surfaces freshly-discovered stores first (the primary driver) — see lib/browse.ts ORDER.
+type SortKey = "new" | "score" | "sales" | "name";
+// Platforms whose stores are self-hosted, so a hosting provider is a meaningful lead signal. The
+// Hosting facet only makes sense for these — Shopify/Wix are SaaS (hosting is always the vendor).
+const OPEN_SOURCE_PLATFORMS = ["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart"];
 
 // Recency = how recently WE first tracked the store (discoveredAt), so "new this
 // week/month/year" means newly-discovered leads. Windows are nested, so it's a
@@ -30,12 +36,6 @@ const LAUNCH_OPTS: { key: LaunchKey; label: string; days: number }[] = [
   { key: "90d", label: "Launched this quarter", days: 90 },
   { key: "365d", label: "Launched this year", days: 365 },
 ];
-const withinDays = (iso: string | null, days: number) =>
-  iso != null && (Date.now() - new Date(iso).getTime()) <= days * 864e5;
-
-const usd = (n: number | null) =>
-  n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
-
 // A real Shopify theme name is short and word-like (Dawn, Debut, Focal, Shrine PRO).
 // The imported `theme` field is polluted with release notes / version strings for
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
@@ -134,8 +134,8 @@ export type ExploreInitial = {
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
 };
 
-export function Explorer({ leads, total, initial, showStats }: {
-  leads: ExploreLead[]; total?: number; initial?: ExploreInitial;
+export function Explorer({ initialData, initial, showStats }: {
+  initialData: BrowseResult; initial?: ExploreInitial;
   /** Render the live stat tiles above the table. The dashboard turns this on;
    *  /admin/explore leaves it off (it has its own header). */
   showStats?: boolean;
@@ -163,151 +163,117 @@ export function Explorer({ leads, total, initial, showStats }: {
   const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
-  const [sort, setSort] = useState<SortKey>("score");
-  const [shown, setShown] = useState(PAGE);
+  const [sort, setSort] = useState<SortKey>("new");
+  const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
+  const [data, setData] = useState<BrowseResult>(initialData);
+  const [loading, setLoading] = useState(false);
 
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (v: string) =>
     set((prev) => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n; });
 
-  // Faceted matcher — `skip` lets a facet's own counts ignore its own selection.
-  const passes = (l: ExploreLead, skip?: string) => {
-    if (skip !== "q" && qDebounced) {
-      const needle = qDebounced.toLowerCase();
-      if (!l.domain.toLowerCase().includes(needle) && !(l.name ?? "").toLowerCase().includes(needle)) return false;
-    }
-    if (skip !== "country" && country.size && !country.has((l.country ?? "??").toUpperCase())) return false;
-    if (skip !== "category" && category.size && !category.has(l.category ?? "—")) return false;
-    if (skip !== "band" && band.size && !band.has(revenueBand(l.estMonthlySales))) return false;
-    if (skip !== "theme" && theme.size && !theme.has(l.theme ?? "—")) return false;
-    if (skip !== "city" && city.size && !city.has(l.city ?? "—")) return false;
-    if (skip !== "platform" && platform.size && !platform.has(l.platform ?? "—")) return false;
-    if (skip !== "activity" && activity.size && !activity.has(l.activityTier ?? "—")) return false;
-    if (skip !== "hosting" && hosting.size && !hosting.has(l.hostingProvider ?? "—")) return false;
-    if (skip !== "payment" && payment.size) {
-      const toks = (l.payments ?? "").split(";").map((t) => t.trim());
-      if (![...payment].some((p) => toks.includes(p))) return false;
-    }
-    if (skip !== "shipping" && shipping.size) {
-      const toks = (l.shippingProviders ?? "").split(";").map((t) => t.trim());
-      if (![...shipping].some((p) => toks.includes(p))) return false;
-    }
-    if (skip !== "app" && app.size) {
-      const toks = (l.apps ?? "").split(";").map((t) => t.trim());
-      if (![...app].some((p) => toks.includes(p))) return false;
-    }
-    if (plusOnly && !l.plus) return false;
-    if (emailOnly && !l.email) return false;
-    // "No gateway yet" = we PROBED the checkout and it rendered no provider — a real prospect,
-    // not a store we simply haven't scraped. Requires paymentsChecked so unknowns are excluded.
-    if (noPaymentOnly && (!l.paymentsChecked || (l.payments ?? "").trim())) return false;
-    if (tier === "top100" && !l.top100) return false;
-    if (tier === "top500" && !l.top500) return false;
-    if (skip !== "recency" && recency) {
-      const days = RECENCY_OPTS.find((o) => o.key === recency)?.days ?? 0;
-      if (!withinDays(l.discoveredAt, days)) return false;
-    }
-    if (skip !== "launched" && launched) {
-      const days = LAUNCH_OPTS.find((o) => o.key === launched)?.days ?? 0;
-      if (!withinDays(l.launchedAt, days)) return false;
-    }
-    return true;
+  // Server-driven: filtering, sorting, paging and all 11 facet counts run in SQL (lib/browse.ts via
+  // the browse() action), so the client holds one ~60-row page + true counts over the whole table,
+  // not ~13k rows re-scanned on every keystroke. The search box updates `q` instantly; the fetch keys
+  // off the DEBOUNCED value so typing doesn't spam the server. Every other filter/sort/page change
+  // refetches directly. Counts are now correct over the full dataset, not a top-by-revenue slice.
+  const filters = useMemo<BrowseFilters>(() => ({
+    q: qDebounced || undefined,
+    country: country.size ? [...country] : undefined,
+    platform: platform.size ? [...platform] : undefined,
+    category: category.size ? [...category] : undefined,
+    band: band.size ? [...band] : undefined,
+    theme: theme.size ? [...theme] : undefined,
+    city: city.size ? [...city] : undefined,
+    payment: payment.size ? [...payment] : undefined,
+    shipping: shipping.size ? [...shipping] : undefined,
+    app: app.size ? [...app] : undefined,
+    activity: activity.size ? [...activity] : undefined,
+    hosting: hosting.size ? [...hosting] : undefined,
+    plus: plusOnly || undefined,
+    hasEmail: emailOnly || undefined,
+    noPayment: noPaymentOnly || undefined,
+    tier: tier || undefined,
+    launchedDays: launched ? LAUNCH_OPTS.find((o) => o.key === launched)?.days : undefined,
+    discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
+    sort,
+    limit,
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, activity, hosting, plusOnly, emailOnly, noPaymentOnly, tier, launched, recency, sort, limit]);
+
+  // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
+  // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    let live = true;
+    setLoading(true);
+    browse(filters).then((res) => {
+      if (!live) return;
+      if (!("error" in res)) setData(res);
+      setLoading(false);
+    }).catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [filters]);
+
+  const rows = data.rows;
+  // Facet data (server `{value,count}[]`) → the `[value,count][]` shape the <Facet> rail renders.
+  const fv = (f: FacetData): [string, number][] => f.map((x) => [x.value, x.count] as [string, number]);
+  const bandOrder = new Map(REVENUE_BANDS.map((b, i) => [b as string, i]));
+  const facets = {
+    country: fv(data.facets.country),
+    platform: fv(data.facets.platform),
+    activity: fv(data.facets.activity).sort((a, b) => (ACTIVITY_ORDER[a[0]] ?? 9) - (ACTIVITY_ORDER[b[0]] ?? 9)),
+    hosting: fv(data.facets.hosting),
+    category: fv(data.facets.category),
+    band: fv(data.facets.band).sort((a, b) => (bandOrder.get(a[0]) ?? 9) - (bandOrder.get(b[0]) ?? 9)),
+    theme: fv(data.facets.theme).filter(([t]) => isCleanTheme(t)),
+    city: fv(data.facets.city),
+    payment: fv(data.facets.payment),
+    shipping: fv(data.facets.shipping),
+    apps: fv(data.facets.apps),
   };
 
-  const filtered = useMemo(() => {
-    const out = leads.filter((l) => passes(l));
-    out.sort((a, b) =>
-      sort === "sales" ? (b.estMonthlySales ?? 0) - (a.estMonthlySales ?? 0)
-      : sort === "name" ? (a.name ?? a.domain).localeCompare(b.name ?? b.domain)
-      : b.score - a.score);
-    return out;
-  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched, sort]);
+  // Launch dates only populate once a snapshot carries them; hide the Launched control until then.
+  const hasLaunchData = Object.values(data.recency.launched).some((n) => n > 0);
+  const launchCount = (k: LaunchKey) => (k ? data.recency.launched[LAUNCH_OPTS.find((o) => o.key === k)!.days] ?? 0 : 0);
+  const recencyCount = (k: RecencyKey) => (k ? data.recency.discovered[RECENCY_OPTS.find((o) => o.key === k)!.days] ?? 0 : 0);
 
-  const countBy = (skip: string, key: (l: ExploreLead) => string): [string, number][] => {
-    const m = new Map<string, number>();
-    for (const l of leads) if (passes(l, skip)) { const k = key(l); m.set(k, (m.get(k) ?? 0) + 1); }
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  // Stat tiles read true counts over the WHOLE filtered set (from the aggregate), not the page.
+  const liveStats = {
+    shown: data.total,
+    fresh: hasLaunchData ? (data.recency.launched[7] ?? 0) : (data.recency.discovered[7] ?? 0),
+    plus: data.stats.plus,
+    email: data.stats.email,
   };
-  // All facet counts recompute together whenever any filter changes.
-  const facets = useMemo(() => {
-    const order = new Map(REVENUE_BANDS.map((b, i) => [b as string, i]));
-    // Multi-value facets (a store has several gateways/carriers/apps) count each token.
-    const multiCount = (skip: string, field: (l: ExploreLead) => string | null): [string, number][] => {
-      const m = new Map<string, number>();
-      for (const l of leads) if (passes(l, skip))
-        for (const t of (field(l) ?? "").split(";").map((x) => x.trim()).filter(Boolean)) m.set(t, (m.get(t) ?? 0) + 1);
-      return [...m.entries()].sort((a, b) => b[1] - a[1]);
-    };
-    return {
-      country: countBy("country", (l) => (l.country ?? "??").toUpperCase()),
-      platform: countBy("platform", (l) => l.platform ?? "—").filter(([p]) => p !== "—"),
-      activity: countBy("activity", (l) => l.activityTier ?? "—").filter(([t]) => t !== "—")
-        .sort((a, b) => (ACTIVITY_ORDER[a[0]] ?? 9) - (ACTIVITY_ORDER[b[0]] ?? 9)),
-      hosting: countBy("hosting", (l) => l.hostingProvider ?? "—").filter(([h]) => h !== "—"),
-      category: countBy("category", (l) => l.category ?? "—").filter(([c]) => c !== "—"),
-      band: countBy("band", (l) => revenueBand(l.estMonthlySales)).filter(([b]) => b !== "—").sort((a, b) => (order.get(a[0]) ?? 9) - (order.get(b[0]) ?? 9)),
-      theme: countBy("theme", (l) => l.theme ?? "—").filter(([t]) => isCleanTheme(t)),
-      city: countBy("city", (l) => l.city ?? "—").filter(([c]) => c !== "—"),
-      payment: multiCount("payment", (l) => l.payments),
-      shipping: multiCount("shipping", (l) => l.shippingProviders),
-      apps: multiCount("app", (l) => l.apps),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, noPaymentOnly, tier, recency, launched]);
 
-  // Rows written into browse_snapshot before launchedAt existed carry null, which
-  // would render the whole Launched control as a column of zeroes. Hide it until a
-  // snapshot refresh fills the dates in, rather than showing a filter that can only
-  // ever return nothing.
-  const hasLaunchData = useMemo(() => leads.some((l) => l.launchedAt != null), [leads]);
-
-  // Stat tiles read off `filtered`, not the server — so they move the instant a
-  // facet is toggled instead of waiting on a round-trip. This is what replaced
-  // the old market dropdown, which did `window.location.href = ...` (a full page
-  // reload) to change one number.
-  //
-  // Note "Newly discovered" is discoveredAt (when WE first tracked the store),
-  // which is what every other recency control here means. The server's old
-  // "new this week" tile counted LAUNCH date, so the two aren't interchangeable
-  // — hence the different label rather than a silently different number.
-  const liveStats = useMemo(() => ({
-    shown: filtered.length,
-    // Launch date is the number people actually mean by "new stores"; fall back to
-    // discovery only while a pre-launchedAt snapshot is still in play. The tile's
-    // label follows whichever is being counted, so it never claims to be the other.
-    fresh: filtered.filter((l) => withinDays(hasLaunchData ? l.launchedAt : l.discoveredAt, 7)).length,
-    plus: filtered.filter((l) => l.plus).length,
-    email: filtered.filter((l) => l.email).length,
-  }), [filtered, hasLaunchData]);
-
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); };
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); setLimit(PAGE); };
   const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
-  // Counts for the recency control — computed with recency skipped so each window
-  // shows its own total regardless of the current selection.
-  const launchCounts = useMemo(() => {
-    const base = leads.filter((l) => passes(l, "launched"));
-    const out = Object.fromEntries(LAUNCH_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.launchedAt, o.days)).length])) as Record<LaunchKey, number>;
-    // ~14% of stores have no launch date at all. They match no window, so without
-    // saying so the counts read as "everything else is old" rather than "unknown".
-    out[""] = base.filter((l) => l.launchedAt == null).length;
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, recency]);
-
-  const recencyCounts = useMemo(() => {
-    const base = leads.filter((l) => passes(l, "recency"));
-    return Object.fromEntries(RECENCY_OPTS.map((o) => [o.key, base.filter((l) => withinDays(l.discoveredAt, o.days)).length])) as Record<RecencyKey, number>;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, qDebounced, country, platform, activity, hosting, category, band, theme, city, payment, shipping, app, plusOnly, emailOnly, tier, launched]);
-
-  const exportCsv = () => {
-    const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "lead_score", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
-    const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const rows = filtered.map((l) => [l.domain, l.name, l.category, l.country, l.city, l.platform, l.activityTier, l.activityScore, l.hostingProvider, l.platformVersion, l.theme, l.productCount, l.aovUsd, l.estMonthlySales, revenueBand(l.estMonthlySales), l.score, l.plus, l.email, l.payments, l.shippingProviders, l.apps, l.instagram, l.facebook, l.tiktok].map(esc).join(","));
-    const blob = new Blob([[head.join(","), ...rows].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `terrain-leads-${filtered.length}.csv`; a.click();
+  // Export the FULL filtered set from the server (every matching row + full field set), not just the
+  // page on screen — this also closes the old unmetered client-side export. POST the active filters.
+  const [exporting, setExporting] = useState(false);
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const res = await fetch("/api/explore-export", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(filters),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `terrain-leads-${data.total}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally { setExporting(false); }
   };
+
+  // Platform-aware filter visibility: Shopify-only controls (Plus, the Shopify app-store facet) show
+  // only when Shopify is in the filter; Hosting shows only for self-hosted platforms, since for SaaS
+  // platforms (Shopify/Wix) the host is always the vendor and tells you nothing.
+  const shopifySelected = platform.has("shopify");
+  const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p));
 
   return (
     <div className="flex min-h-screen gap-0">
@@ -317,10 +283,17 @@ export function Explorer({ leads, total, initial, showStats }: {
           <span className="text-sm font-semibold text-cream">Filters {activeCount > 0 && <span className="ml-1 rounded-full bg-cyan/20 px-1.5 text-xs text-cyan">{activeCount}</span>}</span>
           {activeCount > 0 && <button onClick={clearAll} className="text-xs text-cream/45 hover:text-cream">Clear all</button>}
         </div>
+        {/* Country + CMS are the primary filters — they lead the rail. */}
+        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        {(facets.platform.length > 1 || platform.size > 0) && <Facet title="CMS / platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
+
+        {/* Quick toggles. Shopify-specific controls appear only when Shopify is in the platform filter. */}
         <div className="mt-3 space-y-1">
-          <button onClick={() => setPlusOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${plusOnly ? "bg-lilac/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-            <span className={`h-3 w-3 rounded border ${plusOnly ? "border-lilac bg-lilac" : "border-cream/25"}`} /> Shopify Plus only
-          </button>
+          {shopifySelected && (
+            <button onClick={() => setPlusOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${plusOnly ? "bg-lilac/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+              <span className={`h-3 w-3 rounded border ${plusOnly ? "border-lilac bg-lilac" : "border-cream/25"}`} /> Shopify Plus only
+            </button>
+          )}
           <button onClick={() => setEmailOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${emailOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
           </button>
@@ -336,6 +309,26 @@ export function Explorer({ leads, total, initial, showStats }: {
           </div>
         </div>
 
+        {/* Newly discovered — when WE first saw it. The key control for new stores. Single-select. */}
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
+          <div className="mt-2 space-y-1">
+            {RECENCY_OPTS.map((o) => {
+              const on = recency === o.key;
+              return (
+                <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
+                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
+                    {o.label}
+                  </span>
+                  <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Launched — when the store started selling. Single-select (nested windows). */}
         {hasLaunchData && (
           <div className="mt-4">
@@ -344,54 +337,30 @@ export function Explorer({ leads, total, initial, showStats }: {
               {LAUNCH_OPTS.map((o) => {
                 const on = launched === o.key;
                 return (
-                  <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setShown(PAGE); }}
+                  <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setLimit(PAGE); }}
                     className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
                     <span className="flex items-center gap-2">
                       <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
                       {o.label}
                     </span>
-                    <span className="text-xs tabular-nums text-cream/40">{(launchCounts[o.key] ?? 0).toLocaleString()}</span>
+                    <span className="text-xs tabular-nums text-cream/40">{launchCount(o.key).toLocaleString()}</span>
                   </button>
                 );
               })}
             </div>
-            {launchCounts[""] > 0 && (
-              <p className="mt-1.5 px-2 text-[11px] leading-snug text-cream/35">
-                {launchCounts[""].toLocaleString()} more with no launch date on record — not in any window above.
-              </p>
-            )}
           </div>
         )}
 
-        {/* Recently discovered — when WE first saw it. Single-select (nested windows). */}
-        <div className="mt-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
-          <div className="mt-2 space-y-1">
-            {RECENCY_OPTS.map((o) => {
-              const on = recency === o.key;
-              return (
-                <button key={o.key} onClick={() => setRecency(on ? "" : o.key)}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                  <span className="flex items-center gap-2">
-                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                    {o.label}
-                  </span>
-                  <span className="text-xs text-cream/40">{(recencyCounts[o.key] ?? 0).toLocaleString()}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {facets.platform.length > 1 && <Facet title="Platform" values={facets.platform} selected={platform} onToggle={toggle(setPlatform)} label={platformLabel} />}
+        {/* Secondary facets. Woo activity shows only when there's Woo data; Hosting only for self-hosted
+            platforms; the Shopify app-store facet only when Shopify is selected. */}
         {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
-        {facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
-        <Facet title="Country" values={facets.country} selected={country} onToggle={toggle(setCountry)} />
+        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} />
-        <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />
+        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />}
         <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
       </aside>
 
@@ -420,23 +389,24 @@ export function Explorer({ leads, total, initial, showStats }: {
           </div>
         )}
         <div className="flex flex-wrap items-center gap-3">
-          <input value={q} onChange={(e) => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search domain or store…"
+          <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(PAGE); }} placeholder="Search domain or store…"
             className="w-72 rounded-full border border-cream/15 bg-transparent px-4 py-2 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50" />
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="rounded-full border border-cream/15 bg-transparent px-3 py-2 text-sm text-cream outline-none">
+          <select value={sort} onChange={(e) => { setSort(e.target.value as SortKey); setLimit(PAGE); }} className="rounded-full border border-cream/15 bg-transparent px-3 py-2 text-sm text-cream outline-none">
+            <option value="new" className="text-ink">Sort: Newest first</option>
             <option value="score" className="text-ink">Sort: Lead Fit Score</option>
             <option value="sales" className="text-ink">Sort: Revenue</option>
             <option value="name" className="text-ink">Sort: Name</option>
           </select>
           <span className="text-sm text-cream/50">
-            <b className="text-cream">{filtered.length.toLocaleString()}</b> of {(total ?? leads.length).toLocaleString()} leads
-            {total != null && total > leads.length && (
-              <span className="text-cream/35"> · top {leads.length.toLocaleString()} by value loaded</span>
-            )}
+            <b className="text-cream">{data.total.toLocaleString()}</b> of {data.universe.toLocaleString()} leads
+            {loading && <span className="ml-1 text-cream/35">· updating…</span>}
           </span>
-          <button onClick={exportCsv} className="ml-auto rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105">Export {filtered.length.toLocaleString()} → CSV</button>
+          <button onClick={exportCsv} disabled={exporting} className="ml-auto rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
+            {exporting ? "Exporting…" : `Export ${data.total.toLocaleString()} → CSV`}
+          </button>
         </div>
 
-        <div className="mt-4 overflow-x-auto rounded-2xl border border-cream/10">
+        <div className={`mt-4 overflow-x-auto rounded-2xl border border-cream/10 transition-opacity ${loading ? "opacity-60" : ""}`}>
           <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="border-b border-cream/10 text-xs uppercase tracking-wide text-cream/40">
               <tr>
@@ -445,8 +415,9 @@ export function Explorer({ leads, total, initial, showStats }: {
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, shown).map((l) => {
-                const b = revenueBand(l.estMonthlySales);
+              {rows.map((l) => {
+                const b = l.band;
+                const bd = bandDisplay(l.band, l.country);
                 return (
                   <tr key={l.domain} onClick={() => setSelected(l.domain)} className="cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05]" title="View all known data">
                     <td className="px-4 py-2.5">
@@ -468,7 +439,10 @@ export function Explorer({ leads, total, initial, showStats }: {
                     </td>
                     <td className="px-4 py-2.5 text-cream/60">{l.category ?? "—"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? marketLabel(l.country) : "—"}</td>
-                    <td className="px-4 py-2.5"><span className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{b}</span> <span className="ml-1 text-xs text-cream/30">{usd(l.estMonthlySales)}</span></td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{bd.local}</span>
+                      <span className="ml-1 text-xs text-cream/30">{bd.usd}</span>
+                    </td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-xs text-cream/50">
                       {l.productCount != null ? `${l.productCount >= 250 ? "250+" : l.productCount} products` : <span className="text-cream/25">—</span>}
                       {l.aovUsd != null && <span className="text-cream/30"> · ${Math.round(l.aovUsd)} AOV</span>}
@@ -489,10 +463,10 @@ export function Explorer({ leads, total, initial, showStats }: {
           </table>
         </div>
 
-        {shown < filtered.length && (
+        {rows.length < data.total && (
           <div className="mt-4 text-center">
-            <button onClick={() => setShown((s) => s + PAGE)} className="rounded-full border border-cream/15 px-5 py-2 text-sm text-cream/70 hover:border-cream/40">
-              Load more ({(filtered.length - shown).toLocaleString()} left)
+            <button onClick={() => setLimit((s) => s + PAGE)} disabled={loading} className="rounded-full border border-cream/15 px-5 py-2 text-sm text-cream/70 hover:border-cream/40 disabled:opacity-50">
+              {loading ? "Loading…" : `Load more (${(data.total - rows.length).toLocaleString()} left)`}
             </button>
           </div>
         )}

@@ -156,7 +156,7 @@ function toUsd(sales: number | null, currency: string | null, country: string | 
 
 /** Transparent 0–100 fit score from the signals we trust: revenue (value),
  *  a reachable email, Shopify Plus, social reach, and recency of discovery. */
-function scoreLead(sales: number, email: boolean, plus: boolean, social: number, discoveredAt: Date | null, catalog: number, aovUsd: number): number {
+export function scoreLead(sales: number, email: boolean, plus: boolean, social: number, discoveredAt: Date | null, catalog: number, aovUsd: number): number {
   let score = 0;
   score += Math.min(38, Math.round((Math.log10(sales + 1) / 7) * 38));      // revenue → up to 38
   if (email) score += 18;                                                     // contactable
