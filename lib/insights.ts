@@ -809,6 +809,23 @@ const STATS_TTL_MS = 5 * 60 * 1000;
 const _statsCache = new Map<string, CachedStats>();
 const _statsInflight = new Map<string, Promise<import("./sheets").FeedStats>>();
 
+// Bounded wait: prerender (ISR build) and cold page loads must never hang on a slow pooler — a
+// multi-minute aggregate under fleet load blew the 180s static-gen budget and failed deploys. If the
+// live scan is slower than this, callers get a bundled, DB-free fallback instead.
+const HOME_STATS_TIMEOUT_MS = 8_000;
+let _statsFallback: import("./sheets").FeedStats | null = null;
+async function homeStatsFallback(): Promise<import("./sheets").FeedStats> {
+  if (_statsFallback) return _statsFallback;
+  const { feedStats } = await import("./leads");   // bundled constants, no DB
+  _statsFallback = {
+    storesTracked: feedStats.storesTracked, southAfrica: feedStats.storesTracked,
+    newThisWeek: feedStats.newThisWeek,
+    withEmailPct: Math.round((100 * feedStats.withEmail) / Math.max(feedStats.storesTracked, 1)),
+    plusFlagged: feedStats.plusFlagged, updatedAt: null, live: false,
+  };
+  return _statsFallback;
+}
+
 export async function getHomeStats(country = "ZA", platform: PlatformSel = "shopify"): Promise<import("./sheets").FeedStats> {
   const key = `${country}|${platform}`;
   const hit = _statsCache.get(key);
@@ -820,7 +837,18 @@ export async function getHomeStats(country = "ZA", platform: PlatformSel = "shop
       .catch((e) => { _statsInflight.delete(key); if (hit) return hit.data; throw e; });
     _statsInflight.set(key, inflight);
   }
-  return inflight;
+  // Race the live query against the timeout. On timeout → bundled fallback (the inflight query still
+  // resolves and caches in the background, so the next caller gets real numbers); on error → fallback.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<import("./sheets").FeedStats>((resolve) => {
+    timer = setTimeout(() => { void homeStatsFallback().then(resolve); }, HOME_STATS_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([inflight.then((d) => { clearTimeout(timer); return d; }), guard]);
+  } catch {
+    clearTimeout(timer);
+    return homeStatsFallback();
+  }
 }
 
 async function getHomeStatsUncached(country = "ZA", platform: PlatformSel = "shopify"): Promise<import("./sheets").FeedStats> {
