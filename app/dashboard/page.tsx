@@ -9,7 +9,7 @@ import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
-import { exploreBrowse } from "@/lib/leads-explore";
+import { browseQuery, type BrowseFilters } from "@/lib/browse";
 import { Explorer } from "@/app/admin/explore/explorer";
 
 // Per-user paywall — never cache this page across requests.
@@ -208,12 +208,25 @@ export default async function Dashboard({
   );
 }
 
-// Loads the ENTIRE live set (not a top-N slice) so every lead — and its
-// enrichment — is browsable. Runs inside Suspense, off the page's critical path.
+// Server-paginated (lib/browse.ts): SSR the first ~60-row page with the deep-link filters applied so
+// the first paint already matches (the Explorer skips its first client fetch to honour this), then the
+// Explorer refetches through browse() as filters change. Was ~7MB of leads to the browser; now tens of
+// KB. Runs inside Suspense, off the page's critical path.
 async function BrowseSection({ initial }: { initial?: import("@/app/admin/explore/explorer").ExploreInitial }) {
-  const { leads, count } = await exploreBrowse().catch(() => ({ leads: [], count: 0 }));
-  if (!leads.length) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
-  return <Explorer leads={leads} total={count} initial={initial} showStats />;
+  const RMAP: Record<string, number> = { "7d": 7, "30d": 30, "365d": 365 };
+  const LMAP: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
+  const filters: BrowseFilters = {
+    q: initial?.q || undefined,
+    country: initial?.country, category: initial?.category, band: initial?.band,
+    theme: initial?.theme, city: initial?.city, payment: initial?.payment, shipping: initial?.shipping,
+    activity: initial?.activity, noPayment: initial?.noPayment || undefined,
+    launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
+    discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
+    limit: 60,
+  };
+  const data = await browseQuery(filters).catch(() => null);
+  if (!data || data.universe === 0) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
+  return <Explorer initialData={data} initial={initial} showStats />;
 }
 
 function BrowseSkeleton() {

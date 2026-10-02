@@ -134,6 +134,26 @@ async function universeCount(): Promise<number> {
   return n;
 }
 
+// The counts + facets are the slow half: they aggregate the whole filtered universe (a 3–10s scan on
+// this instance under fleet load), whereas the row page is a ~450ms indexed LIMIT. But they depend
+// only on the FILTER — not on paging or sort — and don't change second-to-second. So cache the parsed
+// aggregate per filter: "Load more", a re-sort, and repeat visits then pay only the rows query, and a
+// burst of identical requests collapses onto one scan. Process-local + short TTL (serve-stale is fine
+// for facet counts); the universe count has its own cache above.
+type AggParsed = {
+  total: number;
+  stats: { plus: number; email: number };
+  facets: BrowseResult["facets"];
+  recency: BrowseResult["recency"];
+};
+const AGG_TTL_MS = 5 * 60_000;
+const _aggCache = new Map<string, { at: number; v: AggParsed }>();
+/** Cache key: every filter EXCEPT paging + sort, which don't affect counts or facets. */
+function aggKey(f: BrowseFilters): string {
+  const { limit: _l, offset: _o, sort: _s, ...rest } = f;
+  return JSON.stringify(rest);
+}
+
 export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
   const sql = db();
   const where = buildWhere(f);
@@ -172,7 +192,18 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               WHERE m[1] NOT IN ('partners','collections','browse','categories','stores')
               GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
 
-  const [agg] = await sql<Record<string, unknown>[]>`
+  const toFacet = (v: unknown): Facet =>
+    ((v ?? []) as [string, number][]).map(([value, count]) => ({ value: String(value), count: Number(count) }));
+  const toRec = (v: unknown): Record<number, number> =>
+    Object.fromEntries(Object.entries((v ?? {}) as Record<string, number>).map(([k, n]) => [Number(k), Number(n)]));
+
+  const key = aggKey(f);
+  const hit = _aggCache.get(key);
+  let A: AggParsed;
+  if (hit && Date.now() - hit.at < AGG_TTL_MS) {
+    A = hit.v;
+  } else {
+    const [agg] = await sql<Record<string, unknown>[]>`
     WITH f AS MATERIALIZED (
       SELECT country, platform, city, category, btrim(theme) AS theme,
              ${band} AS band, activity_tier, hosting_provider,
@@ -183,8 +214,8 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
       FROM imported_stores WHERE ${where}
     )
     SELECT (SELECT count(*)::int FROM f) AS total,
-           (SELECT count(*)::int FILTER (WHERE plus) FROM f)       AS c_plus,
-           (SELECT count(*)::int FILTER (WHERE has_email) FROM f)  AS c_email,
+           (SELECT (count(*) FILTER (WHERE plus))::int FROM f)       AS c_plus,
+           (SELECT (count(*) FILTER (WHERE has_email))::int FROM f)  AS c_email,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
            ${sql.unsafe(facetSub("platform"))}      AS f_platform,
            ${sql.unsafe(facetSub("band"))}          AS f_band,
@@ -205,12 +236,20 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '7',   count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 30),
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
-
-  const total = Number(agg.total);
-  const toFacet = (v: unknown): Facet =>
-    ((v ?? []) as [string, number][]).map(([value, count]) => ({ value: String(value), count: Number(count) }));
-  const toRec = (v: unknown): Record<number, number> =>
-    Object.fromEntries(Object.entries((v ?? {}) as Record<string, number>).map(([k, n]) => [Number(k), Number(n)]));
+    A = {
+      total: Number(agg.total),
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0) },
+      facets: {
+        country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
+        band: toFacet(agg.f_band), category: toFacet(agg.f_category),
+        city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
+        activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
+        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps),
+      },
+      recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
+    };
+    _aggCache.set(key, { at: Date.now(), v: A });
+  }
 
   const rows = await sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
@@ -224,9 +263,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     LIMIT ${limit} OFFSET ${offset}`;
 
   return {
-    total,
+    total: A.total,
     universe: await universeCount(),
-    stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0) },
+    stats: A.stats,
     rows: rows.map((r) => {
       const sales = r.usd == null ? null : Number(r.usd);
       const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
@@ -247,13 +286,38 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         score: scoreLead(sales ?? 0, !!email, !!r.plus, social, r.discovered_at ? new Date(r.discovered_at as string) : null, catalog, aov ?? 0),
       };
     }),
-    facets: {
-      country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
-      band: toFacet(agg.f_band), category: toFacet(agg.f_category),
-      city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
-      activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
-      payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps),
-    },
-    recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
+    facets: A.facets,
+    recency: A.recency,
   };
+}
+
+/** CSV of the FULL filtered set (every matching row, full field set) — the Explorer's "Export → CSV".
+ *  This replaced a client-side export that only ever wrote the rows the browser had loaded; the lean
+ *  paginated rows no longer carry the full field set, so the export re-queries it here. Capped so a
+ *  pathological filter can't stream the whole table; ordered by revenue like the old export. */
+const EXPORT_CAP = 50_000;
+export async function browseExportCsv(f: BrowseFilters = {}): Promise<string> {
+  const sql = db();
+  const where = buildWhere(f);
+  const usd = sql.unsafe(usdSqlExpr());
+  const band = sql.unsafe(bandSqlExpr());
+  const out = await sql<Record<string, unknown>[]>`
+    SELECT domain, name, category, country, city, platform, activity_tier, activity_score,
+           hosting_provider, platform_version, btrim(theme) AS theme, product_count, avg_product_price,
+           currency, ${usd}::int AS usd, ${band} AS band, plus, email, payments, shipping_providers,
+           apps, instagram, facebook, tiktok
+    FROM imported_stores WHERE ${where}
+    ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
+    LIMIT ${EXPORT_CAP}`;
+  const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
+  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = out.map((r) => {
+    const sales = r.usd == null ? null : Number(r.usd);
+    const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
+    return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
+      r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
+      sales, revenueBand(sales), r.plus, r.email, r.payments, r.shipping_providers, r.apps,
+      r.instagram, r.facebook, r.tiktok].map(esc).join(",");
+  });
+  return [head.join(","), ...lines].join("\n");
 }

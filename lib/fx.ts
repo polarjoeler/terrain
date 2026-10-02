@@ -53,6 +53,19 @@ export function revenueBand(n: number | null): RevenueBand {
   return "<$100";
 }
 
+/** Revenue band → pill colour (richest lilac at the top → faint cream at the bottom), used by the
+ *  leads table. Co-located with the band scale it colours so the two can't drift apart. */
+export function bandTone(band: RevenueBand): string {
+  switch (band) {
+    case "$100K+": return "bg-lilac/25 text-lilac border-lilac/40";
+    case "$25K–100K": return "bg-cyan/15 text-cyan border-cyan/30";
+    case "$5K–25K": return "bg-mint/15 text-mint border-mint/30";
+    case "$1K–5K": return "bg-orange/15 text-orange border-orange/30";
+    case "$100–1K": return "bg-cream/10 text-cream/50 border-cream/15";
+    default: return "bg-cream/5 text-cream/30 border-cream/10";
+  }
+}
+
 /** Band as a SQL expression, for GROUP BY facet counts. */
 export function bandSqlExpr(): string {
   const usd = usdSqlExpr();
