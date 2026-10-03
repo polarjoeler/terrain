@@ -234,10 +234,11 @@ async function main() {
         AND ai_enriched_at IS NULL
         AND (category IS NULL OR description IS NULL)
         ${COUNTRIES ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
-      -- Prioritise FRESH discoveries: new stores have no revenue, so value-ordering left them bare
-      -- (category/email near 0% on this week's stores). Do the last 14 days first, by value within,
-      -- so new leads get a category + description promptly; the value backlog follows.
-      ORDER BY (discovered_at >= now() - interval '14 days') DESC, estimated_monthly_sales DESC NULLS LAST, created_at DESC
+      -- Prioritise FRESH discoveries: value-ordering (estimated_monthly_sales DESC) left new no-revenue
+      -- stores bare (category/email near 0% on this week's stores). Order by discovered_at DESC — newest
+      -- first — which uses idx_imported_discovered (an index scan, not an explicit sort), so even the
+      -- --all cron stays fast on the busy DB instead of timing out on a full sort.
+      ORDER BY discovered_at DESC NULLS LAST
       ${LIMIT ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     if (!rows.length) { console.log("Nothing to enrich — all live stores already have category + description."); return; }
