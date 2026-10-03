@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { coverageMatrix, rangeActivity, type CoverageRow, type PlatCoverage } from "@/lib/ops";
+import { coverageMatrix, cmsMonitor, rangeActivity, type CoverageRow, type PlatCoverage, type CmsHealth } from "@/lib/ops";
 import { countryEmoji, countryName, regionOf, REGION_ORDER } from "@/lib/countries";
 import { RangeFilter } from "./range-filter";
 
@@ -94,6 +94,57 @@ function GrandCard({ label, color, p }: { label: string; color: string; p: PlatC
   );
 }
 
+// "3d ago" / "5h ago" / "never" — and a staleness tone for the freshness dot.
+function freshness(iso: string | null): { label: string; stale: boolean; never: boolean } {
+  if (!iso) return { label: "never", stale: true, never: true };
+  const days = (Date.now() - new Date(iso).getTime()) / 864e5;
+  const label = days < 1 ? `${Math.max(1, Math.round(days * 24))}h ago` : `${Math.round(days)}d ago`;
+  return { label, stale: days > 7, never: false };
+}
+
+// Per-CMS health: one row per non-Shopify CMS across focus markets, with enrichment freshness.
+function CmsMonitorTable({ rows }: { rows: CmsHealth[] }) {
+  return (
+    <div className="overflow-x-auto border-t border-cream/10">
+      <table className="w-full min-w-[640px] border-collapse">
+        <thead>
+          <tr className="border-b border-cream/12 text-[10px] font-semibold uppercase tracking-wide text-cream/40">
+            <th className="py-2 pl-3 pr-2 text-left">CMS</th>
+            <th className="py-2 pr-3 text-right">Tracked</th>
+            <th className="py-2 pr-3 text-right">New 7d</th>
+            <th className="py-2 pr-3 text-right">Payments</th>
+            <th className="py-2 pr-3 text-right">Launch</th>
+            <th className="py-2 pr-3 text-right">Deep-enriched</th>
+            <th className="py-2 pr-3 text-right">Last enriched</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const f = freshness(r.lastEnriched);
+            return (
+              <tr key={r.platform} className="border-b border-cream/[0.06]">
+                <td className="py-2.5 pl-3 pr-2 text-sm text-cream/85">
+                  <span className="mr-2 inline-block h-2 w-2 rounded-full align-middle" style={{ background: OTHER }} />{r.platform}
+                </td>
+                <td className="py-2.5 pr-3 text-right text-sm tabular-nums text-cream/85">{r.tracked.toLocaleString()}</td>
+                <td className="py-2.5 pr-3 text-right text-sm tabular-nums">{r.new7d > 0 ? <span className="text-mint">+{r.new7d}</span> : <span className="text-cream/20">—</span>}</td>
+                <td className="py-2.5 pr-3"><Cov pct={r.payPct} tone="mint" /></td>
+                <td className="py-2.5 pr-3"><Cov pct={r.launchPct} tone="cyan" /></td>
+                <td className="py-2.5 pr-3"><Cov pct={r.deepPct} tone="lilac" /></td>
+                <td className="py-2.5 pr-3 text-right text-xs tabular-nums">
+                  <span className={f.never ? "text-rose-400/70" : f.stale ? "text-amber-400/70" : "text-cream/50"} title={r.lastEnriched ?? "never deep-enriched"}>
+                    <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: f.never ? "#fb7185" : f.stale ? "#fbbf24" : "#6ee7b7" }} />{f.label}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default async function CoveragePage({ searchParams }: { searchParams: Promise<{ cms?: string; from?: string; to?: string; ac?: string }> }) {
   const email = await currentUser();
   if (!email) redirect("/login");
@@ -110,6 +161,7 @@ export default async function CoveragePage({ searchParams }: { searchParams: Pro
   const m = await coverageMatrix().catch(() => null);
   if (!m) return <main className="grid min-h-screen place-items-center text-cream/50">Couldn&rsquo;t load coverage.</main>;
   const activity = await rangeActivity(from, to, ac || undefined).catch(() => null);
+  const cmsHealth = await cmsMonitor().catch(() => null);
   const cmsHref = (k: CmsSel) => { const p = new URLSearchParams(); if (k !== "all") p.set("cms", k); if (sp.from) p.set("from", sp.from); if (sp.to) p.set("to", sp.to); if (sp.ac) p.set("ac", sp.ac); const q = p.toString(); return q ? `?${q}` : "?"; };
 
   // Group rows by region, in REGION_ORDER; keep the focus-first / size ordering inside each.
@@ -152,6 +204,20 @@ export default async function CoveragePage({ searchParams }: { searchParams: Pro
           </ul>
           <p className="mt-2 text-cream/40">Coverage % is over tracked stores. Focus markets (🇿🇦 🇰🇪 🇳🇬 🇯🇵) are actively enriched; the rest of the world is discovered &amp; banked but only lightly enriched. <b className="text-cream/70">Click any country</b> to see every CMS in it.</p>
         </section>
+
+        {/* Per-CMS health — the "Other" bucket broken out, with enrichment freshness (focus markets) */}
+        {cmsHealth && cmsHealth.length > 0 && (
+          <section className="mt-6 overflow-hidden rounded-3xl border border-cream/12 bg-cream/[0.02]">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 px-3 py-2.5">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/60">Per-CMS health</h2>
+              <span className="text-[11px] text-cream/35">non-Shopify CMSs · focus markets 🇿🇦 🇰🇪 🇳🇬 🇯🇵 · deep-enrich round-robins so none go stale</span>
+            </div>
+            <CmsMonitorTable rows={cmsHealth} />
+            <p className="px-3 py-2.5 text-[11px] leading-relaxed text-cream/35">
+              <b className="text-cream/60">Deep-enriched</b> = share with a homepage deep-probe on record (theme / apps / subscriptions / banked text). <b className="text-cream/60">Last enriched</b> is the most recent deep-probe in that CMS — <span className="text-amber-400/70">amber</span> &gt; 7 days, <span className="text-rose-400/70">red</span> never. deep-enrich now round-robins across CMSs each run, so the small platforms can&rsquo;t be starved by WooCommerce&rsquo;s backlog.
+            </p>
+          </section>
+        )}
 
         {/* Activity by date range — pipeline + enrichment throughput in a window, per country */}
         <section id="activity" className="mt-6 rounded-3xl border border-cream/12 bg-cream/[0.02] p-4">

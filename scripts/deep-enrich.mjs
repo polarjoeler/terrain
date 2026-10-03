@@ -94,19 +94,33 @@ async function main() {
     const platFilter = platArg
       ? sql`AND LOWER(platform) = ${platArg}`
       : sql`AND platform IS NOT NULL AND LOWER(platform) <> 'shopify'`;
-    const rows = await sql`
-      SELECT domain, platform, theme, plugins, technologies, subscription_tools
-      FROM imported_stores
-      WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-        ${platFilter}
-        AND UPPER(country) = ANY(${countries})
-        AND (deep_enriched_at IS NULL OR deep_enriched_at < now() - (${REPROBE_DAYS} || ' days')::interval)
-      -- Prioritise FRESH discoveries: value-ordering (estimated_monthly_sales DESC) sorted brand-new
-      -- no-revenue stores to the back, so they stayed bare. Order by discovered_at DESC instead — newest
-      -- first — which also uses idx_imported_discovered (an index scan, no explicit sort), so it stays
-      -- fast on the busy DB even with a large candidate set.
-      ORDER BY discovered_at DESC NULLS LAST
-      LIMIT ${LIMIT}`;
+    const whereCond = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      ${platFilter}
+      AND UPPER(country) = ANY(${countries})
+      AND (deep_enriched_at IS NULL OR deep_enriched_at < now() - (${REPROBE_DAYS} || ' days')::interval)`;
+    // Prioritise FRESH discoveries (discovered_at DESC) — value-ordering buried brand-new no-revenue
+    // stores, so they stayed bare. For a single --platform the plain ORDER BY uses idx_imported_discovered
+    // (index scan, no sort), fast on the busy DB. For the default multi-CMS run we round-robin ACROSS
+    // CMSs: rank each store within its own platform by freshness, then order by that rank first — so every
+    // CMS's freshest stores enrich before any CMS's deep tail. Without this, WooCommerce (~11.6k un-enriched
+    // vs ~1.8k for every other CMS combined) keeps jumping the queue with fresh discoveries and starves the
+    // small platforms (Wix/Magento/Ecwid/…) for days. The candidate set is already filtered to published
+    // non-Shopify (~14k rows), so the window-sort is cheap.
+    const rows = platArg
+      ? await sql`
+          SELECT domain, platform, theme, plugins, technologies, subscription_tools
+          FROM imported_stores WHERE ${whereCond}
+          ORDER BY discovered_at DESC NULLS LAST
+          LIMIT ${LIMIT}`
+      : await sql`
+          WITH cand AS (
+            SELECT domain, platform, theme, plugins, technologies, subscription_tools, discovered_at,
+                   ROW_NUMBER() OVER (PARTITION BY LOWER(platform) ORDER BY discovered_at DESC NULLS LAST) AS rn
+            FROM imported_stores WHERE ${whereCond})
+          SELECT domain, platform, theme, plugins, technologies, subscription_tools
+          FROM cand
+          ORDER BY rn ASC, discovered_at DESC NULLS LAST
+          LIMIT ${LIMIT}`;
     if (!rows.length) { console.log("Nothing to deep-enrich — all matching stores done within the window."); return; }
     console.log(`Deep-enriching ${rows.length} store(s) at concurrency ${CONC}${DRY ? " [DRY]" : ""}…\n`);
 
