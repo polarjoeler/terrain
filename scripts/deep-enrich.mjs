@@ -101,7 +101,10 @@ async function main() {
         ${platFilter}
         AND UPPER(country) = ANY(${countries})
         AND (deep_enriched_at IS NULL OR deep_enriched_at < now() - (${REPROBE_DAYS} || ' days')::interval)
-      ORDER BY estimated_monthly_sales DESC NULLS LAST
+      -- Prioritise FRESH discoveries: a brand-new store has no revenue yet, so pure value-ordering
+      -- sorted it to the back and it stayed bare. Do stores discovered in the last 14 days first
+      -- (by value within), so new leads get theme/apps/tech promptly; the older backlog follows.
+      ORDER BY (discovered_at >= now() - interval '14 days') DESC, estimated_monthly_sales DESC NULLS LAST
       LIMIT ${LIMIT}`;
     if (!rows.length) { console.log("Nothing to deep-enrich — all matching stores done within the window."); return; }
     console.log(`Deep-enriching ${rows.length} store(s) at concurrency ${CONC}${DRY ? " [DRY]" : ""}…\n`);

@@ -234,7 +234,10 @@ async function main() {
         AND ai_enriched_at IS NULL
         AND (category IS NULL OR description IS NULL)
         ${COUNTRIES ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
-      ORDER BY estimated_monthly_sales DESC NULLS LAST, created_at DESC
+      -- Prioritise FRESH discoveries: new stores have no revenue, so value-ordering left them bare
+      -- (category/email near 0% on this week's stores). Do the last 14 days first, by value within,
+      -- so new leads get a category + description promptly; the value backlog follows.
+      ORDER BY (discovered_at >= now() - interval '14 days') DESC, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT ? sql`LIMIT ${LIMIT}` : sql``}`;
 
     if (!rows.length) { console.log("Nothing to enrich — all live stores already have category + description."); return; }
