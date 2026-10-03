@@ -3,6 +3,7 @@
 import { db as sharedDb } from "./db";
 import { cachedAgg } from "./agg-cache";
 import { regionOf } from "./countries";
+import { platformLabel } from "./platforms";
 
 function db() {
   return sharedDb();
@@ -331,6 +332,46 @@ export async function countryCoverage(country: string): Promise<CmsCoverage[]> {
     // Normalise the display name (woocommerce → WooCommerce) and shape as PlatCoverage.
     const label = (p: string) => (p === "woocommerce" ? "WooCommerce" : p);
     return rows.map((r) => ({ platform: label(r.platform), ...toPlat({ discovered: Number(r.discovered), tracked: Number(r.tracked), pay: Number(r.pay), reachable: Number(r.reachable), launch: Number(r.launch), checked: Number(r.checked) }) }));
+  });
+}
+
+// Global per-CMS health across the focus markets (ZA/KE/NG/JP) — the coverage page's "Other" bucket
+// broken into real per-CMS rows WITH enrichment freshness, so a starved or stale CMS is visible at a
+// glance. `deep-enrich` round-robins across CMSs precisely so none of these fall behind; this is the
+// monitor for that. Cached (one GROUP BY, slow-moving).
+export type CmsHealth = {
+  platform: string;              // display label (Wix / Magento / …)
+  tracked: number;               // published & live, brochures excluded
+  payPct: number; launchPct: number; deepPct: number; // enrichment coverage over tracked
+  new7d: number;                 // discovered in the last 7 days
+  lastEnriched: string | null;   // ISO of the most recent deep-enrich in this CMS
+};
+export async function cmsMonitor(): Promise<CmsHealth[]> {
+  return cachedAgg("coverage:cms-monitor", 10 * 60 * 1000, async () => {
+    const sql = db();
+    const TRACKED = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
+    const rows = await sql<{ platform: string; tracked: number; pay: number; launch: number; deep: number; new7: number; last_enriched: string | null }[]>`
+      SELECT lower(platform) platform,
+        count(*) FILTER (WHERE ${TRACKED})::int tracked,
+        count(*) FILTER (WHERE ${TRACKED} AND payments IS NOT NULL AND payments <> '')::int pay,
+        count(*) FILTER (WHERE ${TRACKED} AND (launched_at IS NOT NULL OR first_product_at ~ '^[0-9]{4}'))::int launch,
+        count(*) FILTER (WHERE ${TRACKED} AND deep_enriched_at IS NOT NULL)::int deep,
+        count(*) FILTER (WHERE ${TRACKED} AND discovered_at >= now() - interval '7 days')::int new7,
+        max(deep_enriched_at) FILTER (WHERE ${TRACKED}) last_enriched
+      FROM imported_stores
+      WHERE platform IS NOT NULL AND lower(platform) <> 'shopify'
+        AND UPPER(country) = ANY(${[...FOCUS_MARKETS]})
+      GROUP BY 1 HAVING count(*) FILTER (WHERE ${TRACKED}) > 0
+      ORDER BY tracked DESC`;
+    return rows.map((r) => ({
+      platform: platformLabel(r.platform),
+      tracked: Number(r.tracked),
+      payPct: pctOfC(Number(r.pay), Number(r.tracked)),
+      launchPct: pctOfC(Number(r.launch), Number(r.tracked)),
+      deepPct: pctOfC(Number(r.deep), Number(r.tracked)),
+      new7d: Number(r.new7),
+      lastEnriched: r.last_enriched ? new Date(r.last_enriched).toISOString() : null,
+    }));
   });
 }
 
