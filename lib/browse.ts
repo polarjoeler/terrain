@@ -14,7 +14,7 @@
  *  max:3 and fanning aggregates out in parallel deadlocks the page.
  */
 import { usdSqlExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
-import { scoreLead } from "./leads-explore.ts";
+import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
@@ -125,7 +125,7 @@ const ORDER: Record<SortKey, string> = {
   name: "COALESCE(name, domain) ASC",
   launched: "launched_on DESC NULLS LAST",
   discovered: "discovered_at DESC NULLS LAST",
-  score: "estimated_monthly_sales DESC NULLS LAST", // score is derived; revenue is its dominant term
+  score: `(${scoreExpr()}) DESC`, // the real lead-fit score (SQL), so non-Shopify ranks on merit not just revenue
 };
 
 /** Unfiltered total. Identical for every request, so compute it once. */
@@ -287,7 +287,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
            activity_tier, email, instagram, facebook, tiktok,
            instagram_followers, facebook_followers, product_count, avg_product_price, currency,
-           ${usd}::int AS usd, discovered_at, ${launchSel},
+           ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500
     FROM imported_stores WHERE ${where}
@@ -301,9 +301,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     rows: rows.map((r) => {
       const sales = r.usd == null ? null : Number(r.usd);
       const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
-      const social = (Number(r.instagram_followers) || 0) + (Number(r.facebook_followers) || 0);
       const email = (r.email as string) || null;
-      const catalog = Number(r.product_count) || 0;
       return {
         domain: r.domain as string, name: (r.name as string) ?? null, category: (r.category as string) ?? null,
         country: (r.country as string) ?? null, city: (r.city as string) ?? null,
@@ -315,7 +313,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         launchedAt: d(r.launched_on ? String(r.launched_on) : null),
         discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
         top100: !!r.top100, top500: !!r.top500,
-        score: scoreLead(sales ?? 0, !!email, !!r.plus, social, r.discovered_at ? new Date(r.discovered_at as string) : null, catalog, aov ?? 0),
+        score: Number(r.fit_score) || 0,
       };
     }),
     facets: A.facets,
