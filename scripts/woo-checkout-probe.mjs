@@ -158,17 +158,23 @@ async function probe(domain) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS woo_checkout_at TIMESTAMPTZ`;
-    // Target undated payments first, then upgrade plugin-derived to checkout-verified. Skip anything
-    // already checkout-probed (woo_checkout_at set); a network failure leaves it null → retried.
+    // NB: woo_checkout_at is a long-standing column (in schema.sql). Do NOT re-run
+    // `ALTER TABLE … ADD COLUMN IF NOT EXISTS` here every tick — on Supabase that DDL takes a lock
+    // and fires PostgREST's extensions.pgrst_ddl_watch() schema-reload trigger, which under fleet
+    // load times out (seen in logs: statement-timeout 57014 inside pgrst_ddl_watch). See
+    // [[postgres-schema-check-lock]]. Schema changes belong in schema.sql, not in a hot probe loop.
+    // Target undated payments, then upgrade plugin-derived to checkout-verified. Skip anything already
+    // checkout-probed (woo_checkout_at set); a network failure leaves it null → retried next tick.
+    // ORDER BY discovered_at DESC NULLS LAST only — a boolean-expression sort key (e.g.
+    // `(activity_tier IN ('selling','active')) DESC`) forces a full sort of the whole Woo candidate
+    // set and statement-times-out on the throttled DB (same bug fixed in ai-enrich/deep-enrich);
+    // discovered_at DESC uses idx_imported_discovered (index scan, no sort), so it stays fast.
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND woo_checkout_at IS NULL
         AND (payments IS NULL OR payments = '' OR payments_source = 'woo_plugin')
-      -- Real, live storefronts first (selling/active) + published: they actually have the Store API
-      -- and enabled gateways, so we spend the probe where the yield is, not on parked/dormant imports.
-      ORDER BY (activity_tier IN ('selling','active')) DESC NULLS LAST, published DESC, discovered_at DESC NULLS LAST
+      ORDER BY discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;
     console.log(`woo-checkout-probe: ${rows.length} stores (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
 
