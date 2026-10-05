@@ -6,7 +6,10 @@ import { AfricaReplay } from "@/app/insights/africa/africa-replay";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
 export const metadata = { title: "Terrain — African eCommerce, coming to life" };
-export const revalidate = 900;
+// force-dynamic (not ISR): ISR prerenders at BUILD, which runs africaTimeline's DB aggregate during
+// every deploy and spikes the burstable instance → the "it breaks after each deploy" cycle. Dynamic
+// keeps this off the build path; at request time cachedAgg serves the warm/stale row fast.
+export const dynamic = "force-dynamic";
 
 const EMPTY: AfricaTimeline = { months: [], countries: {}, pulses: [], featured: [], ops: { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }, meta: { lastLaunch: null, lastRefresh: null, totalTracked: 0, withoutDate: 0 } };
 

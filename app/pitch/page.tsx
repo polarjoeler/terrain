@@ -621,7 +621,7 @@ function Footer() {
 
 // ISR: regenerate the homepage (and its live stats) at most every 15 minutes,
 // so the numbers track the growing feed without a Sheets hit per visitor.
-export const revalidate = 900;
+export const dynamic = "force-dynamic"; // was ISR — getHomeStats at build spiked the DB each deploy
 
 export default async function Home() {
   // Headline numbers come from the Postgres store universe (same as /insights).
