@@ -13,7 +13,7 @@ export const metadata = {
     description: "A decade of African online-store growth, replayed across the map in thirty seconds.",
   },
 };
-export const revalidate = 900;
+export const dynamic = "force-dynamic"; // was ISR — don't run the DB aggregate at build (deploy spike)
 
 const EMPTY: AfricaTimeline = { months: [], countries: {}, pulses: [], featured: [], ops: { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }, meta: { lastLaunch: null, lastRefresh: null, totalTracked: 0, withoutDate: 0 } };
 
