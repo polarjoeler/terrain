@@ -266,13 +266,16 @@ const _insightsInflight = new Map<string, Promise<InsightsData>>();
 // selection (data-driven picker), so the type stays open. `(string & {})` keeps autocomplete for the
 // named ones while accepting the long tail (wix, base, cafe24, ec-cube, squarespace, …).
 export type PlatformSel = "shopify" | "woocommerce" | "magento" | "all" | (string & {});
-export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel) {
+// `col` lets a caller target an aliased column (e.g. "i.platform" in a join); it's a controlled
+// literal, never user input, so sql.unsafe is safe here.
+export function platformClause(sql: ReturnType<typeof db>, platform: PlatformSel, col = "platform") {
   if (platform === "all") return sql``;
+  const c = sql.unsafe(col);
   // "shopify" = real Shopify + not-yet-classified CT discoveries (platform NULL). Explicit rather
   // than "not Woo" so surfaced non-Shopify platforms (Magento, Wix, BASE…) don't leak into it.
-  if (platform === "shopify") return sql`AND (lower(platform) = 'shopify' OR platform IS NULL)`;
+  if (platform === "shopify") return sql`AND (lower(${c}) = 'shopify' OR ${c} IS NULL)`;
   // Every other CMS is an exact slug match. `${}` is parameterised (safe), lower-cased both sides.
-  return sql`AND lower(platform) = ${String(platform).toLowerCase()}`;
+  return sql`AND lower(${c}) = ${String(platform).toLowerCase()}`;
 }
 
 // Known CMS slug → display label + brand dot, for the platform picker and chart titles. The picker

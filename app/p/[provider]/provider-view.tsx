@@ -220,7 +220,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [],
+  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -232,12 +232,17 @@ export function ProviderView({
   logo: string | null;
   subReport?: ProviderSubReport | null;
   switches?: PaymentShift[];
+  platform?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  // The active CMS (carried from the insights drill-in) scopes the whole page; keep it in every
+  // internal link so changing country doesn't silently drop it.
+  const cmsLabel = platform === "all" ? "" : platform === "woocommerce" ? "WooCommerce" : platform.charAt(0).toUpperCase() + platform.slice(1);
   const linkFor = (c: string) => {
     const qs = new URLSearchParams();
     if (shareToken) qs.set("t", shareToken);
     if (c) qs.set("country", c);
+    if (platform && platform !== "all") qs.set("platform", platform);
     return `/p/${providerSlug(d.provider)}?${qs.toString()}`;
   };
   const copyLink = () => {
@@ -292,7 +297,7 @@ export function ProviderView({
         <header className="mt-8">
           <h1 className="font-display text-4xl md:text-5xl">How {d.provider} is doing across the market</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
-            Checkout-verified positioning {country ? `in the ${marketLabel(country)} Shopify market` : "across every market we track"} — where {d.provider}{" "}
+            Checkout-verified positioning {country ? `in the ${marketLabel(country)}${cmsLabel ? ` ${cmsLabel}` : ""} market` : cmsLabel ? `across every ${cmsLabel} market we track` : "across every market we track"} — where {d.provider}{" "}
             leads, where it's the only option, who it's up against, and the stores choosing it.
           </p>
         </header>

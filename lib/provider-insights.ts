@@ -20,7 +20,7 @@ export type ProviderSubReport = { total: number; subs: { label: string; count: n
 
 /** Split a provider into its sub-brands (Paystack → Onsite vs redirect; Stitch → Stitch vs
  *  WigWag) for the provider's OWN page. Merged everywhere else. null if the provider has none. */
-export async function providerSubReport(canonical: string, country?: string): Promise<ProviderSubReport | null> {
+export async function providerSubReport(canonical: string, country?: string, platform: string = "all"): Promise<ProviderSubReport | null> {
   const subs = PROVIDER_SUBBRANDS[canonical];
   if (!subs) return null;
   const sql = db();
@@ -28,7 +28,7 @@ export async function providerSubReport(canonical: string, country?: string): Pr
   const ctry = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const rows = await sql<{ payments: string }[]>`
     SELECT payments FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry}
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry} ${platformClause(sql, platform)}
       AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus' -- probe-verified only
       AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))
   `.catch(() => []);
@@ -93,11 +93,12 @@ const salesBand = (n: number | null): string =>
   n == null ? "unknown"
     : n >= 1e6 ? "$1M+/mo" : n >= 1e5 ? "$100k–1M" : n >= 1e4 ? "$10k–100k" : n >= 1e3 ? "$1k–10k" : "<$1k";
 
-export async function providerInsights(provider: string, country?: string): Promise<ProviderInsights> {
+export async function providerInsights(provider: string, country?: string, platform: string = "all"): Promise<ProviderInsights> {
   const sql = db();
   const p = norm(canonicalProvider(provider) || provider);
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const AND_P = platformClause(sql, platform);
 
   // Every live store that has ANY verified payment data (the honest denominator),
   // pulled with the fields we need — provider membership is decided in JS off the
@@ -120,7 +121,7 @@ export async function providerInsights(provider: string, country?: string): Prom
     -- CANONICAL: market share counts only PROBE-VERIFIED stores, never the StoreCensus vendor import
     -- (generic US-stack data that misses local PSPs and pads the denominator). Same rule in
     -- snapshot-providers.mjs and lib/insights.ts.
-    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
+    WHERE ${LIVE} ${AND_C} ${AND_P} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
       AND ${realPaymentsClause(sql)}`;
   const yearOf = (d: Date | null) => (d ? new Date(d).getUTCFullYear().toString() : "unknown");
 
@@ -165,7 +166,7 @@ export async function providerInsights(provider: string, country?: string): Prom
   const newLast30 = mine.filter((x) => launchedWithin(x.r, 30)).length;
   const [nd] = await sql<{ n7: number }[]>`
     SELECT COUNT(*)::int n7 FROM imported_stores
-    WHERE ${LIVE} ${AND_C} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
+    WHERE ${LIVE} ${AND_C} ${AND_P} AND payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus'
       AND launched_at IS NOT NULL AND launched_at >= CURRENT_DATE - 7`;
   const newStores7 = Number(nd.n7);
 
@@ -279,7 +280,7 @@ const NEW_SHARE_CFG: Record<NewSharePeriod, { trunc: string; window: string }> =
  *  discovered vs ~107 truly launched). Denominator is stores launched in the window WITH verified
  *  payment data (so "chose you" is knowable). Sparse for recent months until dating catches up. */
 export async function providerNewShareSeries(
-  provider: string, period: NewSharePeriod = "month", country?: string,
+  provider: string, period: NewSharePeriod = "month", country?: string, platform: string = "all",
 ): Promise<NewShareBucket[]> {
   const sql = db();
   // Match whole checkout tokens, not substrings: ILIKE '%credit card%' also hit
@@ -295,7 +296,7 @@ export async function providerNewShareSeries(
              SELECT 1 FROM unnest(string_to_array(payments, ';')) g
              WHERE lower(btrim(g)) = ANY(${variants}::text[])))::int AS mine
     FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${AND_C}
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${AND_C} ${platformClause(sql, platform)}
       AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= (now() - ${cfg.window}::interval)::date
       AND payments IS NOT NULL AND payments <> ''
     GROUP BY 1 ORDER BY 1`;
@@ -333,11 +334,11 @@ export async function snapshotProviders(min = 5): Promise<number> {
 }
 
 /** Historical trend for one provider (all snapshots, oldest → newest). */
-export async function providerHistory(provider: string, country = "ALL"): Promise<ProviderTrendPoint[]> {
+export async function providerHistory(provider: string, country = "ALL", platform: string = "all"): Promise<ProviderTrendPoint[]> {
   const sql = db();
   const rows = await sql<{ date: Date; data: Record<string, number> }[]>`
     SELECT date, data FROM provider_snapshots
-    WHERE lower(provider) = ${provider.toLowerCase()} AND country = ${country} AND platform = 'all'
+    WHERE lower(provider) = ${provider.toLowerCase()} AND country = ${country} AND platform = ${platform}
     ORDER BY date ASC`.catch(() => []);
   return rows.map((r) => {
     const total = Number(r.data.total ?? 0), verifiedBase = Number(r.data.verifiedBase ?? 0);
@@ -827,10 +828,11 @@ function labelShiftTokens(tokens: string[], canonical: string): string[] {
 
 /** Recent switches that involve THIS provider (added or dropped), for its own page. Keeps the
  *  sub-brand distinction (Paystack Onsite vs Paystack). */
-export async function providerSwitches(canonical: string, country?: string, limit = 12): Promise<PaymentShift[]> {
+export async function providerSwitches(canonical: string, country?: string, limit = 12, platform: string = "all"): Promise<PaymentShift[]> {
   const sql = db();
   const variants = providerVariants(canonical);
   const AND_C = country ? sql`AND UPPER(i.country) = ${country.toUpperCase()}` : sql``;
+  const AND_P = platformClause(sql, platform, "i.platform");
   const rows = await sql<{ domain: string; changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
     SELECT domain, changed_at, added, removed FROM (
       SELECT DISTINCT ON (pc.domain) pc.domain, pc.changed_at, pc.added, pc.removed
@@ -838,7 +840,7 @@ export async function providerSwitches(canonical: string, country?: string, limi
       WHERE (
         EXISTS (SELECT 1 FROM unnest(pc.added) a   WHERE lower(btrim(a)) = ANY(${variants}::text[]))
         OR EXISTS (SELECT 1 FROM unnest(pc.removed) x WHERE lower(btrim(x)) = ANY(${variants}::text[]))
-      ) ${AND_C}
+      ) ${AND_C} ${AND_P}
       ORDER BY pc.domain, pc.changed_at DESC
     ) latest ORDER BY changed_at DESC LIMIT ${limit}`.catch(() => []);
   return rows

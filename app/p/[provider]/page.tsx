@@ -33,10 +33,10 @@ export default async function ProviderPage({
   params, searchParams,
 }: {
   params: Promise<{ provider: string }>;
-  searchParams: Promise<{ t?: string; country?: string }>;
+  searchParams: Promise<{ t?: string; country?: string; platform?: string }>;
 }) {
   const { provider } = await params;
-  const { t, country: countryParam } = await searchParams;
+  const { t, country: countryParam, platform: platformParam } = await searchParams;
 
   // Resolve the canonical gateway name (proper casing) from the data. Matching is
   // slug-based so multi-word gateways work as clean paths — "Peach Payments" is
@@ -56,22 +56,28 @@ export default async function ProviderPage({
   const countries = await providerCountries(canonical).catch((): string[] => []);
   const country = countryParam && countries.includes(countryParam.toUpperCase()) ? countryParam.toUpperCase() : undefined;
 
+  // CMS filter (carried from the insights drill-in). Validate against the CMSs we track so a bad
+  // slug falls back to the combined view rather than an empty page.
+  const PF_OK = new Set(["all", "shopify", "woocommerce", "magento", "wix", "squarespace", "prestashop",
+    "bigcommerce", "ecwid", "webflow", "odoo", "shopstar", "base", "cafe24", "ec-cube", "salesforce commerce cloud"]);
+  const platform = platformParam && PF_OK.has(platformParam.toLowerCase()) ? platformParam.toLowerCase() : "all";
+
   // Share-of-new-stores series at each granularity, so the chart's Day/Week/Month/Quarter/Year
   // toggle is instant (no re-fetch).
   const periods: NewSharePeriod[] = ["day", "week", "month", "quarter", "year"];
   // Whole provider bundle (all ~9 aggregate queries) cached per provider×country — one row read
   // instead of recomputing on every view. Returns are JSON-safe (dates are pre-stringified).
   const { data, history, subReport, switches, newShare } = await cachedAgg(
-    `provider:${canonical}:${country ?? "ALL"}`,
+    `provider:${canonical}:${country ?? "ALL"}:${platform}`,
     10 * 60 * 1000,
     async () => {
       const [data, history, subReport, switches] = await Promise.all([
-        providerInsights(canonical, country),
-        providerHistory(canonical, country ?? "ALL"),
-        providerSubReport(canonical, country),
-        providerSwitches(canonical, country),
+        providerInsights(canonical, country, platform),
+        providerHistory(canonical, country ?? "ALL", platform),
+        providerSubReport(canonical, country, platform),
+        providerSwitches(canonical, country, 12, platform),
       ]);
-      const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country).catch(() => [])));
+      const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country, platform).catch(() => [])));
       const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
       return { data, history, subReport, switches, newShare };
     },
@@ -84,5 +90,5 @@ export default async function ProviderPage({
   const logo = providerLogo(providerSlug(canonical));
 
   return <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
-    countries={countries} country={country ?? ""} logo={logo} subReport={subReport} switches={switches} />;
+    countries={countries} country={country ?? ""} logo={logo} subReport={subReport} switches={switches} platform={platform} />;
 }
