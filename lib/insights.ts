@@ -1138,6 +1138,7 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
   const newRows = await sql<{ payments: string }[]>`SELECT payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ${cc} AND payments IS NOT NULL AND payments <> ''  -- country stored uppercase; UPPER() defeated the index (~2s scan)
+      ${platformClause(sql, platform)}
       AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) > ${winStart}::date
       AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) <= ${vIso}::date`.catch(() => []);
   const newBy = new Map<string, number>();
@@ -1188,7 +1189,8 @@ export async function sectionReport(section: string, country = "ZA", period: Per
       COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch_date
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-      AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}`;
+      AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}
+      ${platformClause(sql, platform)}`;
 
   const cut = Date.now() - P * 864e5;
   const total = new Map<string, number>(), periodM = new Map<string, number>();
