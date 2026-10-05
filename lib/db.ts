@@ -17,10 +17,32 @@ import postgres from "postgres";
 
 let _sql: ReturnType<typeof postgres> | null = null;
 
+// The transaction pooler (…pooler.supabase.com:6543) multiplexes thousands of clients and is the
+// ONLY correct target for the app + fleet. The SESSION pooler (:5432) has a hard 15-client cap and
+// throws EMAXCONNSESSION the moment any real concurrency hits it — a trap we fell into once via a
+// stale dev-server env and misread as "the DB is too small" for days. Fail loud, never silent again.
+function assertTransactionPooler(url: string): void {
+  try {
+    const port = new URL(url).port;
+    if (port === "5432") {
+      const msg =
+        "DATABASE_URL points at the Supabase SESSION pooler (:5432, hard 15-client cap). " +
+        "Use the TRANSACTION pooler (:6543) — the session pooler will throw EMAXCONNSESSION under load.";
+      // Loud in every environment; hard-stop outside production so it's caught before it ships.
+      console.error("⚠️  " + msg);
+      if (process.env.NODE_ENV !== "production") throw new Error(msg);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("SESSION pooler")) throw e;
+    /* URL parse failed → leave it to postgres() to surface */
+  }
+}
+
 export function db() {
   if (!_sql) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL not set");
+    assertTransactionPooler(url);
     _sql = postgres(url, { prepare: false, max: 8, idle_timeout: 20, connect_timeout: 10 });
   }
   return _sql;
