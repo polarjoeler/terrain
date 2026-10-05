@@ -18,7 +18,10 @@ export const dynamic = "force-dynamic"; // was ISR — don't run the DB aggregat
 const EMPTY: AfricaTimeline = { months: [], countries: {}, pulses: [], featured: [], ops: { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }, meta: { lastLaunch: null, lastRefresh: null, totalTracked: 0, withoutDate: 0 } };
 
 export default async function AfricaPublicMap() {
-  const data = await cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
+  // Per-request (force-dynamic): never block on a cold aggregate — 4s cap, then render empty and let
+  // the background compute warm the durable row for next time. See app/page.tsx.
+  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
+  const data = await Promise.race([agg, new Promise<typeof EMPTY>((r) => setTimeout(() => r(EMPTY), 4000))]);
   const ready = data.months.length > 0;
 
   return (

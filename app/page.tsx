@@ -56,7 +56,11 @@ const toneBg: Record<string, string> = { cyan: "rgba(76,201,212,.14)", mint: "rg
 const toneFg: Record<string, string> = { cyan: "var(--color-cyan)", mint: "var(--color-mint)", lilac: "var(--color-lilac)" };
 
 export default async function Home() {
-  const data = await cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
+  // force-dynamic renders per-request, so NEVER block on a cold aggregate: if cachedAgg can't produce
+  // within 4s (cold key + busy DB), render the empty state immediately — the compute keeps running in
+  // the background and warms the durable row for the next visit. Keeps the landing page instant always.
+  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
+  const data = await Promise.race([agg, new Promise<typeof EMPTY>((r) => setTimeout(() => r(EMPTY), 4000))]);
   const ready = data.months.length > 0;
 
   return (
