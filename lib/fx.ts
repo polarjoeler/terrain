@@ -24,16 +24,21 @@ export function toUsd(sales: number | null, currency: string | null, country: st
   return Math.round(sales * (FX[ccy] ?? 1));
 }
 
-/** The same conversion as a SQL expression, generated from the table above so the
- *  two can't drift. Returns estimated monthly sales in USD. */
-export function usdSqlExpr(): string {
+/** Convert any local-currency NUMERIC column to USD as a SQL expression, generated from the table
+ *  above so SQL and TS can't drift. `currency`/`country` on the row pick the rate. */
+export function usdExpr(col: string): string {
   const ccy = Object.entries(CCY_BY_COUNTRY)
     .map(([c, k]) => `WHEN '${c}' THEN '${k}'`).join(" ");
   const fx = Object.entries(FX)
     .map(([k, v]) => `WHEN '${k}' THEN ${v}`).join(" ");
-  return `ROUND(estimated_monthly_sales * (
+  return `ROUND(${col} * (
     CASE upper(COALESCE(NULLIF(currency, ''), CASE upper(COALESCE(country,'')) ${ccy} ELSE 'USD' END))
       ${fx} ELSE 1 END)::numeric)`;
+}
+
+/** Estimated monthly sales in USD. */
+export function usdSqlExpr(): string {
+  return usdExpr("estimated_monthly_sales");
 }
 
 /** Revenue bands, recalibrated to the actual distribution of this market.
