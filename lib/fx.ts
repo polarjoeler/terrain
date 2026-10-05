@@ -8,12 +8,19 @@
  */
 
 export const FX: Record<string, number> = {
-  USD: 1, ZAR: 0.054, NGN: 0.00065, KES: 0.0077,
+  USD: 1, ZAR: 0.054, NGN: 0.00065, KES: 0.0077, JPY: 0.0067,
   GBP: 1.27, EUR: 1.08, AUD: 0.66, CAD: 0.73,
+  // Other focus-market currencies (approx; revenue is a rough band, not accounting).
+  EGP: 0.021, MAD: 0.10, GHS: 0.064, TZS: 0.00037, UGX: 0.00026, DZD: 0.0074, TND: 0.32,
+  XOF: 0.0016, MUR: 0.021, MZN: 0.016, XAF: 0.0016, BWP: 0.073, AOA: 0.0011, NAD: 0.054,
+  RWF: 0.00072, ZMW: 0.037, ETB: 0.0071, ZWL: 0.0021, LYD: 0.205,
 };
 
 export const CCY_BY_COUNTRY: Record<string, string> = {
-  ZA: "ZAR", NG: "NGN", KE: "KES", US: "USD", GB: "GBP",
+  ZA: "ZAR", NG: "NGN", KE: "KES", US: "USD", GB: "GBP", JP: "JPY",
+  EG: "EGP", MA: "MAD", GH: "GHS", TZ: "TZS", UG: "UGX", DZ: "DZD", TN: "TND",
+  CI: "XOF", SN: "XOF", MU: "MUR", MZ: "MZN", CM: "XAF", BW: "BWP", AO: "AOA",
+  NA: "NAD", RW: "RWF", ZM: "ZMW", ET: "ETB", ZW: "ZWL", LY: "LYD",
 };
 
 /** Currency is stored inconsistently cased ("ZAR" and "zar" both occur), so

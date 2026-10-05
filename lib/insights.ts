@@ -8,7 +8,8 @@
 import { after } from "next/server";
 import { db as sharedDb } from "./db";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
-import { VISIBLE_MARKETS } from "./markets";
+import { VISIBLE_MARKETS, FOCUS_MARKETS } from "./markets";
+import { cachedAgg } from "./agg-cache";
 
 function db() {
   return sharedDb();
@@ -214,15 +215,33 @@ export async function cohortCount(country: string, tag: string): Promise<number>
 }
 
 /** Distinct markets with published live stores, most first — for the selector. */
+// The insights country picker. We hold stores globally but only enrich + surface the FOCUS_MARKETS
+// (Africa + Japan), and only those clearing a live-store floor so the picker lists substantive markets
+// (not a country with 12 stores). The count GROUP BY over the focus set is ~8s on the pooled instance —
+// too slow per request — so it's wrapped in the durable SWR cache (agg_cache): computed once, then served
+// fresh/stale-while-revalidate across cold starts. On a cold-compute failure we fall back to the core
+// markets rather than hanging or emptying the picker; that fallback is NOT cached, so counts fill in on
+// the next successful compute. Expanding this to every country on earth would need an unbounded scan the
+// throttled DB can't afford — hence the curated focus set.
+const COUNTRY_PICKER_FLOOR = 50;
 export async function availableCountries(): Promise<{ country: string; stores: number }[]> {
-  // Only the visible markets — the DB holds stores globally, but the pickers (and thus
-  // insights + the dashboard) offer just these until we launch more.
-  const rows = await db()<{ country: string; n: number }[]>`
-    SELECT country, COUNT(*)::int n FROM imported_stores
-    WHERE published AND country = ANY(${[...VISIBLE_MARKETS]})
-      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-    GROUP BY country ORDER BY n DESC`;
-  return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
+  try {
+    return await cachedAgg("insights:available-countries", 60 * 60 * 1000, async () => {
+      const sql = db();
+      const rows = await sql.begin(async (t) => {
+        await t`SET LOCAL statement_timeout = '20s'`; // fail fast + fall back rather than hog a pooled conn
+        return t<{ country: string; n: number }[]>`
+          SELECT country, COUNT(*)::int n FROM imported_stores
+          WHERE published AND country = ANY(${[...FOCUS_MARKETS]})
+            AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+          GROUP BY country HAVING COUNT(*) >= ${COUNTRY_PICKER_FLOOR} ORDER BY n DESC`;
+      });
+      return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
+    });
+  } catch {
+    // Throttled DB on a cold key → keep the picker working with the core markets (not cached).
+    return [...VISIBLE_MARKETS].map((country) => ({ country, stores: 0 }));
+  }
 }
 
 // The insights page fires ~a dozen aggregate queries; it's identical for every

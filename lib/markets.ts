@@ -6,6 +6,15 @@
 // Every customer query filters to this set; everything else stays in the DB, hidden.
 export const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
 
+// Every market we actively enrich + are willing to surface in the insights country picker (the picker
+// then shows only those that clear a live-store threshold). Africa focus + Japan. Still a curated set,
+// not "every country on earth" — the DB holds stores globally but an unbounded country scan is too
+// expensive on the pooled instance (see availableCountries).
+export const FOCUS_MARKETS = [
+  "ZA", "KE", "NG", "EG", "MA", "GH", "TZ", "UG", "DZ", "TN", "CI", "SN", "MU", "MZ",
+  "CM", "BW", "AO", "NA", "RW", "ZM", "ET", "ZW", "LY", "MW", "SO", "LS", "SZ", "JP",
+] as const;
+
 export const MARKETS: Record<string, { name: string; emoji: string; adjective: string }> = {
   ZA: { name: "South Africa", emoji: "🇿🇦", adjective: "South African" },
   NG: { name: "Nigeria", emoji: "🇳🇬", adjective: "Nigerian" },
@@ -15,6 +24,22 @@ export const MARKETS: Record<string, { name: string; emoji: string; adjective: s
   GH: { name: "Ghana", emoji: "🇬🇭", adjective: "Ghanaian" },
   TZ: { name: "Tanzania", emoji: "🇹🇿", adjective: "Tanzanian" },
   UG: { name: "Uganda", emoji: "🇺🇬", adjective: "Ugandan" },
+  JP: { name: "Japan", emoji: "🇯🇵", adjective: "Japanese" },
+  DZ: { name: "Algeria", emoji: "🇩🇿", adjective: "Algerian" },
+  TN: { name: "Tunisia", emoji: "🇹🇳", adjective: "Tunisian" },
+  CI: { name: "Côte d’Ivoire", emoji: "🇨🇮", adjective: "Ivorian" },
+  SN: { name: "Senegal", emoji: "🇸🇳", adjective: "Senegalese" },
+  MU: { name: "Mauritius", emoji: "🇲🇺", adjective: "Mauritian" },
+  MZ: { name: "Mozambique", emoji: "🇲🇿", adjective: "Mozambican" },
+  CM: { name: "Cameroon", emoji: "🇨🇲", adjective: "Cameroonian" },
+  BW: { name: "Botswana", emoji: "🇧🇼", adjective: "Botswanan" },
+  AO: { name: "Angola", emoji: "🇦🇴", adjective: "Angolan" },
+  NA: { name: "Namibia", emoji: "🇳🇦", adjective: "Namibian" },
+  RW: { name: "Rwanda", emoji: "🇷🇼", adjective: "Rwandan" },
+  ZM: { name: "Zambia", emoji: "🇿🇲", adjective: "Zambian" },
+  ET: { name: "Ethiopia", emoji: "🇪🇹", adjective: "Ethiopian" },
+  ZW: { name: "Zimbabwe", emoji: "🇿🇼", adjective: "Zimbabwean" },
+  LY: { name: "Libya", emoji: "🇱🇾", adjective: "Libyan" },
 };
 
 /** Flag + name, e.g. "🇿🇦 South Africa". Falls back to the raw code. */

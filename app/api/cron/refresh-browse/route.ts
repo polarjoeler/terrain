@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { refreshBrowseCache } from "@/lib/browse";
+import { availableCountries } from "@/lib/insights";
 
 // Warms the durable leads-browse aggregate cache (browse_cache) for the hot keys — the unfiltered
 // default + each market — so cold page loads read a precomputed counts/facets result instead of
@@ -19,5 +20,8 @@ export async function GET(req: Request) {
   }
   const t = Date.now();
   const warmed = await refreshBrowseCache().catch(() => -1);
-  return NextResponse.json({ ok: warmed >= 0, warmed, ms: Date.now() - t });
+  // Also warm the insights country-picker counts (a ~8s focus-market GROUP BY) off the request path,
+  // so the picker never pays it on a user load — best-effort, never fails the warm.
+  const countries = await availableCountries().then((c) => c.length).catch(() => -1);
+  return NextResponse.json({ ok: warmed >= 0, warmed, countries, ms: Date.now() - t });
 }
