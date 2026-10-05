@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { createContext, useContext, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
@@ -132,14 +132,25 @@ function TrendLine({ data }: { data: number[] }) {
 // Drill-through link. Payment providers go to their DEDICATED PERFORMANCE PAGE (/p/[provider]) —
 // insights should lead to deeper analysis, not back to the raw leads list. Everything else still
 // pre-filters the Explorer for now (theme/category/app reports are a later step).
-function drillHref(param: string, label: string, country?: string): string {
+// The active CMS, so every drill/report link below carries ?platform= and the destination (a section
+// report, a provider page, the Explorer) stays scoped to the CMS the user is looking at. Provided by
+// InsightsView; "all" (the default) omits the param.
+const PlatformCtx = createContext<string>("all");
+const platformParam = (platform?: string) => (platform && platform !== "all" ? platform : null);
+
+function drillHref(param: string, label: string, country?: string, platform?: string): string {
+  const pf = platformParam(platform);
   if (param === "payment") {
-    const q = country ? `?country=${encodeURIComponent(country)}` : "";
-    return `/p/${encodeURIComponent(label)}${q}`;
+    const q = new URLSearchParams();
+    if (country) q.set("country", country);
+    if (pf) q.set("platform", pf);
+    const s = q.toString();
+    return `/p/${encodeURIComponent(label)}${s ? `?${s}` : ""}`;
   }
   const p = new URLSearchParams();
   p.set(param, label);
   if (country) p.set("country", country);
+  if (pf) p.set("platform", pf);
   return `/dashboard?${p.toString()}`;
 }
 
@@ -159,6 +170,7 @@ function DistroCard({
   adopt?: Record<string, number>;
   adoptWord?: string;
 }) {
+  const platform = useContext(PlatformCtx);
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
   const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
@@ -172,7 +184,7 @@ function DistroCard({
           const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
           const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
-          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
+          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country, platform) } : {};
           return (
             <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
@@ -252,11 +264,13 @@ function PaymentIntelligenceCard({
   country: string;
   subtitle?: string;
 }) {
+  const platform = useContext(PlatformCtx);
+  const pfx = platformParam(platform) ? `&platform=${platformParam(platform)}` : "";
   return (
     <Card
       title="Payment intelligence"
       subtitle={subtitle ?? `Checkout-verified on ${data.coverage.paymentPct}% of reachable stores (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()}) — the rest have no completable checkout to read`}
-      reportHref={`/insights/payments?country=${country}`}
+      reportHref={`/insights/payments?country=${country}${pfx}`}
     >
       {/* Headline signals for payment-company subscribers */}
       <div className="mb-6 grid grid-cols-3 gap-3">
@@ -438,7 +452,9 @@ export function InsightsView({
     { n: `${cov.launchPct}%`, label: "launch-date coverage", sub: "of tracked" },
   ];
 
+  const pfx = platformParam(platform) ? `&platform=${platformParam(platform)}` : "";
   return (
+    <PlatformCtx.Provider value={platform}>
     <div className="min-h-screen px-4 py-6 md:px-8">
       {/* Indeterminate top bar + dim while a filter change is loading — immediate feedback. */}
       {pending && (
@@ -621,7 +637,7 @@ export function InsightsView({
             {/* Shopify Plus is a Shopify-only concept — hide it on the combined "all" view (there it
                 would mix an enterprise-Shopify signal into an all-ecommerce dashboard). */}
             {platform === "shopify" && (
-            <Card title="Shopify Plus adoption" subtitle="Cumulative total over time" reportHref={`/dashboard?plus=true&country=${country}`}>
+            <Card title="Shopify Plus adoption" subtitle="Cumulative total over time" reportHref={`/dashboard?plus=true&country=${country}${pfx}`}>
               {plusTrend ? <TrendLine data={plusTrend} /> : (
                 <div className="grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-sm text-cream/40">
                   Trend builds as daily snapshots accumulate
@@ -632,7 +648,7 @@ export function InsightsView({
               </p>
             </Card>
             )}
-            <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}`}>
+            <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}${pfx}`}>
               <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].leading : undefined} adoptWord={pw} />
             </Card>
           </div>
@@ -644,7 +660,7 @@ export function InsightsView({
             <Card
               title="Provider momentum"
               subtitle={`Which PSPs newly-launched stores are choosing — ${pw} vs ${PERIOD_PREV[period]}`}
-              reportHref={`/insights/payments?country=${country}`}
+              reportHref={`/insights/payments?country=${country}${pfx}`}
             >
               {/* Say exactly what's compared — this follows the Timeframe selector above. */}
               <div className="mb-4 rounded-xl bg-cream/[0.04] px-3 py-2 text-[11px] leading-relaxed text-cream/55">
@@ -663,7 +679,7 @@ export function InsightsView({
                     {momentum.slice(0, 8).map((m) => (
                       <li key={m.provider}>
                         <div className="flex items-center gap-3 text-sm">
-                          <Link href={drillHref("payment", m.provider, country)} className="flex-1 truncate text-cream/85 hover:text-cream hover:underline">{m.provider}</Link>
+                          <Link href={drillHref("payment", m.provider, country, platform)} className="flex-1 truncate text-cream/85 hover:text-cream hover:underline">{m.provider}</Link>
                           <span className="w-14 text-right tabular-nums text-cream/70">{m.share}%</span>
                           <span className={`w-16 text-right text-xs tabular-nums ${m.shareDelta > 0 ? "text-mint" : m.shareDelta < 0 ? "text-orange" : "text-cream/25"}`}>
                             {m.shareDelta > 0 ? "▲" : m.shareDelta < 0 ? "▼" : "·"} {m.shareDelta > 0 ? "+" : ""}{m.shareDelta}pt
@@ -682,7 +698,7 @@ export function InsightsView({
                 <p className="text-sm text-cream/40">Not enough stores launched in this window yet — try a longer timeframe (recent launches also lag until each store is payment-verified).</p>
               )}
             </Card>
-            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/switches?country=${country}`}>
+            <Card title="Recent provider switches" subtitle="Stores that added or dropped a gateway — latest change per store" reportHref={`/insights/switches?country=${country}${pfx}`}>
               {shifts.length ? (
                 <ul className="divide-y divide-cream/[0.06]">
                   {shifts.slice(0, 8).map((s, i) => {
@@ -693,17 +709,17 @@ export function InsightsView({
                         <div className="flex flex-wrap items-center gap-1.5 text-sm">
                           {swap ? (
                             <>
-                              <Link href={drillHref("payment", s.removed[0], country)} className="text-orange/75 line-through decoration-orange/40 hover:text-orange">{s.removed[0]}</Link>
+                              <Link href={drillHref("payment", s.removed[0], country, platform)} className="text-orange/75 line-through decoration-orange/40 hover:text-orange">{s.removed[0]}</Link>
                               <span className="text-cream/30">→</span>
-                              <Link href={drillHref("payment", s.added[0], country)} className="font-semibold text-mint hover:underline">{s.added[0]}</Link>
+                              <Link href={drillHref("payment", s.added[0], country, platform)} className="font-semibold text-mint hover:underline">{s.added[0]}</Link>
                             </>
                           ) : (
                             <>
                               {s.added.map((a) => (
-                                <Link key={`a${a}`} href={drillHref("payment", a, country)} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint hover:bg-mint/25">+ {a}</Link>
+                                <Link key={`a${a}`} href={drillHref("payment", a, country, platform)} className="rounded bg-mint/15 px-2 py-0.5 text-xs font-medium text-mint hover:bg-mint/25">+ {a}</Link>
                               ))}
                               {s.removed.map((r) => (
-                                <Link key={`r${r}`} href={drillHref("payment", r, country)} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange hover:bg-orange/25">− {r}</Link>
+                                <Link key={`r${r}`} href={drillHref("payment", r, country, platform)} className="rounded bg-orange/15 px-2 py-0.5 text-xs font-medium text-orange hover:bg-orange/25">− {r}</Link>
                               ))}
                             </>
                           )}
@@ -732,14 +748,14 @@ export function InsightsView({
 
           {platform !== "woocommerce" && (<>
           {/* Cross-platform distributions — meaningful on the combined "all" view too. */}
-          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].categories : undefined} adoptWord={pw} />
+          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].categories : undefined} adoptWord={pw} />
           {/* Themes + apps are SHOPIFY-specific (Shopify has no cross-platform equivalent), so they
               only appear when the Shopify platform is selected — not on the combined "all" view. */}
           {platform === "shopify" && (<>
-          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].themes : undefined} adoptWord={pw} />
-          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].apps : undefined} adoptWord={pw} />
+          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].themes : undefined} adoptWord={pw} />
+          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].apps : undefined} adoptWord={pw} />
           </>)}
-          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}`} adopt={tfTouched ? data.launchedDistro[pk].cities : undefined} adoptWord={pw} />
+          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].cities : undefined} adoptWord={pw} />
           <DistroCard
             title="Shipping providers"
             subtitle={`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`}
@@ -748,7 +764,7 @@ export function InsightsView({
             tone="cyan"
             drillParam="shipping"
             country={country}
-            reportHref={`/insights/shipping?country=${country}`}
+            reportHref={`/insights/shipping?country=${country}${pfx}`}
             adopt={tfTouched ? data.launchedDistro[pk].shipping : undefined}
             adoptWord={pw}
           />
@@ -808,6 +824,7 @@ export function InsightsView({
         </p>
       </div>
     </div>
+    </PlatformCtx.Provider>
   );
 }
 
@@ -827,6 +844,7 @@ function DrillList({
   adopt?: Record<string, number>;
   adoptWord?: string;
 }) {
+  const platform = useContext(PlatformCtx);
   const [all, setAll] = useState(false);
   const shown = all ? data : data.slice(0, 6);
   const bmap = baseline ? new Map(baseline.map((i) => [i.label, i.count])) : null;
@@ -839,7 +857,7 @@ function DrillList({
           const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
           const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
-          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country) } : {};
+          const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country, platform) } : {};
           return (
             <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
               <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
