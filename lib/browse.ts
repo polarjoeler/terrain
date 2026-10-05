@@ -91,8 +91,8 @@ function buildWhere(f: BrowseFilters) {
     sql`published`,
     sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`,
     sql`country = ANY(${[...VISIBLE_MARKETS]})`,
-    // Parked Woo installs are captured elsewhere but aren't leads.
-    sql`(lower(platform) IS DISTINCT FROM 'woocommerce' OR activity_tier IS DISTINCT FROM 'not_a_store')`,
+    // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
+    sql`activity_tier IS DISTINCT FROM 'not_a_store'`,
   ];
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
   if (f.country?.length) conds.push(sql`country = ANY(${f.country})`);
