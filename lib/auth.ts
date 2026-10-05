@@ -87,12 +87,27 @@ export function createMagicToken(email: string): string {
   });
 }
 
+// Ride through brief DB blips. Sign-in is the one critical path that MUST hit the DB (burn the
+// single-use token) and can't be cached, so when the pooler is briefly exhausted (fleet load spikes)
+// a single attempt fails and the user sees "link expired". Both token ops are safe to retry — the
+// check is a read and consumeToken is INSERT … ON CONFLICT DO NOTHING (idempotent). This does NOT
+// fix sustained DB saturation (only capacity/fleet-throttle does), but it recovers the common
+// transient case instead of bouncing the user.
+async function withDbRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) { lastErr = e; if (i < tries - 1) await new Promise((r) => setTimeout(r, 350 * (i + 1))); }
+  }
+  throw lastErr;
+}
+
 /** Verify and burn a magic token. Returns the email, or null if invalid/reused. */
 export async function redeemMagicToken(token: string): Promise<string | null> {
   const payload = unsign(token);
   if (!payload || payload.kind !== "link") return null;
-  if (await wasTokenUsed(payload.jti)) return null;
-  await consumeToken(payload.jti, payload.exp);
+  if (await withDbRetry(() => wasTokenUsed(payload.jti))) return null;
+  await withDbRetry(() => consumeToken(payload.jti, payload.exp));
   return payload.email;
 }
 
