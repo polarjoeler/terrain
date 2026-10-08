@@ -166,6 +166,8 @@ export function Explorer({ initialData, initial, showStats }: {
   const [sort, setSort] = useState<SortKey>("new");
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
+  const [picked, setPicked] = useState<Set<string>>(new Set());   // ticked rows for selective export
+  const togglePick = (domain: string) => setPicked((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; });
   const [data, setData] = useState<BrowseResult>(initialData);
   const [loading, setLoading] = useState(false);
 
@@ -255,15 +257,17 @@ export function Explorer({ initialData, initial, showStats }: {
   const exportCsv = async () => {
     setExporting(true);
     try {
+      // Ticked rows → export just those; nothing ticked → the whole filtered set.
+      const body = picked.size > 0 ? { domains: [...picked] } : filters;
       const res = await fetch("/api/explore-export", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(filters),
+        body: JSON.stringify(body),
       });
       if (!res.ok) return;
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `terrain-leads-${data.total}.csv`;
+      a.download = `terrain-leads-${picked.size > 0 ? picked.size : data.total}.csv`;
       a.click();
       URL.revokeObjectURL(a.href);
     } finally { setExporting(false); }
@@ -404,16 +408,30 @@ export function Explorer({ initialData, initial, showStats }: {
             <b className="text-cream">{data.total.toLocaleString()}</b> of {data.universe.toLocaleString()} leads
             {loading && <span className="ml-1 text-cream/35">· updating…</span>}
           </span>
-          <button onClick={exportCsv} disabled={exporting} className="ml-auto rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
-            {exporting ? "Exporting…" : `Export ${data.total.toLocaleString()} → CSV`}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {picked.size > 0 && (
+              <button onClick={() => setPicked(new Set())} className="text-xs text-cream/50 hover:text-cream">Clear selection</button>
+            )}
+            <button onClick={exportCsv} disabled={exporting} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
+              {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
+            </button>
+          </div>
         </div>
 
         <div className={`mt-4 overflow-x-auto rounded-2xl border border-cream/10 transition-opacity ${loading ? "opacity-60" : ""}`}>
           <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="border-b border-cream/10 text-xs uppercase tracking-wide text-cream/40">
               <tr>
-                <th className="px-4 py-3">Store</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
+                <th className="w-8 px-3 py-3">
+                  <input type="checkbox" aria-label="Select all loaded"
+                    checked={rows.length > 0 && rows.every((r) => picked.has(r.domain))}
+                    onChange={(e) => setPicked((prev) => {
+                      const n = new Set(prev);
+                      if (e.target.checked) rows.forEach((r) => n.add(r.domain)); else rows.forEach((r) => n.delete(r.domain));
+                      return n;
+                    })} />
+                </th>
+                <th className="px-4 py-3">Store</th><th className="px-4 py-3">Platform</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
                 <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Catalog</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
               </tr>
             </thead>
@@ -422,24 +440,27 @@ export function Explorer({ initialData, initial, showStats }: {
                 const b = l.band;
                 const bd = bandDisplay(l.band, l.country);
                 return (
-                  <tr key={l.domain} onClick={() => setSelected(l.domain)} className="cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05]" title="View all known data">
+                  <tr key={l.domain} onClick={() => setSelected(l.domain)} className={`cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05] ${picked.has(l.domain) ? "bg-cyan/[0.06]" : ""}`} title="View all known data">
+                    <td className="w-8 px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" aria-label={`Select ${l.name ?? l.domain}`} checked={picked.has(l.domain)} onChange={() => togglePick(l.domain)} />
+                    </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
                         <div className="shrink-0"><Logo domain={l.domain} name={l.name} /></div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 max-w-[260px]">
                           <div className="flex items-center gap-1.5 font-medium text-cream">
                             <span className="truncate">{l.name ?? l.domain}</span>
-                            {l.plus && <span className="rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
-                            {l.platform === "woocommerce" && <span className="rounded bg-cream/10 px-1 py-0.5 text-[8px] font-bold uppercase text-cream/50">Woo</span>}
+                            {l.plus && <span className="shrink-0 rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
                             {l.activityTier && l.activityTier !== "not_a_store" && (
-                              <span className={`rounded px-1 py-0.5 text-[8px] font-bold uppercase ${l.activityTier === "selling" ? "bg-mint/20 text-mint" : l.activityTier === "active" ? "bg-cyan/20 text-cyan" : "bg-orange/20 text-orange"}`}>{l.activityTier}</span>
+                              <span className={`shrink-0 rounded px-1 py-0.5 text-[8px] font-bold uppercase ${l.activityTier === "selling" ? "bg-mint/20 text-mint" : l.activityTier === "active" ? "bg-cyan/20 text-cyan" : "bg-orange/20 text-orange"}`}>{l.activityTier}</span>
                             )}
                           </div>
                           {/* External site link — stop the row's drawer-open when clicked. */}
-                          <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>
+                          <a href={`https://${l.domain}`} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="block truncate font-mono text-xs text-cream/40 hover:underline">{l.domain}</a>
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.platform ? platformLabel(l.platform) : "—"}</td>
                     <td className="px-4 py-2.5 text-cream/60">{l.category ?? "—"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-cream/70">{l.country ? marketLabel(l.country) : "—"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap">

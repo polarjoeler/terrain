@@ -36,6 +36,7 @@ export type BrowseFilters = {
   activity?: string[]; hosting?: string[];
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
   tier?: "top100" | "top500";
+  domains?: string[];         // explicit selection (export the ticked rows), overrides the broad filter
   launchedDays?: number;      // launched within N days
   discoveredDays?: number;    // we first tracked it within N days
   sort?: SortKey;
@@ -94,6 +95,7 @@ function buildWhere(f: BrowseFilters) {
     // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
     sql`activity_tier IS DISTINCT FROM 'not_a_store'`,
   ];
+  if (f.domains?.length) conds.push(sql`domain = ANY(${f.domains})`);
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
   if (f.country?.length) conds.push(sql`country = ANY(${f.country})`);
   if (f.platform?.length) conds.push(sql`platform = ANY(${f.platform})`);
