@@ -50,7 +50,11 @@ const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "
 
 const daysAgo = (d: string) => (Date.now() - new Date(d).getTime()) / 864e5;
 const fill = (tone: string) =>
+  tone === "mint" ? "from-mint to-mint/45" : tone === "lilac" ? "from-lilac to-lilac/45" : tone === "cyan" ? "from-cyan to-cyan/45" : "from-orange to-orange/45";
+const toneDot = (tone: string) =>
   tone === "mint" ? "bg-mint" : tone === "lilac" ? "bg-lilac" : tone === "cyan" ? "bg-cyan" : "bg-orange";
+const toneText = (tone: string) =>
+  tone === "mint" ? "text-mint" : tone === "lilac" ? "text-lilac" : tone === "cyan" ? "text-cyan" : "text-orange";
 
 /** Bar track whose fill grows from 0 on mount — the shared "alive" animation. */
 function AnimatedFill({ pct, tone }: { pct: number; tone: string }) {
@@ -60,9 +64,9 @@ function AnimatedFill({ pct, tone }: { pct: number; tone: string }) {
     return () => cancelAnimationFrame(id);
   }, []);
   return (
-    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
+    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
       <div
-        className={`h-full rounded-full ${fill(tone)}`}
+        className={`h-full rounded-full bg-gradient-to-r ${fill(tone)}`}
         style={{ width: m ? `${Math.min(pct, 100)}%` : "0%", transition: "width .9s cubic-bezier(.2,.8,.2,1)" }}
       />
     </div>
@@ -94,19 +98,22 @@ function TileDelta({ abs, pct }: { abs: number | null; pct: number | null }) {
   );
 }
 
-function Card({ title, subtitle, reportHref, children }: { title: string; subtitle?: string; reportHref?: string; children: React.ReactNode }) {
+function Card({ title, subtitle, reportHref, accent, children }: { title: string; subtitle?: string; reportHref?: string; accent?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
-      {reportHref ? (
-        <Link href={reportHref} className="group inline-flex items-baseline gap-1.5 text-lg font-semibold text-cream transition hover:text-cyan" title="Open the full report">
-          {title}
-          <span className="text-cream/25 transition group-hover:text-cyan/70">→</span>
-        </Link>
-      ) : (
-        <h3 className="text-lg font-semibold">{title}</h3>
-      )}
-      {subtitle && <p className="mt-1 text-sm text-cream/45">{subtitle}</p>}
-      <div className="mt-6">{children}</div>
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 transition hover:border-cream/15 md:p-6">
+      <div className="flex items-center gap-2">
+        {accent && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${toneDot(accent)}`} />}
+        {reportHref ? (
+          <Link href={reportHref} className="group inline-flex items-baseline gap-1.5 font-semibold text-cream transition hover:text-cyan" title="Open the full report">
+            {title}
+            <span className="text-cream/25 transition group-hover:text-cyan/70">→</span>
+          </Link>
+        ) : (
+          <h3 className="font-semibold text-cream">{title}</h3>
+        )}
+      </div>
+      {subtitle && <p className="mt-1.5 text-xs leading-relaxed text-cream/45">{subtitle}</p>}
+      <div className="mt-5">{children}</div>
     </div>
   );
 }
@@ -176,21 +183,23 @@ function DistroCard({
   const showChange = adopt ? true : !!bmap;
 
   return (
-    <Card title={title} subtitle={subtitle} reportHref={reportHref}>
-      <div className={`space-y-3 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
-        {shown.map((i) => {
+    <Card title={title} subtitle={subtitle} reportHref={reportHref} accent={tone}>
+      <div className={`space-y-2 ${all && data.length > 10 ? "max-h-96 overflow-y-auto pr-1" : ""}`}>
+        {shown.map((i, idx) => {
           const prev = bmap?.get(i.label);
           const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
-          const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
+          const leader = idx === 0;
+          const cls = `group/row -mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 transition hover:bg-cream/[0.04] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
           const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country, platform) } : {};
           return (
             <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
-              <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
+              <span className={`w-4 shrink-0 text-right text-xs tabular-nums ${leader ? toneText(tone) : "text-cream/30"}`}>{idx + 1}</span>
+              <div className={`w-28 shrink-0 truncate text-sm ${leader ? "text-cream" : "text-cream/75"} ${drillParam ? "group-hover/row:text-cream" : ""}`}>{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
-              <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
-              <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}>{<CountDelta v={cdel} />}</div>}
+              <div className="w-10 shrink-0 text-right text-sm font-medium tabular-nums text-cream">{i.pct}%</div>
+              <div className="w-12 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
+              {showChange && <div className="w-14 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}>{<CountDelta v={cdel} />}</div>}
             </RowTag>
           );
         })}
@@ -198,7 +207,7 @@ function DistroCard({
       {data.length > 6 && (
         <button
           onClick={() => setAll((a) => !a)}
-          className="mt-4 text-sm font-medium text-cream/50 transition hover:text-cream"
+          className="mt-4 text-xs font-medium text-cream/50 transition hover:text-cream"
         >
           {all ? "Show top 6" : `See all ${data.length} →`}
         </button>
@@ -594,10 +603,10 @@ export function InsightsView({
             <h2 className="text-sm font-semibold uppercase tracking-wide text-cyan">Our coverage</h2>
             <span className="text-xs text-cream/40">how complete &amp; fresh our dataset is — our platform&rsquo;s progress, not the market</span>
           </div>
-          <div className="mt-3 grid gap-4 sm:grid-cols-2 md:grid-cols-5">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-5">
             {coverageTiles.map((s) => (
-              <div key={s.label} className="rounded-3xl border border-cream/12 px-5 py-5 text-cream">
-                <div className="font-display text-4xl leading-none">{s.n}</div>
+              <div key={s.label} className="rounded-2xl border border-cream/10 bg-cream/[0.02] px-5 py-5 text-cream transition hover:border-cream/20">
+                <div className="font-display text-4xl leading-none tabular-nums">{s.n}</div>
                 <div className="mt-2 text-xs font-medium uppercase tracking-wide text-cream/45">{s.label}</div>
                 {s.sub && <div className="mt-0.5 text-[11px] text-cream/35">{s.sub}</div>}
               </div>
@@ -846,20 +855,22 @@ function DrillList({
   const showChange = adopt ? true : showBaseline;
   return (
     <>
-      <div className={`space-y-3 ${all && data.length > 10 ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
-        {shown.map((i) => {
+      <div className={`space-y-2 ${all && data.length > 10 ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
+        {shown.map((i, idx) => {
           const prev = bmap?.get(i.label);
           const cdel = adopt ? (adopt[i.label] ?? 0) : prev != null ? i.count - prev : null;
-          const cls = `-mx-1.5 flex items-center gap-3 rounded-lg px-1.5 py-0.5 transition hover:bg-cream/[0.05] ${drillParam ? "cursor-pointer" : ""}`;
+          const leader = idx === 0;
+          const cls = `group/row -mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 transition hover:bg-cream/[0.04] ${drillParam ? "cursor-pointer" : ""}`;
           const RowTag = (drillParam ? Link : "div") as React.ElementType;
           const rowProps = drillParam ? { href: drillHref(drillParam, i.label, country, platform) } : {};
           return (
             <RowTag key={i.label} {...rowProps} className={cls} title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)${adopt ? ` — +${adopt[i.label] ?? 0} launched ${adoptWord ?? "this period"}` : ""}${drillParam ? " — click to view stores" : ""}`}>
-              <div className="w-32 shrink-0 truncate text-sm text-cream/75">{i.label}</div>
+              <span className={`w-4 shrink-0 text-right text-xs tabular-nums ${leader ? toneText(tone) : "text-cream/30"}`}>{idx + 1}</span>
+              <div className={`w-28 shrink-0 truncate text-sm ${leader ? "text-cream" : "text-cream/75"} ${drillParam ? "group-hover/row:text-cream" : ""}`}>{i.label}</div>
               <AnimatedFill pct={i.pct} tone={tone} />
-              <div className="w-9 shrink-0 text-right text-sm tabular-nums text-cream/70">{i.pct}%</div>
-              <div className="w-14 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
-              {showChange && <div className="w-16 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}><CountDelta v={cdel} /></div>}
+              <div className="w-10 shrink-0 text-right text-sm font-medium tabular-nums text-cream">{i.pct}%</div>
+              <div className="w-12 shrink-0 text-right text-xs tabular-nums text-cream/40">{i.count.toLocaleString()}</div>
+              {showChange && <div className="w-14 shrink-0 text-right text-xs tabular-nums" title={adopt ? `launched ${adoptWord ?? "this period"}` : undefined}><CountDelta v={cdel} /></div>}
             </RowTag>
           );
         })}
