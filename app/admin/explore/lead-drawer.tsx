@@ -32,15 +32,6 @@ const bestEmail = (d: LeadDetail): string | null => {
   return null;
 };
 
-// How we know the store: our own crawlers (Scanned) vs a data import (Imported).
-// Don't leak the raw source name (e.g. "storeleads-2026-08") to the surface.
-function sourceLabel(source: string | null): string {
-  const s = (source ?? "").toLowerCase();
-  if (s === "discovery" || s === "ct_tail" || s === "crawl") return "Scanned";
-  if (!s) return "Imported";
-  return "Imported";
-}
-
 // Apps are stored as raw Shopify app-store URLs (often concatenated). Show the
 // clean public-app names — dropping custom/private apps, which have no store URL.
 const APP_ALIAS: Record<string, string> = {
@@ -165,7 +156,6 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="City" value={data.city} />
               <Row label="Theme" value={data.theme} />
               <Row label="Platform" value={data.platform} />
-              <Row label="Source" value={sourceLabel(data.source)} />
             </Section>
 
             {data.platform === "woocommerce" && (
