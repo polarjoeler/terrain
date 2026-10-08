@@ -54,7 +54,13 @@ node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 --country "$MA
   || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
-  ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
+  # Route through the Webshare pool (one proxy per store) so Shopify-edge probing isn't pinned to ONE
+  # residential IP's rate budget — conc 24 direct violates the "never burst one IP" rule, and the pool
+  # (~100 IPs) lets us run high concurrency safely AND raise it later. (NB: this removes the single-IP
+  # ceiling; it's not proven to be the main cause of the fresh-store payment gap — the no_gateways_found
+  # hard tail + queue health are also suspects, to be diagnosed separately.) If proxies.txt is absent on
+  # a box, checkout_probe.py falls back to direct automatically, so this is safe everywhere.
+  ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" "$PROBE_PY" checkout_probe.py \
       --from-file "$HOME/storepulse/feed/payment-queue.txt" --limit 2500 --concurrency 24 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed (continuing)"
