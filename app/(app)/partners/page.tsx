@@ -55,7 +55,7 @@ export default async function PartnersPage() {
   const totalStores = (rows: ProductPartner[]) => rows.reduce((s, r) => s + r.stores, 0);
 
   return (
-    <main className="min-h-screen px-4 py-6">
+    <div>
       <div className="mx-auto max-w-4xl">
         <div className="flex items-center justify-between">
           <div>
@@ -112,6 +112,6 @@ export default async function PartnersPage() {
           This is the <b className="text-cream/60">Product</b> directory. See the <Link href="/partners/services" className="text-cyan hover:underline">Service Partners</Link> directory for the agencies &amp; pros building these stores.
         </p>
       </div>
-    </main>
+    </div>
   );
 }

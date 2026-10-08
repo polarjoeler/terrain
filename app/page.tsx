@@ -3,7 +3,7 @@ import { Wordmark } from "@/app/components/logo";
 import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
 import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
-import { AfricaReplay } from "@/app/insights/africa/africa-replay";
+import { AfricaReplay } from "@/app/(app)/insights/africa/africa-replay";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
 export const metadata = { title: "Terrain — African eCommerce, coming to life" };

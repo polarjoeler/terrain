@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { cachedAgg } from "@/lib/agg-cache";
 import { japanTimeline, type JapanTimeline, JP_REGIONS } from "@/lib/japan-timeline";
-import { JapanHome } from "@/app/insights/japan/japan-home";
-import type { Lang } from "@/app/insights/japan/japan-replay";
+import { JapanHome } from "@/app/(app)/insights/japan/japan-home";
+import type { Lang } from "@/app/(app)/insights/japan/japan-replay";
 
 // PUBLIC, shareable Japan homepage — full parity with the Africa homepage (products, segments,
 // newsletter) but Japan-tuned and bilingual. No login gate (unlike /insights/japan). This is also

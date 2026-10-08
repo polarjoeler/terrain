@@ -7,7 +7,7 @@ import type { JapanTimeline, PlatGroup, FeaturedStore } from "@/lib/japan-timeli
 import { JP_REGIONS, type JpRegion } from "@/lib/japan-regions";
 import {
   W, H, fmtMonth, decodeName, hash, pick, titleCase, pointFor, GrowthChart, OpsBox, type Shape, type Paths, type Lang,
-} from "@/app/insights/africa/africa-replay";
+} from "@/app/(app)/insights/africa/africa-replay";
 
 // Re-export so the Japan homepage and page can pull Lang from this module (its canonical source is
 // africa-replay, but consumers here treat japan-replay as the Japan surface).

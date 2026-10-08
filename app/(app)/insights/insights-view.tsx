@@ -3,7 +3,6 @@
 import { createContext, useContext, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Wordmark } from "@/app/components/logo";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
 import { marketLabel, marketAdjective } from "@/lib/markets";
@@ -455,7 +454,7 @@ export function InsightsView({
   const pfx = platformParam(platform) ? `&platform=${platformParam(platform)}` : "";
   return (
     <PlatformCtx.Provider value={platform}>
-    <div className="min-h-screen px-4 py-6 md:px-8">
+    <div>
       {/* Indeterminate top bar + dim while a filter change is loading — immediate feedback. */}
       {pending && (
         <div className="fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden bg-cyan/20" aria-hidden>
@@ -464,18 +463,14 @@ export function InsightsView({
         </div>
       )}
       <div className={`mx-auto max-w-6xl transition-opacity duration-200 ${pending ? "pointer-events-none opacity-50" : ""}`}>
-        <nav className="flex items-center justify-between">
-          <Link href="/"><Wordmark size="text-xl" /></Link>
-          <div className="flex items-center gap-3">
-            <Link href="/dashboard" className="text-sm text-cream/60 hover:text-cream">← Dashboard</Link>
-            <Link href="/insights/africa" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-sm font-medium text-cyan hover:bg-cyan/20">🌍 Africa map</Link>
-            <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
-              Live data
-            </span>
-          </div>
-        </nav>
+        <div className="flex items-center justify-end gap-3">
+          <Link href="/insights/africa" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-sm font-medium text-cyan hover:bg-cyan/20">🌍 Africa map</Link>
+          <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
+            Live data
+          </span>
+        </div>
 
-        <header className="mt-10">
+        <header className="mt-6">
           <h1 className="font-display text-4xl md:text-5xl">Market Insights</h1>
           <p className="mt-2 max-w-2xl text-cream/60">
             {tag === "new"

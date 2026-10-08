@@ -94,7 +94,7 @@ export function ReportView({ report, country, countries, platform }: { report: S
   );
 
   return (
-    <main className="min-h-screen px-4 py-6 md:px-8">
+    <div>
       <div className="mx-auto max-w-3xl">
         <nav className="flex items-center justify-between">
           <Link href="/insights" className="text-sm text-cream/60 hover:text-cream">← Insights</Link>
@@ -181,6 +181,6 @@ export function ReportView({ report, country, countries, platform }: { report: S
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }
