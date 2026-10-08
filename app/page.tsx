@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
+import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
 import { AfricaReplay } from "@/app/insights/africa/africa-replay";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
@@ -11,7 +12,9 @@ export const metadata = { title: "Terrain — African eCommerce, coming to life"
 // keeps this off the build path; at request time cachedAgg serves the warm/stale row fast.
 export const dynamic = "force-dynamic";
 
-const EMPTY: AfricaTimeline = { months: [], countries: {}, pulses: [], featured: [], ops: { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }, meta: { lastLaunch: null, lastRefresh: null, totalTracked: 0, withoutDate: 0 } };
+// Committed real snapshot (refreshed by the refresh-browse cron). The map NEVER renders blank — even on
+// a cold cache or a DB outage, we fall back to this instead of an empty state. See scripts/snapshot-africa.
+const SNAP = SNAPSHOT as unknown as AfricaTimeline;
 
 // One spine, three lenses. Radar + Shelf sell to brands; Switchboard sells to vendors.
 const PRODUCTS = [
@@ -56,11 +59,11 @@ const toneBg: Record<string, string> = { cyan: "rgba(76,201,212,.14)", mint: "rg
 const toneFg: Record<string, string> = { cyan: "var(--color-cyan)", mint: "var(--color-mint)", lilac: "var(--color-lilac)" };
 
 export default async function Home() {
-  // force-dynamic renders per-request, so NEVER block on a cold aggregate: if cachedAgg can't produce
-  // within 4s (cold key + busy DB), render the empty state immediately — the compute keeps running in
-  // the background and warms the durable row for the next visit. Keeps the landing page instant always.
-  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
-  const data = await Promise.race([agg, new Promise<typeof EMPTY>((r) => setTimeout(() => r(EMPTY), 4000))]);
+  // force-dynamic renders per-request, so NEVER block on a cold aggregate: serve the warm cache if ready
+  // within 4s, otherwise fall back to the committed snapshot (real data, never blank). The cron keeps the
+  // live row warm; this race only guards the rare cold-key moment so the page is always instant.
+  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => SNAP);
+  const data = await Promise.race([agg, new Promise<AfricaTimeline>((r) => setTimeout(() => r(SNAP), 4000))]);
   const ready = data.months.length > 0;
 
   return (
