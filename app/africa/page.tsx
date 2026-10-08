@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Wordmark } from "@/app/components/logo";
 import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
+import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
 import { AfricaReplay } from "@/app/insights/africa/africa-replay";
 
 // PUBLIC, shareable full-map page — no login gate (unlike /insights/africa). Just the animated map.
@@ -15,13 +16,14 @@ export const metadata = {
 };
 export const dynamic = "force-dynamic"; // was ISR — don't run the DB aggregate at build (deploy spike)
 
-const EMPTY: AfricaTimeline = { months: [], countries: {}, pulses: [], featured: [], ops: { scanned24h: 0, disc7d: 0, discToday: 0, recent: [] }, meta: { lastLaunch: null, lastRefresh: null, totalTracked: 0, withoutDate: 0 } };
+// Committed real snapshot — the map never renders blank, even cold/DB-down. Refreshed by the cron.
+const SNAP = SNAPSHOT as unknown as AfricaTimeline;
 
 export default async function AfricaPublicMap() {
-  // Per-request (force-dynamic): never block on a cold aggregate — 4s cap, then render empty and let
-  // the background compute warm the durable row for next time. See app/page.tsx.
-  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => EMPTY);
-  const data = await Promise.race([agg, new Promise<typeof EMPTY>((r) => setTimeout(() => r(EMPTY), 4000))]);
+  // Per-request (force-dynamic): never block on a cold aggregate — serve the warm cache within 4s, else
+  // fall back to the committed snapshot (real data, never blank). See app/page.tsx.
+  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => SNAP);
+  const data = await Promise.race([agg, new Promise<AfricaTimeline>((r) => setTimeout(() => r(SNAP), 4000))]);
   const ready = data.months.length > 0;
 
   return (
