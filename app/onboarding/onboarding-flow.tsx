@@ -318,7 +318,7 @@ function CategoryPicker({ all, selected, options, onToggleAll, onToggle }: {
   );
 }
 
-/* A market (country) multi-select over the covered African markets. */
+/* A market (country) multi-select over the covered markets. */
 function MarketPicker({ markets, selected, onToggle }: { markets: { iso: string; label: string }[]; selected: string[]; onToggle: (iso: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -420,7 +420,7 @@ function Stage2({ state, patch, platforms, categories, markets }: {
       {/* Countries */}
       <div>
         <GroupLabel>Which markets?</GroupLabel>
-        <Toggle label="All covered African markets" on={t.allCountries} onChange={(v) => setT({ allCountries: v })} />
+        <Toggle label="All covered markets" on={t.allCountries} onChange={(v) => setT({ allCountries: v })} />
         {!t.allCountries && (
           <div className="mt-3">
             <MarketPicker markets={markets} selected={t.countries} onToggle={(iso) => setT({ countries: toggleArr(t.countries, iso) })} />
@@ -501,7 +501,7 @@ function Stage3({ state, patch, platforms, markets }: {
               </div>
               <div>
                 <p className="mb-2 text-xs text-cream/45">Markets</p>
-                <Toggle label="All covered African markets" on={cms.allCountries} onChange={(v) => setCms({ allCountries: v })} />
+                <Toggle label="All covered markets" on={cms.allCountries} onChange={(v) => setCms({ allCountries: v })} />
                 {!cms.allCountries && (
                   <div className="mt-2"><MarketPicker markets={markets} selected={cms.countries} onToggle={(iso) => setCms({ countries: toggleArr(cms.countries, iso) })} /></div>
                 )}
@@ -533,7 +533,7 @@ function Stage3({ state, patch, platforms, markets }: {
           )}
           <div>
             <p className="mb-2 text-xs text-cream/45">Markets</p>
-            <Toggle label="All covered African markets" on={dd.allMarkets} onChange={(v) => setDd({ allMarkets: v })} />
+            <Toggle label="All covered markets" on={dd.allMarkets} onChange={(v) => setDd({ allMarkets: v })} />
             {!dd.allMarkets && <div className="mt-2"><MarketPicker markets={markets} selected={dd.markets} onToggle={(iso) => setDd({ markets: toggleArr(dd.markets, iso) })} /></div>}
           </div>
           <Toggle label="Send this on a recurring basis" desc="Off = a single one-off deep-dive" on={dd.recurring} onChange={(v) => setDd({ recurring: v })} />

@@ -199,7 +199,7 @@ export function summary(s: OnboardingState, platformLabels: Record<string, strin
   if (hasGoal(s, "find_leads") && t) {
     if (t.allPlatforms) out.push({ key: "leads-plat", text: "Leads across all platforms" });
     else if (t.platforms.length) out.push({ key: "leads-plat", text: `${andList(t.platforms.map((p) => platName(p, platformLabels)))} leads, prioritised in that order` });
-    const where = t.allCountries ? "all covered African markets" : t.countries.length ? andList(t.countries.map(marketLabelSafe)) : "";
+    const where = t.allCountries ? "all covered markets" : t.countries.length ? andList(t.countries.map(marketLabelSafe)) : "";
     const cats = t.allCategories ? "" : t.categories.length ? andList(t.categories) + " " : "";
     if (where) out.push({ key: "leads-where", text: `${cats ? cats + "merchants" : "Merchants"} in ${where}`.trim() });
     if (!t.sizeAny && t.sizeBands.length) out.push({ key: "leads-size", text: `${andList(t.sizeBands.map((b) => SIZE_BANDS.find((x) => x.id === b)?.label ?? b))}` });
