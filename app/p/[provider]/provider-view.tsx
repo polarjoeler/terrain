@@ -36,7 +36,7 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
   const y = (v: number) => padT + (1 - v / maxY) * (h - padT - padB);
 
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
@@ -99,7 +99,7 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
     return `${dt.getUTCDate()} ${mo}`;
   };
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-cream">Share of new stores choosing {provider}</h3>
@@ -119,8 +119,8 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
           {data.map((b) => (
             <div key={b.date} className="flex items-center gap-3">
               <span className="w-16 shrink-0 text-xs tabular-nums text-cream/60">{fmt(b.date)}</span>
-              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                <div className="h-full rounded-full bg-mint" style={{ width: `${b.total ? Math.max(2, Math.min(b.share, 100)) : 0}%` }} />
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${b.total ? Math.max(2, Math.min(b.share, 100)) : 0}%` }} />
               </div>
               <span className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{b.total ? `${b.share}%` : "—"}</span>
               <span className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{b.mine}/{b.total}</span>
@@ -163,7 +163,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
   }).slice(0, 100);
 
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-cream">Stores on {provider}</h3>
@@ -305,7 +305,7 @@ export function ProviderView({
         {/* hero tiles */}
         <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-4">
           {tiles.map((t) => (
-            <div key={t.label} className="rounded-3xl border border-cream/12 bg-cream/[0.03] px-5 py-6">
+            <div key={t.label} className="rounded-2xl border border-cream/10 bg-cream/[0.02] px-5 py-6">
               <CountUp value={t.n} className="font-display text-4xl leading-none text-cream" />
               <div className="mt-2 text-xs font-semibold uppercase tracking-wide text-cream/50">{t.label}</div>
               <div className="mt-1 text-xs text-cream/40">{t.sub}</div>
@@ -336,7 +336,7 @@ export function ProviderView({
         {/* Sub-brand breakdown — only for providers with distinct products (Paystack Onsite vs
             redirect; Stitch vs WigWag). Merged into the parent everywhere else. */}
         {subReport && subReport.subs.some((s) => s.count > 0) && (
-          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
             <div className="mb-1 flex items-baseline justify-between">
               <h3 className="text-lg font-semibold text-cream">Product breakdown</h3>
               <span className="text-xs text-cream/40">{subReport.total.toLocaleString()} merchants on {d.provider}</span>
@@ -347,7 +347,7 @@ export function ProviderView({
                 <div key={s.label} className="flex items-center gap-3">
                   <div className="w-40 shrink-0 truncate text-sm text-cream/80">{s.label}</div>
                   <div className="h-2 flex-1 overflow-hidden rounded-full bg-cream/10">
-                    <div className="h-full rounded-full bg-cyan/70" style={{ width: `${Math.max(2, s.pct)}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-cyan to-cyan/45" style={{ width: `${Math.max(2, s.pct)}%` }} />
                   </div>
                   <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream/70">{s.pct}%</div>
                   <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{s.count.toLocaleString()}</div>
@@ -360,7 +360,7 @@ export function ProviderView({
         {/* Recent switches involving this provider — leads with WHAT changed; Paystack keeps
             the Onsite vs redirect distinction, Stitch keeps Stitch vs WigWag. */}
         {(
-          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
             <div className="mb-1 flex items-baseline justify-between">
               <h3 className="text-lg font-semibold text-cream">Recent switches</h3>
               <span className="text-xs text-cream/40">latest stores adding or dropping {d.provider}</span>
@@ -406,7 +406,7 @@ export function ProviderView({
         )}
 
         {/* position in the checkout stack */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Position in the checkout stack</h3>
           <div className="mt-4 grid gap-5 md:grid-cols-[auto_1fr] md:items-center">
             <div className="grid grid-cols-2 gap-3 text-center">
@@ -430,8 +430,8 @@ export function ProviderView({
               {d.segments.map((sg) => (
                 <div key={sg.key} className="flex items-center gap-3">
                   <div className="w-24 shrink-0 text-sm text-cream/75">{sg.label}</div>
-                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                    <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(sg.pct, 100))}%` }} />
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                    <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(sg.pct, 100))}%` }} />
                   </div>
                   <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{sg.pct}%</div>
                   <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{sg.mine}/{sg.total}</div>
@@ -450,8 +450,8 @@ export function ProviderView({
                 {d.rankByCohort.map((c) => (
                   <div key={c.cohort} className="flex items-center gap-2">
                     <span className="w-12 shrink-0 text-sm text-cream/75">{c.cohort}</span>
-                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                      <div className="h-full rounded-full bg-cyan" style={{ width: `${Math.max(2, c.topSpotPct)}%` }} />
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                      <div className="h-full rounded-full bg-gradient-to-r from-cyan to-cyan/45" style={{ width: `${Math.max(2, c.topSpotPct)}%` }} />
                     </div>
                     <span className="w-14 shrink-0 text-right text-sm tabular-nums text-cream">#{c.avgRank}</span>
                     <span className="w-12 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.total}</span>
@@ -463,7 +463,7 @@ export function ProviderView({
         </div>
 
         {/* head-to-head — a PSP only competes with other PSPs */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Head-to-head — rival PSPs</h3>
           <p className="mt-1 text-xs text-cream/45">
             A PSP competes with other PSPs, not with BNPL or wallets (those coexist). Of {d.provider}&apos;s {d.pspRivalry.total.toLocaleString()} stores,
@@ -490,7 +490,7 @@ export function ProviderView({
         </div>
 
         {/* competitors — segmented by payment type */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Who they compete with</h3>
           <p className="mt-1 text-xs text-cream/45">
             Gateways appearing alongside {d.provider} at checkout, grouped by type. {d.provider} is a{" "}
@@ -520,8 +520,8 @@ export function ProviderView({
                 {d.byCountry.map((c) => (
                   <div key={c.label} className="flex items-center gap-3">
                     <div className="w-28 shrink-0 truncate text-sm text-cream/75">{marketLabel(c.label)}</div>
-                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                      <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                      <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
                     </div>
                     <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
                     <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
@@ -547,7 +547,7 @@ export function ProviderView({
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <h3 className="text-lg font-semibold text-cream">{title}</h3>
       {subtitle && <p className="mt-1 text-xs text-cream/45">{subtitle}</p>}
       <div className="mt-4">{children}</div>
