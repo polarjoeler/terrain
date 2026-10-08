@@ -35,7 +35,7 @@ const NAV: NavNode[] = [
   {
     label: "Discover", children: [
       { label: "Partner Finder", href: "/partners" },
-      { label: "Fraud Scanner", href: "/radar" },
+      { label: "Fraud Scanner", href: "/radar/dashboard", match: ["/radar"] },
       { label: "Store Groups", soon: true },
       { label: "Creator Leads", soon: true },
     ],
