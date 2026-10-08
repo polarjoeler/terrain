@@ -118,7 +118,18 @@ export async function consumeExportQuota(
 const key = (email: string) => email.trim().toLowerCase();
 
 export async function getSubscriber(email: string): Promise<Subscriber | null> {
-  return getStore().get(key(email));
+  // The paywall gate runs on EVERY authenticated page (dashboard, insights, billing). It's a single
+  // indexed read, but with no retry a brief pooler-exhaustion window made it throw and 500 the whole
+  // page. Retry through transient blips (bounded, read-only → safe). Sustained saturation still needs
+  // capacity/fleet-throttle — this just stops a momentary hiccup from taking down every authed page.
+  const store = getStore();
+  const k = key(email);
+  let lastErr: unknown;
+  for (let i = 0; i < 3; i++) {
+    try { return await store.get(k); }
+    catch (e) { lastErr = e; if (i < 2) await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
+  }
+  throw lastErr;
 }
 
 export async function upsertSubscriber(
