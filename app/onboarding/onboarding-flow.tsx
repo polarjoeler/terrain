@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import {
-  COMPANY_TYPES, GOALS, ROLES, TECH_CATEGORIES, STAGES, isFraudEligible,
-  progress, stageProgress, stageApplies, summary, emptyState,
+  COMPANY_TYPES, GOALS, ROLES, TECH_CATEGORIES, SIZE_BANDS, CHANNELS, CHANNEL_READY, STAGES, isFraudEligible,
+  progress, stageProgress, stageApplies, summary, emptyState, emptyTargeting, emptyDelivery,
   type OnboardingState, type CompanyType, type Role, type Goal, type TechCategory, type StageIndex,
+  type Targeting, type SizeBand, type CmsDigest, type CountryDigest, type TechDeepDive, type FraudMonitoring,
+  type Channel, type DigestCadence, type Delivery,
 } from "@/lib/onboarding";
 
 type Props = {
@@ -129,9 +131,9 @@ export function OnboardingFlow({ email, firstUser, orgName, initialState, platfo
           </div>
 
           {view === 1 && <Stage1 state={state} patch={patch} toggleGoal={toggleGoal} firstUser={firstUser} />}
-          {view === 2 && <Placeholder title="Your ideal merchants" note="Platform priority, size, categories and markets — building next." />}
-          {view === 3 && <Placeholder title="Your intelligence" note="CMS, country, and technology digests tailored to your goals — building next." />}
-          {view === 4 && <Placeholder title="Delivery preferences" note="Channels, schedule and timezone — building next (email is the live channel)." />}
+          {view === 2 && <Stage2 state={state} patch={patch} platforms={platforms} categories={categories} markets={markets} />}
+          {view === 3 && <Stage3 state={state} patch={patch} platforms={platforms} markets={markets} />}
+          {view === 4 && <Stage4 state={state} patch={patch} email={email} />}
           {view === 5 && <Stage5Review state={state} firstUser={firstUser} patch={patch} platLabels={platLabels} summaryLines={summaryLines} />}
 
           {err && <p className="mt-4 rounded-xl border border-orange/30 bg-orange/10 px-4 py-2 text-sm text-orange">{err}</p>}
@@ -176,7 +178,7 @@ export function OnboardingFlow({ email, firstUser, orgName, initialState, platfo
 function Stage1({ state, patch, toggleGoal, firstUser }: { state: OnboardingState; patch: (p: Partial<OnboardingState>) => void; toggleGoal: (g: Goal) => void; firstUser: boolean }) {
   const [techName, setTechName] = useState("");
   const [techCat, setTechCat] = useState<TechCategory>("payments");
-  const wantsTech = (["my_tech_performance", "my_tech_adoption_churn", "fraud_monitoring"] as Goal[]).some((g) => state.goals.includes(g));
+  const wantsTech = (["my_tech_performance", "fraud_monitoring"] as Goal[]).some((g) => state.goals.includes(g));
   const fraudEligible = isFraudEligible(state.companyType);
   const addTech = () => { const n = techName.trim(); if (!n) return; patch({ technologies: [...state.technologies, { name: n, category: techCat }] }); setTechName(""); };
 
@@ -252,12 +254,385 @@ function Stage1({ state, patch, toggleGoal, firstUser }: { state: OnboardingStat
   );
 }
 
-function Placeholder({ title, note }: { title: string; note: string }) {
+/* ------------------------------------------------- shared stage sub-atoms --- */
+function StageHead({ title, desc }: { title: string; desc: string }) {
   return (
-    <div className="space-y-3 py-6">
+    <div>
       <h2 className="font-display text-2xl text-cream">{title}</h2>
-      <p className="max-w-md text-sm text-cream/50">{note}</p>
-      <p className="text-xs text-cream/30">You can Continue through for now — your answers so far are saved and you can launch your workspace from the final step.</p>
+      <p className="mt-1 text-sm text-cream/50">{desc}</p>
+    </div>
+  );
+}
+function Toggle({ label, desc, on, onChange }: { label: string; desc?: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} onClick={() => onChange(!on)}
+      className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition
+        ${on ? "border-mint bg-mint/[0.07]" : "border-cream/12 bg-cream/[0.02] hover:border-cream/30"}`}>
+      <span>
+        <span className="block text-sm font-medium text-cream">{label}</span>
+        {desc && <span className="mt-0.5 block text-xs text-cream/45">{desc}</span>}
+      </span>
+      <span className={`relative h-6 w-11 shrink-0 rounded-full transition ${on ? "bg-mint" : "bg-cream/15"}`}>
+        <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-cream transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+      </span>
+    </button>
+  );
+}
+function GroupLabel({ children }: { children: React.ReactNode }) {
+  return <div className="mb-3 text-sm font-medium text-cream/80">{children}</div>;
+}
+
+/* A searchable multi-select over a data-derived list (categories). */
+function CategoryPicker({ all, selected, options, onToggleAll, onToggle }: {
+  all: boolean; selected: string[]; options: string[]; onToggleAll: (v: boolean) => void; onToggle: (c: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const matches = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return options.filter((o) => (!needle || o.toLowerCase().includes(needle)) && !selected.includes(o)).slice(0, 10);
+  }, [q, options, selected]);
+  return (
+    <div>
+      <Toggle label="All product categories" desc="No category preference — show every vertical" on={all} onChange={onToggleAll} />
+      {!all && (
+        <div className="mt-3 space-y-3">
+          <input className={inputCls} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search categories — e.g. Fashion, Health, Electronics" />
+          {q.trim() && matches.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {matches.map((m) => <Pill key={m} label={`+ ${m}`} selected={false} onClick={() => { onToggle(m); setQ(""); }} />)}
+            </div>
+          )}
+          {selected.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {selected.map((c) => (
+                <span key={c} className="flex items-center gap-2 rounded-full border border-mint/40 bg-mint/10 px-3 py-1 text-sm text-cream">
+                  {c}<button onClick={() => onToggle(c)} className="text-cream/50 hover:text-orange">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          {selected.length === 0 && !q.trim() && <p className="text-xs text-cream/35">Search and add the categories you sell into. Leave empty to keep all.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* A market (country) multi-select over the covered African markets. */
+function MarketPicker({ markets, selected, onToggle }: { markets: { iso: string; label: string }[]; selected: string[]; onToggle: (iso: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {markets.map((m) => <Pill key={m.iso} label={m.label} selected={selected.includes(m.iso)} onClick={() => onToggle(m.iso)} />)}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- Stage 2 --- */
+function Stage2({ state, patch, platforms, categories, markets }: {
+  state: OnboardingState; patch: (p: Partial<OnboardingState>) => void;
+  platforms: { id: string; label: string }[]; categories: string[]; markets: { iso: string; label: string }[];
+}) {
+  const t: Targeting = state.targeting ?? emptyTargeting();
+  const setT = (p: Partial<Targeting>) => patch({ targeting: { ...t, ...p } });
+  // Commit a default targeting object so the slice exists even if the user accepts defaults.
+  useEffect(() => { if (!state.targeting) patch({ targeting: emptyTargeting() }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const platLabel = (id: string) => platforms.find((p) => p.id === id)?.label ?? id;
+  const unranked = platforms.filter((p) => !t.platforms.includes(p.id));
+  const move = (i: number, dir: -1 | 1) => {
+    const next = [...t.platforms]; const j = i + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j], next[i]]; setT({ platforms: next });
+  };
+  const toggleArr = (arr: string[], v: string) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
+  const estBands = SIZE_BANDS.filter((b) => b.basis === "estimated");
+  const obsBands = SIZE_BANDS.filter((b) => b.basis === "observed");
+
+  return (
+    <div className="space-y-8">
+      <StageHead title="Your ideal merchants" desc="Who counts as a good lead? This shapes the leads you see first and every digest." />
+
+      {/* Platform priority */}
+      <div>
+        <GroupLabel>Which ecommerce platforms matter most?</GroupLabel>
+        <Toggle label="No preference — rank by fit across all platforms" on={t.allPlatforms} onChange={(v) => setT({ allPlatforms: v })} />
+        {!t.allPlatforms && (
+          <div className="mt-3 space-y-3">
+            {t.platforms.length > 0 && (
+              <ol className="space-y-2">
+                {t.platforms.map((id, i) => (
+                  <li key={id} className="flex items-center gap-3 rounded-xl border border-mint/30 bg-mint/[0.06] px-3 py-2">
+                    <span className="grid h-6 w-6 place-items-center rounded-full bg-mint/20 text-xs font-bold text-mint">{i + 1}</span>
+                    <span className="flex-1 text-sm text-cream">{platLabel(id)}</span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded-md px-2 py-1 text-cream/50 transition hover:bg-cream/10 hover:text-cream disabled:opacity-20" aria-label="Move up">↑</button>
+                      <button onClick={() => move(i, 1)} disabled={i === t.platforms.length - 1} className="rounded-md px-2 py-1 text-cream/50 transition hover:bg-cream/10 hover:text-cream disabled:opacity-20" aria-label="Move down">↓</button>
+                      <button onClick={() => setT({ platforms: t.platforms.filter((x) => x !== id) })} className="rounded-md px-2 py-1 text-cream/40 transition hover:text-orange" aria-label="Remove">×</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {unranked.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs text-cream/40">{t.platforms.length ? "Add more (in priority order)" : "Tap to add in priority order — your first pick ranks highest"}</p>
+                <div className="flex flex-wrap gap-2">
+                  {unranked.map((p) => <Pill key={p.id} label={`+ ${p.label}`} selected={false} onClick={() => setT({ platforms: [...t.platforms, p.id] })} />)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Size */}
+      <div>
+        <GroupLabel>What size of merchant are you after?</GroupLabel>
+        <Toggle label="Any size" on={t.sizeAny} onChange={(v) => setT({ sizeAny: v })} />
+        {!t.sizeAny && (
+          <div className="mt-3 space-y-4">
+            <div>
+              <p className="mb-2 text-xs uppercase tracking-wide text-cream/35">Estimated monthly revenue <span className="normal-case text-cream/30">· modelled</span></p>
+              <div className="flex flex-wrap gap-2">
+                {estBands.map((b) => <Pill key={b.id} label={b.label} selected={t.sizeBands.includes(b.id)} onClick={() => setT({ sizeBands: toggleArr(t.sizeBands, b.id) as SizeBand[] })} />)}
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs uppercase tracking-wide text-cream/35">Catalogue size <span className="normal-case text-cream/30">· observed</span></p>
+              <div className="flex flex-wrap gap-2">
+                {obsBands.map((b) => <Pill key={b.id} label={b.label} selected={t.sizeBands.includes(b.id)} onClick={() => setT({ sizeBands: toggleArr(t.sizeBands, b.id) as SizeBand[] })} />)}
+              </div>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-cream/60">
+              <input type="checkbox" checked={t.unknownSizeOk} onChange={(e) => setT({ unknownSizeOk: e.target.checked })} className="accent-mint" />
+              Include stores we couldn&apos;t size yet
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* Categories */}
+      <div>
+        <GroupLabel>Any product categories to focus on?</GroupLabel>
+        <CategoryPicker all={t.allCategories} selected={t.categories} options={categories}
+          onToggleAll={(v) => setT({ allCategories: v })} onToggle={(c) => setT({ categories: toggleArr(t.categories, c) })} />
+      </div>
+
+      {/* Countries */}
+      <div>
+        <GroupLabel>Which markets?</GroupLabel>
+        <Toggle label="All covered African markets" on={t.allCountries} onChange={(v) => setT({ allCountries: v })} />
+        {!t.allCountries && (
+          <div className="mt-3">
+            <MarketPicker markets={markets} selected={t.countries} onToggle={(iso) => setT({ countries: toggleArr(t.countries, iso) })} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- Stage 3 --- */
+function CadencePicker({ value, onChange }: { value: DigestCadence; onChange: (c: DigestCadence) => void }) {
+  return (
+    <div className="flex gap-2">
+      {(["weekly", "monthly"] as DigestCadence[]).map((c) => (
+        <Pill key={c} label={c === "weekly" ? "Weekly" : "Monthly"} selected={value === c} onClick={() => onChange(c)} />
+      ))}
+    </div>
+  );
+}
+function DigestBlock({ title, desc, children }: { title: string; desc: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5">
+      <div className="text-sm font-semibold text-cream">{title}</div>
+      <p className="mt-0.5 mb-3 text-xs text-cream/45">{desc}</p>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+function Stage3({ state, patch, platforms, markets }: {
+  state: OnboardingState; patch: (p: Partial<OnboardingState>) => void;
+  platforms: { id: string; label: string }[]; markets: { iso: string; label: string }[];
+}) {
+  const has = (g: Goal) => state.goals.includes(g);
+  const toggleArr = (arr: string[], v: string) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
+  const fraudEligible = isFraudEligible(state.companyType);
+
+  // CMS digest
+  const cms: CmsDigest = state.cmsDigest ?? { allPlatforms: true, platforms: [], allCountries: true, countries: [], cadence: "weekly", reuseTargeting: has("find_leads") };
+  const setCms = (p: Partial<CmsDigest>) => patch({ cmsDigest: { ...cms, ...p } });
+  // Country digest
+  const cd: CountryDigest = state.countryDigest ?? { countries: [] };
+  const setCd = (p: Partial<CountryDigest>) => patch({ countryDigest: { ...cd, ...p } });
+  // Tech deep dive
+  const dd: TechDeepDive = state.techDeepDive ?? { techs: state.technologies.map((x) => x.name), allMarkets: true, markets: [], recurring: true, cadence: "monthly" };
+  const setDd = (p: Partial<TechDeepDive>) => patch({ techDeepDive: { ...dd, ...p } });
+  // Fraud
+  const fraud: FraudMonitoring = state.fraud ?? { enabled: false, status: "pending_setup" };
+
+  // Commit sensible defaults for each applicable goal so accepting them (without touching a control)
+  // still captures the digest in the summary and the saved profile.
+  useEffect(() => {
+    const p: Partial<OnboardingState> = {};
+    if (has("track_cms") && !state.cmsDigest) p.cmsDigest = cms;
+    if (has("country_performance") && !state.countryDigest) p.countryDigest = cd;
+    if (has("my_tech_performance") && !state.techDeepDive) p.techDeepDive = dd;
+    if (has("fraud_monitoring") && fraudEligible && !state.fraud) p.fraud = fraud;
+    if (Object.keys(p).length) patch(p);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="space-y-6">
+      <StageHead title="Your intelligence" desc="Tailored to the goals you picked. Each becomes a recurring briefing in your workspace." />
+
+      {has("track_cms") && (
+        <DigestBlock title="Platform activity digest" desc="New stores, migrations and platform adoption as it happens.">
+          {has("find_leads") && <Toggle label="Match my ideal-merchant filters" desc="Reuse the platforms and markets from the previous step" on={cms.reuseTargeting} onChange={(v) => setCms({ reuseTargeting: v })} />}
+          {!(has("find_leads") && cms.reuseTargeting) && (
+            <>
+              <div>
+                <p className="mb-2 text-xs text-cream/45">Platforms</p>
+                <Toggle label="All platforms" on={cms.allPlatforms} onChange={(v) => setCms({ allPlatforms: v })} />
+                {!cms.allPlatforms && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {platforms.map((p) => <Pill key={p.id} label={p.label} selected={cms.platforms.includes(p.id)} onClick={() => setCms({ platforms: toggleArr(cms.platforms, p.id) })} />)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <p className="mb-2 text-xs text-cream/45">Markets</p>
+                <Toggle label="All covered African markets" on={cms.allCountries} onChange={(v) => setCms({ allCountries: v })} />
+                {!cms.allCountries && (
+                  <div className="mt-2"><MarketPicker markets={markets} selected={cms.countries} onToggle={(iso) => setCms({ countries: toggleArr(cms.countries, iso) })} /></div>
+                )}
+              </div>
+            </>
+          )}
+          <div><p className="mb-2 text-xs text-cream/45">How often</p><CadencePicker value={cms.cadence} onChange={(c) => setCms({ cadence: c })} /></div>
+        </DigestBlock>
+      )}
+
+      {has("country_performance") && (
+        <DigestBlock title="Country performance" desc="Weekly market-level ecommerce activity for the countries you track.">
+          <MarketPicker markets={markets} selected={cd.countries} onToggle={(iso) => setCd({ countries: toggleArr(cd.countries, iso) })} />
+          {cd.countries.length === 0 && <p className="text-xs text-cream/35">Pick at least one market.</p>}
+        </DigestBlock>
+      )}
+
+      {has("my_tech_performance") && (
+        <DigestBlock title="Your technology deep-dive" desc="Where your product is winning and losing across the merchant base.">
+          {state.technologies.length > 0 ? (
+            <div>
+              <p className="mb-2 text-xs text-cream/45">Products to analyse</p>
+              <div className="flex flex-wrap gap-2">
+                {state.technologies.map((p) => <Pill key={p.name} label={p.name} selected={dd.techs.includes(p.name)} onClick={() => setDd({ techs: toggleArr(dd.techs, p.name) })} />)}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-cream/40">Add a product in step 1 to tailor this — otherwise we&apos;ll cover your category broadly.</p>
+          )}
+          <div>
+            <p className="mb-2 text-xs text-cream/45">Markets</p>
+            <Toggle label="All covered African markets" on={dd.allMarkets} onChange={(v) => setDd({ allMarkets: v })} />
+            {!dd.allMarkets && <div className="mt-2"><MarketPicker markets={markets} selected={dd.markets} onToggle={(iso) => setDd({ markets: toggleArr(dd.markets, iso) })} /></div>}
+          </div>
+          <Toggle label="Send this on a recurring basis" desc="Off = a single one-off deep-dive" on={dd.recurring} onChange={(v) => setDd({ recurring: v })} />
+          {dd.recurring && <div><p className="mb-2 text-xs text-cream/45">How often</p><CadencePicker value={dd.cadence} onChange={(c) => setDd({ cadence: c })} /></div>}
+        </DigestBlock>
+      )}
+
+      {has("fraud_monitoring") && fraudEligible && (
+        <DigestBlock title="Suspected-fraud monitoring" desc="Flags clone/abuse signals across your customer base for your review.">
+          <Toggle label="Enable fraud monitoring" desc="Needs a customer domain list to activate — we'll help you set that up after launch" on={fraud.enabled} onChange={(v) => patch({ fraud: { enabled: v, status: "pending_setup" } })} />
+          <p className="text-xs text-cream/35">Monitoring flags signals for human review — it never makes definitive fraud determinations.</p>
+        </DigestBlock>
+      )}
+
+      {!has("track_cms") && !has("country_performance") && !has("my_tech_performance") && !(has("fraud_monitoring") && fraudEligible) && (
+        <p className="text-sm text-cream/40">No recurring intelligence selected — your goals are covered by the live workspace. Continue to delivery.</p>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------- Stage 4 --- */
+function Stage4({ state, patch, email }: { state: OnboardingState; patch: (p: Partial<OnboardingState>) => void; email: string }) {
+  const d: Delivery = state.delivery ?? { ...emptyDelivery(), email };
+  const setD = (p: Partial<Delivery>) => patch({ delivery: { ...d, ...p } });
+  // Commit the default delivery (email, weekly 08:00, local tz) so accepting it is captured.
+  useEffect(() => { if (!state.delivery) patch({ delivery: { ...emptyDelivery(), email } }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const setSched = (p: Partial<Delivery["schedule"]>) => setD({ schedule: { ...d.schedule, ...p } });
+  const toggleChannel = (c: Channel) => setD({ channels: d.channels.includes(c) ? d.channels.filter((x) => x !== c) : [...d.channels, c] });
+  const weekly = state.cmsDigest?.cadence !== "monthly"; // show a weekday picker if anything is weekly
+  const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+  return (
+    <div className="space-y-8">
+      <StageHead title="Delivery preferences" desc="Where and when your briefings land. Email is live today; other channels save as pending." />
+
+      <div>
+        <GroupLabel>How should we deliver your intelligence?</GroupLabel>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {CHANNELS.map((c) => {
+            const ready = CHANNEL_READY[c.id];
+            const sel = d.channels.includes(c.id);
+            return (
+              <button key={c.id} type="button" onClick={() => toggleChannel(c.id)} aria-pressed={sel}
+                className={`relative flex flex-col items-start gap-1 rounded-2xl border p-4 text-left transition
+                  ${sel ? "border-mint bg-mint/[0.07]" : "border-cream/12 bg-cream/[0.02] hover:border-cream/30"}`}>
+                <span className={`absolute right-3 top-3 grid h-5 w-5 place-items-center rounded-full border text-[10px] font-bold transition ${sel ? "border-mint bg-mint text-ink" : "border-cream/20 text-transparent"}`}>✓</span>
+                <span className="flex items-center gap-2 pr-6 font-medium text-cream">{c.label}
+                  {!ready && <span className="rounded-full border border-cream/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-cream/45">Requires setup</span>}
+                  {ready && <span className="rounded-full border border-mint/30 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-mint">Live</span>}
+                </span>
+                <span className="text-xs text-cream/45">{c.scope === "org" ? "Workspace-wide" : "Just for you"}</span>
+              </button>
+            );
+          })}
+        </div>
+        {d.channels.some((c) => !CHANNEL_READY[c]) && (
+          <p className="mt-2 text-xs text-cream/40">We&apos;ll save your pending channels and help you connect them after launch — nothing sends there until you do.</p>
+        )}
+      </div>
+
+      {d.channels.includes("email") && (
+        <Field label="Email address" hint="Where email briefings are sent.">
+          <input className={inputCls} type="email" value={d.email ?? ""} onChange={(e) => setD({ email: e.target.value })} placeholder={email} />
+        </Field>
+      )}
+
+      {d.channels.includes("whatsapp") && (
+        <div className="space-y-3 rounded-2xl border border-cream/10 bg-cream/[0.02] p-4">
+          <Field label="WhatsApp number" hint="Saved as pending — WhatsApp delivery isn't wired yet.">
+            <input className={inputCls} value={d.whatsappNumber ?? ""} onChange={(e) => setD({ whatsappNumber: e.target.value })} placeholder="+27 …" />
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-cream/60">
+            <input type="checkbox" checked={!!d.whatsappConsent} onChange={(e) => setD({ whatsappConsent: e.target.checked })} className="accent-mint" />
+            I consent to receive briefings on WhatsApp
+          </label>
+        </div>
+      )}
+
+      <div>
+        <GroupLabel>When?</GroupLabel>
+        <div className="grid gap-4 sm:grid-cols-3">
+          {weekly && (
+            <Field label="Day of week">
+              <select className={inputCls} value={d.schedule.day ?? "Monday"} onChange={(e) => setSched({ day: e.target.value })}>
+                {DAYS.map((day) => <option key={day} value={day} className="text-ink">{day}</option>)}
+              </select>
+            </Field>
+          )}
+          <Field label="Time">
+            <input className={inputCls} type="time" value={d.schedule.time ?? "08:00"} onChange={(e) => setSched({ time: e.target.value })} />
+          </Field>
+          <Field label="Timezone">
+            <input className={inputCls} value={d.schedule.tz} onChange={(e) => setSched({ tz: e.target.value })} placeholder="Africa/Johannesburg" />
+          </Field>
+        </div>
+      </div>
+
+      <Toggle label="Use these settings for every digest" desc="Turn off later to tune each briefing separately" on={d.useForAllDigests} onChange={(v) => setD({ useForAllDigests: v })} />
     </div>
   );
 }

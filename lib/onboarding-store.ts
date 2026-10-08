@@ -86,9 +86,9 @@ export async function completeOnboarding(email: string, state: OnboardingState):
   const e = key(email);
   const org = orgKey(e);
   const t = state.targeting;
-  const wantsTech = ["my_tech_performance", "my_tech_adoption_churn", "fraud_monitoring"].some((g) => state.goals.includes(g as never));
-  const anyDigest = ["track_cms", "country_performance", "my_tech_performance", "my_tech_adoption_churn"].some((g) => state.goals.includes(g as never));
-  const cadence = state.cmsDigest?.cadence ?? state.techAdoptionChurn?.cadence ?? "weekly";
+  const wantsTech = ["my_tech_performance", "fraud_monitoring"].some((g) => state.goals.includes(g as never));
+  const anyDigest = ["track_cms", "country_performance", "my_tech_performance"].some((g) => state.goals.includes(g as never));
+  const cadence = state.cmsDigest?.cadence ?? state.techDeepDive?.cadence ?? "weekly";
   const monitoring = state.fraud?.enabled && isFraudEligible(state.companyType) ? { fraud: { enabled: true, status: "pending_setup" } } : {};
   const leadFocus = t?.allPlatforms ? [] : (t?.platforms ?? []);
   const markets = t?.allCountries ? [] : (t?.countries ?? []);

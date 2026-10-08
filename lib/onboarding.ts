@@ -36,13 +36,12 @@ export type Role = (typeof ROLES)[number];
 
 export type Goal =
   | "find_leads" | "track_cms" | "country_performance"
-  | "my_tech_performance" | "my_tech_adoption_churn" | "fraud_monitoring";
+  | "my_tech_performance" | "fraud_monitoring";
 export const GOALS: { id: Goal; label: string; desc: string }[] = [
   { id: "find_leads", label: "Find ecommerce leads", desc: "Discover merchants to sell to" },
   { id: "track_cms", label: "Track CMS & platform activity", desc: "New stores, migrations, adoption" },
   { id: "country_performance", label: "Monitor performance by country", desc: "Market-level ecommerce activity" },
   { id: "my_tech_performance", label: "Understand my technology's market", desc: "Where your product wins & loses" },
-  { id: "my_tech_adoption_churn", label: "Track my adoption & churn", desc: "Installs and removals over time" },
   { id: "fraud_monitoring", label: "Detect suspected fraud", desc: "Flag clone/abuse signals across your base" },
 ];
 /** Fraud monitoring is only offered to companies whose customer base IS the merchant universe. */
@@ -85,7 +84,6 @@ export type DigestCadence = "weekly" | "monthly";
 export type CmsDigest = { allPlatforms: boolean; platforms: string[]; allCountries: boolean; countries: string[]; cadence: DigestCadence; reuseTargeting: boolean };
 export type CountryDigest = { countries: string[] };
 export type TechDeepDive = { techs: string[]; allMarkets: boolean; markets: string[]; recurring: boolean; cadence: DigestCadence };
-export type TechAdoptionChurn = { techs: string[]; allCountries: boolean; countries: string[]; cadence: DigestCadence };
 export type FraudMonitoring = { enabled: boolean; status: "pending_setup" };
 
 /* ------------------------------------------------------------------ stage 4 --- */
@@ -122,7 +120,7 @@ export type OnboardingState = {
   targeting?: Targeting;
   // stage 3
   cmsDigest?: CmsDigest; countryDigest?: CountryDigest; techDeepDive?: TechDeepDive;
-  techAdoptionChurn?: TechAdoptionChurn; fraud?: FraudMonitoring;
+  fraud?: FraudMonitoring;
   // stage 4
   delivery?: Delivery;
   // stage 5
@@ -135,7 +133,7 @@ export const STAGES = ["Your company", "Your ideal merchants", "Your intelligenc
 export type StageIndex = 1 | 2 | 3 | 4 | 5;
 
 const hasGoal = (s: OnboardingState, g: Goal) => s.goals.includes(g);
-const wantsTech = (s: OnboardingState) => hasGoal(s, "my_tech_performance") || hasGoal(s, "my_tech_adoption_churn") || hasGoal(s, "fraud_monitoring");
+const wantsTech = (s: OnboardingState) => hasGoal(s, "my_tech_performance") || hasGoal(s, "fraud_monitoring");
 
 /* ------------------------------------------------- applicability + progress --- */
 // A flat list of questions with: which stage, does it apply to THIS state, and is it answered.
@@ -156,7 +154,6 @@ const QUESTIONS: Q[] = [
   { stage: 3, applies: (s) => hasGoal(s, "track_cms"), answered: (s) => !!s.cmsDigest },
   { stage: 3, applies: (s) => hasGoal(s, "country_performance"), answered: (s) => !!s.countryDigest && s.countryDigest.countries.length > 0 },
   { stage: 3, applies: (s) => hasGoal(s, "my_tech_performance"), answered: (s) => !!s.techDeepDive && s.techDeepDive.techs.length > 0 },
-  { stage: 3, applies: (s) => hasGoal(s, "my_tech_adoption_churn"), answered: (s) => !!s.techAdoptionChurn && s.techAdoptionChurn.techs.length > 0 },
   { stage: 3, applies: (s) => hasGoal(s, "fraud_monitoring") && isFraudEligible(s.companyType), answered: (s) => !!s.fraud },
   // Stage 4
   { stage: 4, applies: () => true, answered: (s) => !!s.delivery && s.delivery.channels.length > 0 },
@@ -208,17 +205,17 @@ export function summary(s: OnboardingState, platformLabels: Record<string, strin
     if (!t.sizeAny && t.sizeBands.length) out.push({ key: "leads-size", text: `${andList(t.sizeBands.map((b) => SIZE_BANDS.find((x) => x.id === b)?.label ?? b))}` });
   }
   if (hasGoal(s, "track_cms") && s.cmsDigest) {
-    const plats = s.cmsDigest.allPlatforms ? "all platforms" : andList(s.cmsDigest.platforms.map((p) => platName(p, platformLabels)));
-    out.push({ key: "cms", text: `${cap(s.cmsDigest.cadence)} ${plats} activity digest` });
+    const d = s.cmsDigest;
+    const plats = d.reuseTargeting
+      ? (t?.allPlatforms ? "all platforms" : t?.platforms.length ? andList(t.platforms.map((p) => platName(p, platformLabels))) : "your target platforms")
+      : d.allPlatforms ? "all platforms" : andList(d.platforms.map((p) => platName(p, platformLabels)));
+    out.push({ key: "cms", text: `${cap(d.cadence)} ${plats} activity digest` });
   }
   if (hasGoal(s, "country_performance") && s.countryDigest?.countries.length) {
     out.push({ key: "country", text: `Weekly country performance: ${andList(s.countryDigest.countries.map(marketLabelSafe))}` });
   }
   if (hasGoal(s, "my_tech_performance") && s.techDeepDive?.techs.length) {
     out.push({ key: "tech-dd", text: `${s.techDeepDive.recurring ? cap(s.techDeepDive.cadence) + " deep dives" : "One-off deep dive"}: ${andList(s.techDeepDive.techs)}` });
-  }
-  if (hasGoal(s, "my_tech_adoption_churn") && s.techAdoptionChurn?.techs.length) {
-    out.push({ key: "tech-ac", text: `${cap(s.techAdoptionChurn.cadence)} adoption & churn: ${andList(s.techAdoptionChurn.techs)}` });
   }
   if (hasGoal(s, "fraud_monitoring") && s.fraud?.enabled && isFraudEligible(s.companyType)) {
     out.push({ key: "fraud", text: "Suspected-fraud monitoring (setup required)" });
