@@ -41,6 +41,24 @@ const LAUNCH_OPTS: { key: LaunchKey; label: string; days: number }[] = [
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
 const isCleanTheme = (t: string) => /^[A-Za-z][A-Za-z &'-]{1,24}$/.test(t.trim());
 
+// Merge theme rows that are the same name apart from case/whitespace ("Dawn" + "dawn" + "Dawn ")
+// into one row: summed count, best-cased label. The browse filter already matches theme
+// case/whitespace-insensitively (btrim + ILIKE), so the merged label still selects every variant —
+// this is display-only.
+function mergeThemes(values: [string, number][]): [string, number][] {
+  const label = new Map<string, string>();
+  const best = new Map<string, number>();
+  const total = new Map<string, number>();
+  for (const [v, n] of values) {
+    if (!isCleanTheme(v)) continue;
+    const name = v.trim().replace(/\s+/g, " ");
+    const key = name.toLowerCase();
+    total.set(key, (total.get(key) ?? 0) + n);
+    if (!best.has(key) || n > best.get(key)!) { best.set(key, n); label.set(key, name); }
+  }
+  return [...total.entries()].map(([k, n]) => [label.get(k)!, n] as [string, number]).sort((a, b) => b[1] - a[1]);
+}
+
 // WooCommerce activity tier — the "is this a REAL store or a stale build" reveal.
 // Ordered strongest-first in the facet; labeled for humans in the rail.
 const ACTIVITY_ORDER: Record<string, number> = { selling: 0, active: 1, dormant: 2, not_a_store: 3 };
@@ -91,8 +109,10 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
-function Facet({ title, values, selected, onToggle, label }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string }) {
-  const [open, setOpen] = useState(true);
+function Facet({ title, values, selected, onToggle, label, defaultOpen = true }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string; defaultOpen?: boolean }) {
+  // Collapsed by default for secondary facets to keep the rail compact — but auto-open if it already
+  // holds a selection, so active filters are never hidden.
+  const [open, setOpen] = useState(selected.size > 0 ? true : defaultOpen);
   const [expand, setExpand] = useState(false);
   const shown = expand ? values : values.slice(0, 6);
   return (
@@ -119,6 +139,20 @@ function Facet({ title, values, selected, onToggle, label }: { title: string; va
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Collapsible wrapper for the non-facet filter groups (Newly discovered, Launched) so every
+// filter section in the rail collapses, not just the facets.
+function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-4 border-b border-cream/10 pb-3">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-cream/50">
+        {title}<span className="text-cream/30">{open ? "–" : "+"}</span>
+      </button>
+      {open && <div className="mt-2 space-y-1">{children}</div>}
     </div>
   );
 }
@@ -228,7 +262,7 @@ export function Explorer({ initialData, initial, showStats }: {
     hosting: fv(data.facets.hosting),
     category: fv(data.facets.category),
     band: fv(data.facets.band).sort((a, b) => (bandOrder.get(a[0]) ?? 9) - (bandOrder.get(b[0]) ?? 9)),
-    theme: fv(data.facets.theme).filter(([t]) => isCleanTheme(t)),
+    theme: mergeThemes(fv(data.facets.theme)),
     city: fv(data.facets.city),
     payment: fv(data.facets.payment),
     shipping: fv(data.facets.shipping),
@@ -279,6 +313,7 @@ export function Explorer({ initialData, initial, showStats }: {
   // Platform values come in mixed case ('shopify' from discovery, 'Wix' from imports), so compare
   // case-insensitively — otherwise selecting "Shopify" wouldn't reveal the Plus / Apps controls.
   const shopifySelected = [...platform].some((p) => p.toLowerCase() === "shopify");
+  const wooSelected = [...platform].some((p) => p.toLowerCase() === "woocommerce");
   const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p.toLowerCase()));
 
   return (
@@ -317,58 +352,54 @@ export function Explorer({ initialData, initial, showStats }: {
         </div>
 
         {/* Newly discovered — when WE first saw it. The key control for new stores. Single-select. */}
-        <div className="mt-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
-          <div className="mt-2 space-y-1">
-            {RECENCY_OPTS.map((o) => {
-              const on = recency === o.key;
-              return (
-                <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                  <span className="flex items-center gap-2">
-                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                    {o.label}
-                  </span>
-                  <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <Section title="Newly discovered">
+          {RECENCY_OPTS.map((o) => {
+            const on = recency === o.key;
+            return (
+              <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
+                className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                <span className="flex items-center gap-2">
+                  <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
+                  {o.label}
+                </span>
+                <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
+              </button>
+            );
+          })}
+        </Section>
 
         {/* Launched — when the store started selling. Single-select (nested windows). */}
         {hasLaunchData && (
-          <div className="mt-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Launched</div>
-            <div className="mt-2 space-y-1">
-              {LAUNCH_OPTS.map((o) => {
-                const on = launched === o.key;
-                return (
-                  <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setLimit(PAGE); }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                    <span className="flex items-center gap-2">
-                      <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
-                      {o.label}
-                    </span>
-                    <span className="text-xs tabular-nums text-cream/40">{launchCount(o.key).toLocaleString()}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <Section title="Launched">
+            {LAUNCH_OPTS.map((o) => {
+              const on = launched === o.key;
+              return (
+                <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setLimit(PAGE); }}
+                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
+                    {o.label}
+                  </span>
+                  <span className="text-xs tabular-nums text-cream/40">{launchCount(o.key).toLocaleString()}</span>
+                </button>
+              );
+            })}
+          </Section>
         )}
 
-        {/* Secondary facets. Woo activity shows only when there's Woo data; Hosting only for self-hosted
-            platforms; the Shopify app-store facet only when Shopify is selected. */}
-        {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
-        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
-        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
-        <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
-        <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
-        <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
-        <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} />
-        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />}
-        <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
+        {/* Secondary facets — collapsed by default to keep the rail compact (they auto-open when they
+            hold a selection). WooCommerce-specific controls (Woo activity) show only when WooCommerce
+            is selected; Hosting only for self-hosted platforms; the Shopify app facet only for Shopify;
+            City only once a country is chosen (city lists are meaningless across every market at once). */}
+        {wooSelected && facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} defaultOpen={false} />}
+        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} defaultOpen={false} />}
+        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} defaultOpen={false} />
+        <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} defaultOpen={false} />
+        <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} defaultOpen={false} />
+        <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} defaultOpen={false} />
+        <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
+        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
+        {country.size > 0 && <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} defaultOpen={false} />}
       </aside>
 
       {/* main */}
