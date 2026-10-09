@@ -107,7 +107,7 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
   const series = useMemo(() => {
     const groups = GROUPS[platform];
     const cumByCountry: Record<string, number[]> = {}; const monthlyByCountry: Record<string, number[]> = {};
-    const africaCum = new Array(N).fill(0); const shopCum = new Array(N).fill(0); const wooCum = new Array(N).fill(0);
+    const africaCum = new Array(N).fill(0); const shopCum = new Array(N).fill(0); const wooCum = new Array(N).fill(0); const restCum = new Array(N).fill(0);
     let maxCountry = 1;
     for (const [iso2, byGroup] of Object.entries(data.countries)) {
       const monthly = new Array(N).fill(0);
@@ -115,15 +115,15 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
       const cum = new Array(N).fill(0); let run = 0;
       for (let i = 0; i < N; i++) { run += monthly[i]; cum[i] = run; africaCum[i] += run; }
       // CMS split (for the stacked chart) — always computed from the raw groups
-      let rs = 0, rw = 0;
-      for (let i = 0; i < N; i++) { rs += byGroup.shopify[i] || 0; rw += byGroup.woo[i] || 0; shopCum[i] += rs; wooCum[i] += rw; }
+      let rs = 0, rw = 0, rr = 0;
+      for (let i = 0; i < N; i++) { rs += byGroup.shopify[i] || 0; rw += byGroup.woo[i] || 0; rr += byGroup.rest[i] || 0; shopCum[i] += rs; wooCum[i] += rw; restCum[i] += rr; }
       if (run > 0) { cumByCountry[iso2] = cum; monthlyByCountry[iso2] = monthly; maxCountry = Math.max(maxCountry, run); }
     }
     const pulsesByMonth: { iso2: string; key: string }[][] = Array.from({ length: N }, () => []);
     const gset = new Set(groups); let pk = 0;
     for (const [mi, iso2, g] of data.pulses ?? []) { if (gset.has(g)) pulsesByMonth[mi].push({ iso2, key: String(pk) }); pk++; }
     const featuredSel = (data.featured ?? []).filter((f) => gset.has(f.g)).sort((a, b) => a.i - b.i);
-    return { cumByCountry, monthlyByCountry, africaCum, shopCum, wooCum, maxCountry, maxAfrica: Math.max(1, africaCum[N - 1]), pulsesByMonth, featuredSel };
+    return { cumByCountry, monthlyByCountry, africaCum, shopCum, wooCum, restCum, maxCountry, maxAfrica: Math.max(1, africaCum[N - 1]), pulsesByMonth, featuredSel };
   }, [data, platform, N]);
 
   // ---- reduced motion ----
@@ -276,16 +276,17 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
             {spotPt && <circle cx={spotPt.x} cy={spotPt.y} r={4} fill="none" stroke="var(--color-cyan)" strokeWidth={1.5} opacity={0.9} />}
           </svg>
 
-          {/* many small store popups placed near where each launched (favicon + name) */}
+          {/* many small store popups placed near where each launched (favicon + name) — kept
+              deliberately small so they read as ambient "pins", not dashboard cards */}
           {miniPops.filter((p) => !spot || p.domain !== spot.domain).map((p) => (
             <div key={`${p.i}-${p.domain}`}
-              className="pointer-events-none absolute z-10 flex items-center gap-1.5 rounded-xl border border-cream/15 bg-ink-deep/85 py-1 pl-1 pr-2 shadow-lg backdrop-blur"
-              style={{ left: `${Math.min(88, Math.max(12, (p.pt.x / W) * 100))}%`, top: `${(p.pt.y / H) * 100}%`, transform: "translate(-50%,-150%)", opacity: p.fresh ? 1 : 0.5, transition: "opacity .6s ease" }}>
+              className="pointer-events-none absolute z-10 flex items-center gap-1 rounded-lg border border-cream/12 bg-ink-deep/85 py-0.5 pl-0.5 pr-1.5 shadow-md backdrop-blur"
+              style={{ left: `${Math.min(88, Math.max(12, (p.pt.x / W) * 100))}%`, top: `${(p.pt.y / H) * 100}%`, transform: "translate(-50%,-150%)", opacity: p.fresh ? 1 : 0.45, transition: "opacity .6s ease" }}>
               {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
-              <img src={`https://www.google.com/s2/favicons?domain=${p.domain}&sz=32`} alt="" width={16} height={16}
-                referrerPolicy="no-referrer" className="rounded" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
-              <span className="max-w-[8rem] truncate text-[10px] text-cream/85">{decodeName(p.name)}</span>
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: p.g === "woo" ? "var(--color-lilac)" : "var(--color-mint)" }} />
+              <img src={`https://www.google.com/s2/favicons?domain=${p.domain}&sz=32`} alt="" width={12} height={12}
+                referrerPolicy="no-referrer" className="rounded-sm" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+              <span className="max-w-[5.5rem] truncate text-[9px] leading-none text-cream/80">{decodeName(p.name)}</span>
+              <span className="h-1 w-1 shrink-0 rounded-full" style={{ background: p.g === "woo" ? "var(--color-lilac)" : "var(--color-mint)" }} />
             </div>
           ))}
 
@@ -363,8 +364,8 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
       </div>
 
       {/* stacked CMS growth chart (memoised + quantised progress → no 60fps flicker) */}
-      <GrowthChart shopCum={series.shopCum} wooCum={series.wooCum} months={months}
-        showShop={platform !== "woocommerce"} showWoo={platform !== "shopify"}
+      <GrowthChart shopCum={series.shopCum} wooCum={series.wooCum} restCum={series.restCum} months={months}
+        showShop={platform !== "woocommerce"} showWoo={platform !== "shopify"} showRest={platform === "all"}
         prog={chartProg} lastRefresh={data.meta.lastRefresh} />
 
       {/* ops "always on" box */}
@@ -378,11 +379,12 @@ export function AfricaReplay({ data }: { data: AfricaTimeline }) {
 // Stacked CMS growth chart. Memoised and driven by a quantised `prog` so it repaints a few times a
 // second (not on every animation frame), which removes the flicker from rebuilding the band paths.
 export const GrowthChart = memo(function GrowthChart(
-  { shopCum, wooCum, months, showShop, showWoo, prog, lastRefresh, scope = "Africa", scopeAdj = "African", lang = "en" }:
-  { shopCum: number[]; wooCum: number[]; months: string[]; showShop: boolean; showWoo: boolean; prog: number; lastRefresh: string | null; scope?: string; scopeAdj?: string; lang?: Lang },
+  { shopCum, wooCum, restCum, months, showShop, showWoo, showRest = false, prog, lastRefresh, scope = "Africa", scopeAdj = "African", lang = "en" }:
+  { shopCum: number[]; wooCum: number[]; restCum?: number[]; months: string[]; showShop: boolean; showWoo: boolean; showRest?: boolean; prog: number; lastRefresh: string | null; scope?: string; scopeAdj?: string; lang?: Lang },
 ) {
   const N = months.length, cw = 1000, ch = 160, padB = 18;
-  const top = new Array(N); for (let i = 0; i < N; i++) top[i] = (showShop ? shopCum[i] : 0) + (showWoo ? wooCum[i] : 0);
+  const rest = restCum ?? new Array(N).fill(0);
+  const top = new Array(N); for (let i = 0; i < N; i++) top[i] = (showShop ? shopCum[i] : 0) + (showWoo ? wooCum[i] : 0) + (showRest ? rest[i] : 0);
   const maxY = Math.max(1, top[N - 1]);
   const xs = (i: number) => (i / (N - 1)) * cw;
   const ys = (v: number) => ch - padB - (v / maxY) * (ch - padB - 8);
@@ -397,8 +399,13 @@ export const GrowthChart = memo(function GrowthChart(
     return `M${fwd.join(" L")} L${back.reverse().join(" L")} Z`;
   };
   const zero = new Array(N).fill(0);
-  const shopBand = showShop ? band(zero, shopCum) : "";
-  const wooBand = showWoo ? band(showShop ? shopCum : zero, showShop ? top : wooCum) : "";
+  // stacked levels: Shopify (bottom) → WooCommerce → Other CMS (top), each level the running sum
+  const sum = (...arrs: number[][]) => { const o = new Array(N).fill(0); for (const a of arrs) for (let i = 0; i < N; i++) o[i] += a[i] || 0; return o; };
+  const sArr = showShop ? shopCum : zero, wArr = showWoo ? wooCum : zero, rArr = showRest ? rest : zero;
+  const lvl1 = sArr, lvl2 = sum(sArr, wArr), lvl3 = sum(sArr, wArr, rArr);
+  const shopBand = showShop ? band(zero, lvl1) : "";
+  const wooBand = showWoo ? band(lvl1, lvl2) : "";
+  const restBand = showRest ? band(lvl2, lvl3) : "";
   const ticks: { x: number; label: string }[] = []; let ly = "";
   months.forEach((m, i) => { const y = m.slice(0, 4); if (y !== ly) { ticks.push({ x: xs(i), label: y }); ly = y; } });
   const f = Math.floor(tf), fr = tf - f;
@@ -411,6 +418,7 @@ export const GrowthChart = memo(function GrowthChart(
         <div className="flex items-center gap-3 text-[11px]">
           {showShop && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-mint)" }} /> Shopify</span>}
           {showWoo && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-lilac)" }} /> WooCommerce</span>}
+          {showRest && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-orange)" }} /> Other CMS</span>}
           <span className="font-display text-xl text-cream tabular-nums">{Math.round(curVal).toLocaleString()}</span>
         </div>
       </div>
@@ -423,6 +431,7 @@ export const GrowthChart = memo(function GrowthChart(
         ))}
         {wooBand && <path d={wooBand} fill="var(--color-lilac)" fillOpacity={0.55} />}
         {shopBand && <path d={shopBand} fill="var(--color-mint)" fillOpacity={0.6} />}
+        {restBand && <path d={restBand} fill="var(--color-orange)" fillOpacity={0.5} />}
         <circle cx={xs(tf)} cy={ys(curVal)} r={3.5} fill="var(--color-cream)" />
         {/* honesty marker: curve starts near zero because our tracking window opens in 2015, not the market */}
         <line x1={1} y1={0} x2={1} y2={ch - padB} stroke="var(--color-cream)" strokeOpacity={0.25} strokeDasharray="2 3" />
