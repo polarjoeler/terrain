@@ -37,6 +37,10 @@ const SEGMENTS = [
   ["🛍️", "Online Stores", "Benchmark against the market and find your edge."],
 ];
 
+// Platforms Terrain tracks — shown as a coverage strip. Styled wordmarks (not the trademarked logo
+// artwork); drop official SVGs into /public/logos and swap these for the real marks when ready.
+const PLATFORMS = ["Shopify", "WooCommerce", "Wix", "Adobe Commerce", "Squarespace", "Ecwid", "BigCommerce", "PrestaShop"];
+
 function Nav() {
   return (
     <nav className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 rounded-full border border-cream/12 bg-cream/[0.06] py-2 pl-5 pr-2 backdrop-blur">
@@ -45,7 +49,7 @@ function Nav() {
         <a href="#map" className="hover:text-cream">The map</a>
         <a href="#products" className="hover:text-cream">Products</a>
         <a href="#who" className="hover:text-cream">Who it&apos;s for</a>
-        <Link href="/insights/japan" className="hover:text-cream">日本</Link>
+        <Link href="/japan" className="hover:text-cream">日本</Link>
       </div>
       <a href="#join" className="shrink-0 whitespace-nowrap rounded-full bg-cyan px-5 py-2.5 text-sm font-medium text-cyan-deep transition hover:brightness-110">Join the list</a>
     </nav>
@@ -81,9 +85,24 @@ export default async function Home() {
         </p>
       </header>
 
-      {/* the live map — the full interface */}
-      <section id="map" className="px-4 py-8">
-        <div className="mx-auto max-w-6xl">
+      {/* platform coverage strip */}
+      <section className="mx-auto max-w-6xl px-6 pb-4 pt-8">
+        <p className="text-center text-[11px] font-semibold uppercase tracking-[0.18em] text-cream/35">Every major platform, one map</p>
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-x-8 gap-y-3">
+          {PLATFORMS.map((p) => (
+            <span key={p} className="font-display text-lg font-semibold text-cream/45 transition hover:text-cream/80">{p}</span>
+          ))}
+        </div>
+      </section>
+
+      {/* the live map — a supporting band, not the whole hero */}
+      <section id="map" className="px-4 py-12">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-5 text-center">
+            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Live from the field</span>
+            <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Watch the market build itself.</h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-cream/55">Every store appears on the day it launched — a decade of African eCommerce, replayed.</p>
+          </div>
           {ready ? <AfricaReplay data={data} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
         </div>
       </section>
@@ -96,15 +115,15 @@ export default async function Home() {
           <p className="mt-3 max-w-xl text-cream/55">Every store, what it sells, what it&apos;s built with, who it pays — read as brand protection, distribution, or the fight for the rails.</p>
           <div className="mt-10 grid gap-4 md:grid-cols-3">
             {PRODUCTS.map((p) => (
-              <Link key={p.key} href={p.href} className={`group rounded-[1.75rem] border ${toneCls[p.tone]} bg-cream/[0.02] p-7 transition hover:bg-cream/[0.04]`}>
+              <a key={p.key} href="#join" className={`group rounded-[1.75rem] border ${toneCls[p.tone]} bg-cream/[0.02] p-7 transition hover:bg-cream/[0.04]`}>
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl font-display text-2xl" style={{ background: toneBg[p.tone], color: toneFg[p.tone] }}>{p.glyph}</div>
                 <div className="mt-5 flex items-baseline justify-between gap-2">
                   <h3 className="font-display text-3xl text-cream">{p.key}</h3>
                   <span className="text-[11px] uppercase tracking-wide text-cream/40">{p.audience}</span>
                 </div>
                 <p className="mt-3 text-sm leading-relaxed text-cream/60">{p.line}</p>
-                <span className="mt-4 inline-block text-sm text-cream/50 transition group-hover:text-cream">Explore {p.key} →</span>
-              </Link>
+                <span className="mt-4 inline-block text-sm text-cream/50 transition group-hover:text-cream">Get early access →</span>
+              </a>
             ))}
           </div>
         </div>
@@ -132,7 +151,7 @@ export default async function Home() {
       <footer className="overflow-hidden px-6 pb-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
           <Link href="/" className="text-cream/80"><Wordmark size="text-base" /></Link>
-          <span>Africa &amp; global · <Link href="/insights/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link> · a Tembo Commerce product</span>
+          <span>Africa &amp; global · <Link href="/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link> · a Tembo Commerce product</span>
           <a href="mailto:hello@tembocommerce.app" className="underline">hello@tembocommerce.app</a>
         </div>
       </footer>
