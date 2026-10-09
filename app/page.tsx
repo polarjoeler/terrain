@@ -5,6 +5,7 @@ import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
 import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
 import WORLD_POINTS from "@/lib/world-points-snapshot.json";
+import WORLD_STORES from "@/lib/world-stores-snapshot.json";
 import { GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
 import { LiveMap } from "@/app/components/live-map";
 import { Capabilities, TechStrip } from "@/app/components/home-sections";
@@ -66,7 +67,6 @@ export default async function Home() {
   // Zoom the global flight to the visitor's region (Vercel edge geo). Japan gets 日本; everyone else
   // lands on Africa — the home market. No DB work: the world outline + store weights are committed.
   const country = (await headers()).get("x-vercel-ip-country")?.toUpperCase() ?? "";
-  const region: "africa" | "japan" = country === "JP" ? "japan" : "africa";
   const cum = cmsCumulative(data);
 
   return (
@@ -98,7 +98,7 @@ export default async function Home() {
             </div>
             <p className="max-w-xs text-sm text-cream/50">The globe flies into your region, then click any country to watch its real stores appear.</p>
           </div>
-          {ready ? <LiveMap data={data} points={WORLD_POINTS as { iso2: string; n: number }[]} region={region} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
+          {ready ? <LiveMap stores={WORLD_STORES as { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" }[]} points={WORLD_POINTS as { iso2: string; n: number }[]} country={country} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
           {ready && (
             <div className="mt-6">
               <GrowthChart shopCum={cum.shop} wooCum={cum.woo} restCum={cum.rest} months={data.months}
