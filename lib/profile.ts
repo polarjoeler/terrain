@@ -37,6 +37,8 @@ export type OrgProfile = {
   companyType: CompanyType;
   cmsFocus: string[];              // shopify / woocommerce / magento / wix / all
   trackOwnPerformance: boolean;    // they ARE a provider and want their own perf + weekly digest
+  providerName: string | null;     // the gateway this org IS (Paystack, PayFast…) — drives the provider digest
+  markets: string[];               // ISO2 markets they care about (defaults to ZA/KE/NG when empty)
   extras: string | null;          // free-text "any other features you want"
   createdBy: string;
   createdAt: string;
@@ -62,6 +64,8 @@ function ensureTables(sql: ReturnType<typeof db>): Promise<void> {
       org text PRIMARY KEY, company_type text, cms_focus text[] DEFAULT '{}',
       track_own_performance boolean DEFAULT false, extras text,
       created_by text, created_at timestamptz NOT NULL DEFAULT now())`;
+    await sql`ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS provider_name text`;
+    await sql`ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS markets text[] DEFAULT '{}'`;
     await sql`CREATE TABLE IF NOT EXISTS user_profile (
       email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
       lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
@@ -124,7 +128,9 @@ export async function getOrgProfile(org: string): Promise<OrgProfile | null> {
     if (!r) return null;
     return {
       org: r.org, companyType: r.company_type, cmsFocus: r.cms_focus ?? [],
-      trackOwnPerformance: r.track_own_performance, extras: r.extras,
+      trackOwnPerformance: r.track_own_performance,
+      providerName: r.provider_name ?? null, markets: r.markets ?? [],
+      extras: r.extras,
       createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString(),
     };
   } catch { return null; }
@@ -140,6 +146,8 @@ export type OnboardingInput = {
   companyType?: CompanyType;
   cmsFocus?: string[];
   trackOwnPerformance?: boolean;
+  providerName?: string;          // if they're a payment provider, which gateway (drives their digest)
+  markets?: string[];             // ISO2 markets they operate in
   extras?: string;
   // per-user (always)
   leadCadence: LeadCadence;
@@ -156,8 +164,8 @@ export async function saveOnboarding(email: string, input: OnboardingInput): Pro
   const firstUser = !(await getOrgProfile(org));
 
   if (firstUser && input.companyType) {
-    await sql`INSERT INTO org_profile (org, company_type, cms_focus, track_own_performance, extras, created_by)
-      VALUES (${org}, ${input.companyType}, ${input.cmsFocus ?? []}, ${input.trackOwnPerformance ?? false}, ${input.extras ?? null}, ${e})
+    await sql`INSERT INTO org_profile (org, company_type, cms_focus, track_own_performance, provider_name, markets, extras, created_by)
+      VALUES (${org}, ${input.companyType}, ${input.cmsFocus ?? []}, ${input.trackOwnPerformance ?? false}, ${input.providerName ?? null}, ${input.markets ?? []}, ${input.extras ?? null}, ${e})
       ON CONFLICT (org) DO NOTHING`;
   }
   await sql`INSERT INTO user_profile (email, org, is_first_user, lead_cadence, lead_focus, ingestion, digest, completed_at)
