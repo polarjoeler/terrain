@@ -8,7 +8,7 @@ import WORLD_POINTS from "@/lib/world-points-snapshot.json";
 import WORLD_STORES from "@/lib/world-stores-snapshot.json";
 import { GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
 import { LiveMap } from "@/app/components/live-map";
-import { Capabilities, TechStrip } from "@/app/components/home-sections";
+import { Capabilities, TechStrip, PlatformPreview, DigestByRole } from "@/app/components/home-sections";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
 // Cumulative tracked stores by CMS (Shopify / WooCommerce / Other), summed across all countries —
@@ -41,15 +41,16 @@ const SEGMENTS = [
   ["🛍️", "Online Stores", "Benchmark against the market and find your edge."],
 ];
 
-function Nav() {
+function Nav({ showJapan }: { showJapan: boolean }) {
   return (
     <nav className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 rounded-full border border-cream/12 bg-cream/[0.06] py-2 pl-5 pr-2 backdrop-blur">
       <Link href="/" className="text-cream"><Wordmark /></Link>
       <div className="hidden gap-7 text-sm text-cream/60 md:flex">
         <a href="#map" className="hover:text-cream">The map</a>
-        <a href="#capabilities" className="hover:text-cream">What we do</a>
+        <a href="#platform" className="hover:text-cream">Platform</a>
+        <a href="#digest" className="hover:text-cream">Digest</a>
         <a href="#who" className="hover:text-cream">Who it&apos;s for</a>
-        <Link href="/japan" className="hover:text-cream">日本</Link>
+        {showJapan && <Link href="/japan" className="hover:text-cream">日本</Link>}
       </div>
       <a href="#join" className="shrink-0 whitespace-nowrap rounded-full bg-cyan px-5 py-2.5 text-sm font-medium text-cyan-deep transition hover:brightness-110">Join the list</a>
     </nav>
@@ -67,20 +68,21 @@ export default async function Home() {
   // Zoom the global flight to the visitor's region (Vercel edge geo). Japan gets 日本; everyone else
   // lands on Africa — the home market. No DB work: the world outline + store weights are committed.
   const country = (await headers()).get("x-vercel-ip-country")?.toUpperCase() ?? "";
+  const showJapan = country === "JP";   // only surface the 日本 switcher for visitors from Japan
   const cum = cmsCumulative(data);
 
   return (
     <main className="pt-4">
-      <div className="px-4"><Nav /></div>
+      <div className="px-4"><Nav showJapan={showJapan} /></div>
 
       {/* hero — the thesis + the catchy hook. The map shows what we're excited about; it isn't the pitch. */}
       <header className="mx-auto max-w-6xl px-6 pb-2 pt-16 md:pt-20">
-        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Market intelligence for African commerce</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Lead generation &amp; market intelligence for African commerce</span>
         <h1 className="mt-4 max-w-3xl font-display text-5xl leading-[1.02] tracking-tight md:text-7xl">
-          Every online store, <em className="text-cyan">read in full.</em>
+          Every online store, <em className="text-cyan">a lead in full.</em>
         </h1>
         <p className="mt-5 max-w-2xl text-lg text-cream/60">
-          Terrain tracks every eCommerce store across Africa — what it sells, what it&apos;s built with, who it pays, and how it moves — and turns the whole market into intelligence you can act on.
+          Terrain tracks every eCommerce store across Africa — what it sells, what it&apos;s built with, who it pays, and how it moves — and turns the whole market into qualified leads you can push straight into your workflow.
         </p>
         <div className="mt-7 flex flex-wrap items-center gap-3">
           <a href="#join" className="rounded-full bg-cyan px-6 py-3 text-sm font-medium text-cyan-deep transition hover:brightness-110">Get early access</a>
@@ -114,6 +116,12 @@ export default async function Home() {
       {/* what Terrain does — the product, as a calm four-band rhythm */}
       <Capabilities />
 
+      {/* the platform — the Overview/lead dashboard + pushing leads into Sheets, CRM, Slack, WhatsApp */}
+      <PlatformPreview />
+
+      {/* the weekly digest — the paid payoff, tailored per role */}
+      <DigestByRole />
+
       {/* who it's for */}
       <section id="who" className="px-4 py-8 pb-20">
         <div className="mx-auto max-w-6xl">
@@ -136,8 +144,8 @@ export default async function Home() {
       <footer className="overflow-hidden px-6 pb-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
           <Link href="/" className="text-cream/80"><Wordmark size="text-base" /></Link>
-          <span>Africa &amp; global · <Link href="/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link> · a Tembo Commerce product</span>
-          <a href="mailto:hello@tembocommerce.app" className="underline">hello@tembocommerce.app</a>
+          <span>Africa &amp; global{showJapan && <> · <Link href="/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link></>} · a Tembo Commerce product</span>
+          <a href="mailto:hello@heyterrain.com" className="underline">hello@heyterrain.com</a>
         </div>
       </footer>
     </main>

@@ -223,3 +223,154 @@ export function TechStrip() {
     </section>
   );
 }
+
+/* ----------------------------------------------------------------- platform preview + integrations */
+
+const flag = (iso2: string) => /^[A-Za-z]{2}$/.test(iso2) ? String.fromCodePoint(...[...iso2.toUpperCase()].map((c) => 127397 + c.charCodeAt(0))) : "🌍";
+
+// A masked monochrome logo at an arbitrary path (brand marks live under /public/logos).
+function Mark({ src, name, size = "h-6 w-6", tint = "bg-cream/70" }: { src: string; name: string; size?: string; tint?: string }) {
+  return <span role="img" aria-label={name} title={name} className={`${size} shrink-0 ${tint}`} style={{
+    WebkitMaskImage: `url(${src})`, maskImage: `url(${src})`, WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
+    WebkitMaskPosition: "center", maskPosition: "center", WebkitMaskSize: "contain", maskSize: "contain",
+  }} />;
+}
+
+const TAG: Record<string, string> = { New: "text-mint", Plus: "text-cyan", Migrated: "text-orange" };
+// Illustrative preview rows (a product mockup — not claims about specific stores; deliberately NO
+// revenue figures). CMS/market/status are the kinds of columns the real dashboard shows.
+const MOCK_LEADS = [
+  { name: "Kefi Collection", c: "ZA", cms: "Shopify", tag: "New" },
+  { name: "Lagos Linen Co.", c: "NG", cms: "WooCommerce", tag: "New" },
+  { name: "Nairobi Naturals", c: "KE", cms: "Shopify", tag: "Plus" },
+  { name: "Accra Active", c: "GH", cms: "WooCommerce", tag: "Migrated" },
+  { name: "Cape Ceramics", c: "ZA", cms: "Shopify", tag: "New" },
+];
+const MOCK_STATS = [
+  { label: "New this week", value: "1,284", delta: "▲ +112" },
+  { label: "Shopify Plus", value: "37", delta: "▲ +4" },
+  { label: "Migrations", value: "58", delta: "▲ +9" },
+  { label: "Churned", value: "41", delta: "▼ −6" },
+];
+
+// A static mockup of the in-app Overview + lead dashboard.
+function DashboardMock() {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-cream/12 bg-ink-deep/70 shadow-2xl">
+      <div className="flex items-center gap-2 border-b border-cream/10 px-4 py-2.5">
+        <span className="flex gap-1.5"><i className="h-2 w-2 rounded-full bg-cream/20" /><i className="h-2 w-2 rounded-full bg-cream/20" /><i className="h-2 w-2 rounded-full bg-cream/20" /></span>
+        <span className="ml-2 font-mono text-[11px] text-cream/40">terrain · Overview</span>
+        <span className="ml-auto rounded-full bg-cream/10 px-2 py-0.5 text-[10px] text-cream/50">ZA · KE · NG</span>
+      </div>
+      <div className="p-4">
+        <div className="grid grid-cols-4 gap-2">
+          {MOCK_STATS.map((s) => (
+            <div key={s.label} className="rounded-xl border border-cream/10 bg-cream/[0.03] p-2.5">
+              <div className="truncate text-[9px] uppercase tracking-wide text-cream/40">{s.label}</div>
+              <div className="mt-1 font-display text-lg leading-none text-cream tabular-nums">{s.value}</div>
+              <div className="mt-1 font-mono text-[9px] text-mint">{s.delta}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 overflow-hidden rounded-xl border border-cream/10">
+          <div className="flex items-center justify-between border-b border-cream/10 bg-cream/[0.02] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-wide text-cream/35">
+            <span>Latest leads</span><span>Push to →</span>
+          </div>
+          {MOCK_LEADS.map((l) => (
+            <div key={l.name} className="flex items-center gap-2 border-b border-cream/[0.06] px-3 py-2 last:border-0">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-cream/10 text-[10px] font-semibold text-cream/60">{l.name[0]}</span>
+              <span className="truncate text-[11px] text-cream/85">{l.name}</span>
+              <span className="shrink-0 text-[10px] text-cream/40">{flag(l.c)}</span>
+              <span className="shrink-0 rounded-full bg-cream/[0.08] px-1.5 py-0.5 text-[9px] text-cream/55">{l.cms}</span>
+              <span className={`shrink-0 text-[9px] font-semibold ${TAG[l.tag]}`}>{l.tag}</span>
+              <span className="ml-auto flex shrink-0 items-center gap-1 opacity-60">
+                <Mark src="/logos/integrations/googlesheets.svg" name="Export to Google Sheets" size="h-3.5 w-3.5" tint="bg-cream/50" />
+                <Mark src="/logos/integrations/slack.svg" name="Send to Slack" size="h-3.5 w-3.5" tint="bg-cream/50" />
+                <Mark src="/logos/integrations/whatsapp.svg" name="Send to WhatsApp" size="h-3.5 w-3.5" tint="bg-cream/50" />
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const DESTINATIONS = [
+  { file: "googlesheets.svg", name: "Google Sheets", line: "Export a live, filtered sheet in a click." },
+  { file: "slack.svg", name: "Slack", line: "New-store and switch alerts in your channel." },
+  { file: "whatsapp.svg", name: "WhatsApp", line: "Hot leads straight to your phone." },
+];
+const CRMS = [{ file: "hubspot.svg", name: "HubSpot" }, { file: "salesforce.svg", name: "Salesforce" }, { file: "zoho.svg", name: "Zoho" }];
+
+/** Preview of the product + the integrations that get leads into the user's workflow. */
+export function PlatformPreview() {
+  return (
+    <section id="platform" className="px-4 py-20">
+      <div className="mx-auto max-w-6xl">
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">The platform</span>
+        <h2 className="mt-3 max-w-2xl font-display text-4xl tracking-tight md:text-5xl">From the map to your pipeline.</h2>
+        <p className="mt-3 max-w-xl text-cream/55">Explore the market in your Overview, filter the lead dashboard to exactly the stores you want — by market, platform, payment tech or launch date — then push them into the tools your team already runs.</p>
+
+        <div className="mt-12 grid items-center gap-10 md:grid-cols-[1.35fr_1fr]">
+          <DashboardMock />
+          <div>
+            <h3 className="font-display text-2xl tracking-tight text-cream">Pull leads into your stack.</h3>
+            <p className="mt-2 text-sm text-cream/55">One click from a filtered list to where you actually work.</p>
+            <div className="mt-6 space-y-4">
+              {DESTINATIONS.map((d) => (
+                <div key={d.name} className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cream/12 bg-cream/[0.03]"><Mark src={`/logos/integrations/${d.file}`} name={d.name} size="h-5 w-5" tint="bg-cream/80" /></span>
+                  <div><div className="text-sm font-semibold text-cream">{d.name}</div><div className="text-[12.5px] text-cream/55">{d.line}</div></div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 border-t border-cream/10 pt-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-cream/40">…and sync to your CRM</div>
+              <div className="mt-3 flex items-center gap-5">
+                {CRMS.map((c) => <Mark key={c.name} src={`/logos/integrations/${c.file}`} name={c.name} size="h-6 w-6" tint="bg-cream/55" />)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------- the digest, by role */
+
+const ROLES: { icon: string; role: string; lines: string[] }[] = [
+  { icon: "💳", role: "Payment providers", lines: ["118 live stores on no gateway in Kenya", "2 competitors' merchants churned", "Flutterwave added 14 stores this week"] },
+  { icon: "🏢", role: "Agencies", lines: ["9 new stores in your niche", "5 prospects migrated off Wix", "3 stores overdue a redesign"] },
+  { icon: "📈", role: "Investors & analysts", lines: ["Shopify share +1.2pts in Nigeria", "Beauty is the fastest-growing category", "Migration flows into Shopify Plus"] },
+  { icon: "🧩", role: "App & tech vendors", lines: ["22 stores just added a subscriptions app", "Your integration vs the field", "Stores missing your category"] },
+];
+
+/** The weekly digest — the paid payoff, tailored per role on a team. */
+export function DigestByRole() {
+  return (
+    <section id="digest" className="px-4 py-16 pb-20">
+      <div className="mx-auto max-w-6xl">
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">The weekly digest</span>
+        <h2 className="mt-3 max-w-2xl font-display text-4xl tracking-tight md:text-5xl">Monday morning, tuned to each role.</h2>
+        <p className="mt-3 max-w-xl text-cream/55">Not one more dashboard to check — the handful of moves that matter, in your inbox. Everyone on the team gets a digest built for what they actually do.</p>
+
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {ROLES.map((r) => (
+            <div key={r.role} className="flex flex-col rounded-2xl border border-cream/12 bg-cream/[0.02] p-5">
+              <span className="text-xl">{r.icon}</span>
+              <div className="mt-2 font-display text-lg text-cream">{r.role}</div>
+              <ul className="mt-3 space-y-2">
+                {r.lines.map((l) => (
+                  <li key={l} className="flex gap-2 text-[12.5px] leading-snug text-cream/60"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-mint" />{l}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 text-[12px] text-cream/35">Illustrative — your digest is built from your market, your competitors and your filters.</p>
+      </div>
+    </section>
+  );
+}
