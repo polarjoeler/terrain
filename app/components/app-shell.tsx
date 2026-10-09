@@ -48,7 +48,7 @@ const SIDEBAR_KEY = "terrain.sidebar.collapsed";
 const TITLES: Record<string, string> = {
   "/overview": "Overview", "/dashboard": "Leads", "/lists": "Saved lists",
   "/insights": "Intelligence", "/partners": "Partner Finder", "/radar": "Fraud Scanner",
-  "/digests": "Digests", "/account": "My profile",
+  "/digests": "Digests", "/account": "Account & workspace",
 };
 function titleFor(pathname: string): string {
   const hit = Object.keys(TITLES)
@@ -204,10 +204,11 @@ function AccountMenu({ user, onClose }: { user: ShellUser; onClose: () => void }
           <div className="mt-1.5 flex items-center gap-1.5 text-xs text-cream/60"><span className="h-1.5 w-1.5 rounded-full bg-mint" />{user.workspace} · {user.role}</div>
         </div>
         <MenuGroup label="Personal">
-          <MenuLink href="/account">My profile</MenuLink>
+          <MenuLink href="/account">Account &amp; workspace</MenuLink>
           <MenuLink href="/digests">My digest subscriptions</MenuLink>
         </MenuGroup>
         <MenuGroup label="Workspace">
+          <MenuLink href="/account">Team &amp; members</MenuLink>
           <MenuLink href="/billing">Billing &amp; plan</MenuLink>
         </MenuGroup>
         <MenuGroup label="Help">
