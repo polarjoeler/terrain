@@ -171,8 +171,39 @@ export function Capabilities() {
   );
 }
 
-/** The CMS-tracking credibility band — the "what we read" mention, not a logo wall. */
-export function TechStrip({ platforms }: { platforms: string[] }) {
+// Platforms Terrain reads the stack across. `file` points at an official brand mark in /public/logos
+// (rendered monochrome via CSS mask so it recolors to the theme); platforms without a committed file
+// fall back to a styled wordmark. Drop an official SVG in and add its filename here to light it up.
+const PLATFORMS: { name: string; file?: string }[] = [
+  { name: "Shopify", file: "shopify.svg" },
+  { name: "WooCommerce", file: "woocommerce.svg" },
+  { name: "Wix", file: "wix.svg" },
+  { name: "Adobe Commerce" },
+  { name: "Squarespace", file: "squarespace.svg" },
+  { name: "BigCommerce", file: "bigcommerce.svg" },
+  { name: "PrestaShop", file: "prestashop.svg" },
+  { name: "Ecwid" },
+];
+
+// One platform mark: the brand glyph (masked to the current text colour) + name, or a wordmark when
+// we don't yet have the official artwork. Hovering lifts glyph and name together via currentColor.
+function PlatformMark({ name, file }: { name: string; file?: string }) {
+  if (!file) return <span className="font-display text-base font-semibold text-cream/45 transition hover:text-cream/80">{name}</span>;
+  return (
+    <span className="flex items-center gap-2 text-cream/45 transition hover:text-cream/90">
+      <span aria-hidden className="h-5 w-5 shrink-0 bg-current" style={{
+        WebkitMaskImage: `url(/logos/${file})`, maskImage: `url(/logos/${file})`,
+        WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center", maskPosition: "center",
+        WebkitMaskSize: "contain", maskSize: "contain",
+      }} />
+      <span className="font-display text-base font-semibold">{name}</span>
+    </span>
+  );
+}
+
+/** The CMS-tracking credibility band — the "what we read" mention, with official platform marks. */
+export function TechStrip() {
   return (
     <section className="border-y border-cream/10 bg-cream/[0.015] px-6 py-14">
       <div className="mx-auto max-w-5xl text-center">
@@ -183,10 +214,8 @@ export function TechStrip({ platforms }: { platforms: string[] }) {
         <p className="mx-auto mt-3 max-w-xl text-sm text-cream/50">
           Whatever a store is built on, Terrain detects it — and the themes, apps, payment and shipping tech layered on top.
         </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-x-8 gap-y-3">
-          {platforms.map((p) => (
-            <span key={p} className="font-display text-base font-semibold text-cream/40 transition hover:text-cream/75">{p}</span>
-          ))}
+        <div className="mt-9 flex flex-wrap items-center justify-center gap-x-9 gap-y-5">
+          {PLATFORMS.map((p) => <PlatformMark key={p.name} {...p} />)}
         </div>
       </div>
     </section>

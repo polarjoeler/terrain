@@ -31,10 +31,6 @@ const SEGMENTS = [
   ["🛍️", "Online Stores", "Benchmark against the market and find your edge."],
 ];
 
-// Platforms Terrain reads the stack across — shown in the credibility band. Styled wordmarks (not the
-// trademarked logo artwork); drop official SVGs into /public/logos and swap when ready.
-const PLATFORMS = ["Shopify", "WooCommerce", "Wix", "Adobe Commerce", "Squarespace", "Ecwid", "BigCommerce", "PrestaShop"];
-
 function Nav() {
   return (
     <nav className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 rounded-full border border-cream/12 bg-cream/[0.06] py-2 pl-5 pr-2 backdrop-blur">
@@ -101,8 +97,8 @@ export default async function Home() {
         </div>
       </section>
 
-      {/* what we read — the CMS credibility band (not a logo wall) */}
-      <TechStrip platforms={PLATFORMS} />
+      {/* what we read — the CMS credibility band, with official platform marks */}
+      <TechStrip />
 
       {/* what Terrain does — the product, as a calm four-band rhythm */}
       <Capabilities />
