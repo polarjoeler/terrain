@@ -19,6 +19,16 @@ function daysAgo(iso: string) {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 864e5);
   return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
 }
+// Personalised focus strip, driven by the company type captured at signup.
+const PERSONA: Record<string, { focus: string; line: string; ctas: { label: string; href: string }[] }> = {
+  payments: { focus: "Payments", line: "Who's winning checkout — and the new stores with no gateway yet.", ctas: [{ label: "Provider momentum", href: "/insights/payments" }, { label: "No-gateway prospects", href: "/dashboard?nopay=1" }] },
+  app_developer: { focus: "Apps", line: "Where merchants are installing — and the gaps for your app.", ctas: [{ label: "App landscape", href: "/insights/apps" }] },
+  shipping: { focus: "Shipping", line: "Which carriers are winning at checkout across the market.", ctas: [{ label: "Carrier landscape", href: "/insights/shipping" }] },
+  investor: { focus: "Market growth", line: "Launches, churn and platform shift across the market.", ctas: [{ label: "Market insights", href: "/insights" }] },
+  researcher: { focus: "The full dataset", line: "Slice every signal and export what you need.", ctas: [{ label: "Open insights", href: "/insights" }, { label: "Browse leads", href: "/dashboard" }] },
+  agency: { focus: "Partners & merchants", line: "The agencies and brands moving in your space.", ctas: [{ label: "Explore partners", href: "/partners" }] },
+};
+
 function greeting() {
   const h = Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: "Africa/Johannesburg" }).format(new Date()));
   return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -31,6 +41,7 @@ export default async function OverviewPage() {
   const [data, account, org, reads] = [await overviewData(), await getAccount(email).catch(() => null), await getOrgProfile(orgKey(email)).catch(() => null), await weekRead().catch(() => [] as Read[])];
   const { pulse, launches, trend, markets } = data;
   const name = (account?.name ?? "there").split(" ")[0];
+  const persona = org?.companyType ? PERSONA[org.companyType] : null;
   const marketMax = Math.max(1, ...markets.map((m) => m.live));
 
   return (
@@ -54,11 +65,26 @@ export default async function OverviewPage() {
         <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-cream/45">This week <span className="font-normal text-cream/30">· vs the week before · launch-dated, so scan volume can't skew it</span></h3>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <StatChip label="New stores" value={pulse.newWeek} prev={pulse.newPrev} accent="mint" href="/dashboard?launched=7d" />
-          <StatChip label="Shopify Plus" value={pulse.plusWeek} accent="lilac" sub="new, this week" href="/dashboard?launched=7d" />
-          <StatChip label="Migrations" value={pulse.migWeek} prev={pulse.migPrev} accent="cyan" sub="off / onto platforms" />
-          <StatChip label="Went dark" value={pulse.churnWeek} prev={pulse.churnPrev} accent="orange" goodUp={false} />
+          <StatChip label="Shopify Plus" value={pulse.plusWeek} accent="lilac" sub="new, this week" href="/dashboard?launched=7d&plus=1" />
+          <StatChip label="Migrations" value={pulse.migWeek} prev={pulse.migPrev} accent="cyan" sub="off / onto platforms" href="/dashboard?status=migrated&checked=7" />
+          <StatChip label="Went dark" value={pulse.churnWeek} prev={pulse.churnPrev} accent="orange" goodUp={false} href="/dashboard?status=dead&checked=7" />
         </div>
       </section>
+
+      {/* Personalised focus — from the company type captured at signup */}
+      {persona && (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-lilac/20 bg-lilac/[0.05] px-5 py-3.5">
+          <div className="text-sm">
+            <span className="font-semibold text-lilac">Your focus · {persona.focus}</span>
+            <span className="ml-2 text-cream/60">{persona.line}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {persona.ctas.map((c) => (
+              <Link key={c.href} href={c.href} className="rounded-full border border-lilac/30 px-3 py-1.5 text-xs font-medium text-lilac transition hover:bg-lilac/10">{c.label} →</Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Terrain's read on the week */}
       <ReadPanel reads={reads} />

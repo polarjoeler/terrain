@@ -27,7 +27,7 @@ const EMPTY: OverviewData = {
 };
 
 export async function overviewData(): Promise<OverviewData> {
-  return cachedAgg("overview:cmd:v1", 10 * 60 * 1000, async () => {
+  return cachedAgg("overview:cmd:v2", 10 * 60 * 1000, async () => {
     const sql = db();
     // 1) Pulse — one scan, launch-dated this-week-vs-prior.
     const [p] = await sql.begin(async (t) => {
@@ -51,14 +51,14 @@ export async function overviewData(): Promise<OverviewData> {
         count(*) FILTER (WHERE lower(platform) = 'woocommerce')::int woo,
         count(*) FILTER (WHERE platform IS NOT NULL AND lower(platform) NOT IN ('shopify','woocommerce'))::int other
       FROM imported_stores
-      WHERE published AND country = ANY(${FOCUS}) AND launched_at > now()-interval '30 days'
+      WHERE published AND country = ANY(${FOCUS}) AND launched_at > now()-interval '90 days'
       GROUP BY 1 ORDER BY 1`.catch(() => []);
     // 3) Recent launches — the honest "what's new" feed (launch-dated, not discovery).
     const launches = await sql<{ domain: string; name: string | null; country: string | null; platform: string | null; launched_at: string }[]>`
       SELECT domain, name, upper(country) country, platform, launched_at
       FROM imported_stores
       WHERE published AND country = ANY(${FOCUS}) AND launched_at > now()-interval '14 days'
-      ORDER BY launched_at DESC NULLS LAST LIMIT 18`.catch(() => []);
+      ORDER BY launched_at DESC NULLS LAST LIMIT 7`.catch(() => []);
     // 4) Market pulse — live base + this week's launches.
     const markets = await sql<{ country: string; live: number; new_w: number }[]>`
       SELECT upper(country) country, count(*)::int live,

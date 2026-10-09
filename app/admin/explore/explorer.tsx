@@ -170,6 +170,8 @@ export type ExploreInitial = {
   // The rest let a Saved list restore the whole view (not just a single-facet deep link).
   platform?: string[]; apps?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
+  // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
+  status?: "migrated" | "dead"; checkedDays?: number;
 };
 
 export function Explorer({ initialData, initial, showStats }: {
