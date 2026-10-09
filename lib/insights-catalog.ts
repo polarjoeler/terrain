@@ -20,8 +20,8 @@ export const INSIGHTS_CATALOG: Category[] = [
   {
     name: "Platforms", blurb: "The CMS landscape",
     reports: [
-      { title: "Platform share & growth", desc: "Shopify vs Woo vs the rest, over time", href: "/insights", tier: "team" },
-      { title: "Migrations", desc: "Stores moving between platforms", tier: "pro", soon: true },
+      { title: "Platform share & growth", desc: "Who's winning — global, by region & CMS", href: "/insights/platforms", tier: "team" },
+      { title: "Migration impact", desc: "Net stores gained/lost between platforms", href: "/insights/platforms", tier: "team" },
     ],
   },
   {
