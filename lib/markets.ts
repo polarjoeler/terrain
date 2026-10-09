@@ -40,6 +40,10 @@ export const MARKETS: Record<string, { name: string; emoji: string; adjective: s
   ET: { name: "Ethiopia", emoji: "🇪🇹", adjective: "Ethiopian" },
   ZW: { name: "Zimbabwe", emoji: "🇿🇼", adjective: "Zimbabwean" },
   LY: { name: "Libya", emoji: "🇱🇾", adjective: "Libyan" },
+  MW: { name: "Malawi", emoji: "🇲🇼", adjective: "Malawian" },
+  SO: { name: "Somalia", emoji: "🇸🇴", adjective: "Somali" },
+  LS: { name: "Lesotho", emoji: "🇱🇸", adjective: "Basotho" },
+  SZ: { name: "Eswatini", emoji: "🇸🇿", adjective: "Swazi" },
 };
 
 /** Flag + name, e.g. "🇿🇦 South Africa". Falls back to the raw code. */
