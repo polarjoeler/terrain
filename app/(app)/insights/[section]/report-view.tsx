@@ -3,6 +3,13 @@
 import Link from "next/link";
 import type { SectionReport, ReportItem } from "@/lib/insights";
 import { ProviderAdoptionChart } from "./provider-adoption-chart";
+import { InsightsNav } from "../insights-nav";
+
+// Which catalog category each report section belongs to (highlights the active dropdown).
+const CATEGORY_OF: Record<string, string> = {
+  payments: "Payments", leading: "Payments", subscriptions: "Payments",
+  themes: "Technology", apps: "Technology", categories: "Technology", shipping: "Technology", cities: "Technology",
+};
 
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 const PERIOD_NOUN: Record<string, string> = { day: "day", week: "week", month: "month", quarter: "quarter", year: "year" };
@@ -10,6 +17,11 @@ const TYPE_ORDER = ["PSP", "APM", "BNPL"] as const;
 const TYPE_LABEL: Record<string, string> = {
   PSP: "Payment gateways · PSP", APM: "Wallets, rails & cards · APM", BNPL: "Buy-now-pay-later · BNPL",
 };
+const TYPE_TONE: Record<string, string> = { PSP: "orange", APM: "lilac", BNPL: "mint" };
+const grad = (tone: string) =>
+  tone === "mint" ? "from-mint to-mint/45" : tone === "lilac" ? "from-lilac to-lilac/45" : tone === "orange" ? "from-orange to-orange/45" : "from-cyan to-cyan/45";
+const toneText = (tone: string) =>
+  tone === "mint" ? "text-mint" : tone === "lilac" ? "text-lilac" : tone === "orange" ? "text-orange" : "text-cyan";
 
 function Sparkline({ data }: { data: number[] }) {
   if (data.length < 2) return <div className="mt-1.5 h-4" />;
@@ -61,47 +73,53 @@ export function ReportView({ report, country, countries, platform }: { report: S
   const grouped = report.items.some((i) => i.type);
   const hasShare = report.items.some((i) => i.share != null);
 
-  const Row = (it: ReportItem) => (
-    <li key={it.label}>
-      <Link href={drill(it.label)} className="group block rounded-xl border border-cream/10 px-4 py-2.5 transition hover:border-cream/25 hover:bg-cream/[0.02]">
-        <div className="flex items-center justify-between gap-3">
-          <span className="truncate text-sm text-cream/85 group-hover:text-cream">{it.label}</span>
-          <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
-            {hasShare ? (
-              <>
-                <span className="w-12 text-right font-semibold text-cream/90" title="market share">{it.share}%</span>
-                <SharePp v={it.deltaShare} />
-                <span className="w-14 text-right text-cream/50" title="total merchants">{it.total.toLocaleString()}</span>
-                <span className={`w-20 text-right ${it.period > 0 ? "text-mint" : "text-cream/25"}`} title={`stores that launched this ${noun}`}>
-                  {it.period > 0 ? `+${it.period.toLocaleString()}` : "0"} new
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="w-14 text-right text-cream/50">{it.total.toLocaleString()}</span>
-                <span className={`w-16 text-right ${it.period > 0 ? "text-mint" : it.period < 0 ? "text-orange" : "text-cream/25"}`} title={`genuine adoptions this ${noun}`}>
-                  {it.period > 0 ? "+" : it.period < 0 ? "−" : ""}{it.period !== 0 ? Math.abs(it.period).toLocaleString() : "±0"}
-                </span>
-              </>
-            )}
-          </span>
-        </div>
-        {it.trend && it.trend.length > 1
-          ? <Sparkline data={it.trend} />
-          : <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-cream/10"><div className="h-full rounded-full bg-cyan/60" style={{ width: `${Math.max(2, (it.total / max) * 100)}%` }} /></div>}
-      </Link>
-    </li>
-  );
+  const Row = (it: ReportItem, idx: number, tone: string) => {
+    const leader = idx === 0;
+    return (
+      <li key={it.label}>
+        <Link href={drill(it.label)} className="group flex items-center gap-3 rounded-xl border border-cream/10 px-3 py-2.5 transition hover:border-cream/25 hover:bg-cream/[0.03]">
+          <span className={`w-5 shrink-0 text-right text-xs tabular-nums ${leader ? toneText(tone) : "text-cream/30"}`}>{idx + 1}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className={`truncate text-sm ${leader ? "text-cream" : "text-cream/85"} group-hover:text-cream`}>{it.label}</span>
+              <span className="flex shrink-0 items-center gap-3 text-xs tabular-nums">
+                {hasShare ? (
+                  <>
+                    <span className="w-12 text-right font-semibold text-cream/90" title="market share">{it.share}%</span>
+                    <SharePp v={it.deltaShare} />
+                    <span className="w-14 text-right text-cream/50" title="total merchants">{it.total.toLocaleString()}</span>
+                    <span className={`w-20 text-right ${it.period > 0 ? "text-mint" : "text-cream/25"}`} title={`stores that launched this ${noun}`}>
+                      {it.period > 0 ? `+${it.period.toLocaleString()}` : "0"} new
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-14 text-right text-cream/50">{it.total.toLocaleString()}</span>
+                    <span className={`w-16 text-right ${it.period > 0 ? "text-mint" : it.period < 0 ? "text-orange" : "text-cream/25"}`} title={`genuine adoptions this ${noun}`}>
+                      {it.period > 0 ? "+" : it.period < 0 ? "−" : ""}{it.period !== 0 ? Math.abs(it.period).toLocaleString() : "±0"}
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+            {it.trend && it.trend.length > 1
+              ? <Sparkline data={it.trend} />
+              : <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-cream/[0.07]"><div className={`h-full rounded-full bg-gradient-to-r ${grad(tone)}`} style={{ width: `${Math.max(2, (it.total / max) * 100)}%` }} /></div>}
+          </div>
+        </Link>
+      </li>
+    );
+  };
 
   return (
-    <main className="min-h-screen px-4 py-6 md:px-8">
+    <div>
       <div className="mx-auto max-w-3xl">
-        <nav className="flex items-center justify-between">
-          <Link href="/insights" className="text-sm text-cream/60 hover:text-cream">← Insights</Link>
-          <span className="rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/50">{country}</span>
-        </nav>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <InsightsNav active={CATEGORY_OF[report.section]} />
+          <span className="shrink-0 rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/50">{country}</span>
+        </div>
 
-        <header className="mt-8">
+        <header className="mt-6">
           <h1 className="font-display text-4xl text-cream md:text-5xl">{report.title}</h1>
           <p className="mt-2 text-cream/60">
             {hasShare
@@ -164,13 +182,13 @@ export function ReportView({ report, country, countries, platform }: { report: S
                     <h2 className="text-sm font-semibold text-cream/80">{TYPE_LABEL[t]}</h2>
                     <span className="text-xs text-cream/40 tabular-nums">{rows.length} providers · {Math.round(share)}% combined</span>
                   </div>
-                  <ul className="space-y-1.5">{rows.map(Row)}</ul>
+                  <ul className="space-y-1.5">{rows.map((it, i) => Row(it, i, TYPE_TONE[t]))}</ul>
                 </section>
               );
             })}
           </div>
         ) : (
-          <ul className="mt-8 space-y-1.5">{report.items.map(Row)}</ul>
+          <ul className="mt-8 space-y-1.5">{report.items.map((it, i) => Row(it, i, "cyan"))}</ul>
         )}
 
         {/* 10-year adoption curve — provider growth by best-estimate choose-at-launch. Client-fetched
@@ -181,6 +199,6 @@ export function ReportView({ report, country, countries, platform }: { report: S
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

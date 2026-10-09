@@ -119,7 +119,7 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
           </div>
         ) : (
           <>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove} style={{ fontFamily: "var(--font-mono)" }}>
               {/* y gridlines + labels */}
               {Array.from({ length: yTicks + 1 }, (_, k) => {
                 const v = Math.round((maxY / yTicks) * k), y = yAt(v);

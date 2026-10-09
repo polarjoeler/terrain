@@ -25,7 +25,7 @@ export default async function JapanOverview() {
   const ready = data.months.length > 0;
 
   return (
-    <main className="min-h-screen px-4 py-6 md:px-8">
+    <div>
       <div className="mx-auto max-w-6xl">
         <nav className="flex items-center justify-between">
           <Link href="/insights" className="text-sm text-cream/60 hover:text-cream">← Insights</Link>
@@ -43,6 +43,6 @@ export default async function JapanOverview() {
           {ready ? <JapanReplay data={data} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">No coverage yet.</p>}
         </div>
       </div>
-    </main>
+    </div>
   );
 }

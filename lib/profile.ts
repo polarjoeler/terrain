@@ -90,6 +90,20 @@ export async function markDigestSent(email: string): Promise<void> {
   await db()`UPDATE user_profile SET last_digest_at = now() WHERE email = ${email.trim().toLowerCase()}`.catch(() => {});
 }
 
+/** Update just the digest opt-in and/or cadence for a seat. Upserts the row; leaves other fields
+ *  untouched (COALESCE with a typed null so a param we didn't pass keeps the stored value).
+ *  The digest/lead_cadence columns already exist, so this never runs DDL. */
+export async function setDigestPrefs(email: string, prefs: { digest?: boolean; cadence?: LeadCadence }): Promise<void> {
+  const sql = db();
+  const e = email.trim().toLowerCase();
+  await sql`
+    INSERT INTO user_profile (email, org, digest, lead_cadence)
+    VALUES (${e}, ${orgKey(e)}, ${prefs.digest ?? true}, ${prefs.cadence ?? "weekly"})
+    ON CONFLICT (email) DO UPDATE SET
+      digest = COALESCE(${prefs.digest ?? null}::boolean, user_profile.digest),
+      lead_cadence = COALESCE(${prefs.cadence ?? null}::text, user_profile.lead_cadence)`;
+}
+
 export async function getUserProfile(email: string): Promise<UserProfile | null> {
   const sql = db();
   try {

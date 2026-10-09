@@ -62,7 +62,7 @@ export default async function ServicePartnersPage() {
   const countries = [...byCountry.entries()].sort((a, b) => b[1].length - a[1].length);
 
   return (
-    <main className="min-h-screen px-4 py-6">
+    <div>
       <div className="mx-auto max-w-5xl">
         <div className="flex items-center justify-between">
           <div>
@@ -101,6 +101,6 @@ export default async function ServicePartnersPage() {
           </section>
         ))}
       </div>
-    </main>
+    </div>
   );
 }

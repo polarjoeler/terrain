@@ -1,16 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { Wordmark } from "@/app/components/logo";
 import { currentUser } from "@/lib/auth";
-import { sampleLeads } from "@/lib/leads";
-import { summarise } from "@/lib/sheets";
 import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
-import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
 import { browseQuery, type BrowseFilters } from "@/lib/browse";
-import { Explorer } from "@/app/admin/explore/explorer";
+import { getList } from "@/lib/lists";
+import { Explorer, type ExploreInitial } from "@/app/admin/explore/explorer";
 
 // Per-user paywall — never cache this page across requests.
 export const dynamic = "force-dynamic";
@@ -21,14 +18,12 @@ export default async function Dashboard({
   searchParams: Promise<{
     country?: string; q?: string; payment?: string; shipping?: string;
     theme?: string; city?: string; category?: string; band?: string;
-    new?: string; nopay?: string; launched?: string;
+    new?: string; nopay?: string; launched?: string; list?: string;
   }>;
 }) {
   const email = await currentUser();
   if (!email) redirect("/login");
-
-  const subscriber = await getSubscriber(email);
-  if (!hasAccess(subscriber)) redirect("/billing");
+  // Auth + paywall are enforced by the (app) route-group layout; this page just renders.
 
   // Soft onboarding nudge — banner only, never blocks an existing user.
   const profile = await getUserProfile(email).catch(() => null);
@@ -43,8 +38,6 @@ export default async function Dashboard({
     agency: { line: "Find the merchants and the partners moving in your space.", cta: "Explore partners", href: "/partners" },
   };
   const persona = org ? PERSONA[org.companyType] : null;
-
-  const daysLeft = trialDaysLeft(subscriber);
 
   // Market for the header's live-feed badge. There is no picker any more — country
   // is a facet in the Explorer, which filters client-side with no round-trip — but
@@ -65,13 +58,16 @@ export default async function Dashboard({
   const recency = (["7d", "30d", "365d"] as const).includes(sp.new as never) ? (sp.new as "7d" | "30d" | "365d") : undefined;
   const launched = (["7d", "30d", "90d", "365d"] as const).includes(sp.launched as never)
     ? (sp.launched as "7d" | "30d" | "90d" | "365d") : undefined;
-  const drill = {
+  const drill: ExploreInitial = {
     q: sp.q,
     country: sp.country ? [sp.country] : undefined,
     payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
     recency, launched, noPayment: sp.nopay === "1",
   };
+  // ?list=<id> opens a Saved list — its stored view fully re-seeds the Explorer (overrides any drill).
+  const savedView = sp.list ? await getList(email, sp.list).then((l) => l?.view ?? null).catch(() => null) : null;
+  const initial: ExploreInitial = (savedView as ExploreInitial) ?? drill;
 
   // Tile numbers all come from the single getHomeStats() aggregate (one indexed
   // COUNT query) — same source as /insights and the homepage, so the counts agree.
@@ -80,128 +76,50 @@ export default async function Dashboard({
   // latency). Fall back to bundled samples only if the DB is unreachable.
   let live: boolean;
   let updatedAt: string | null;
-  let stats: { storesTracked: number; newThisWeek: number; plusFlagged: number; withEmail: number };
   try {
     const home = await getHomeStats(country);
     if (!home.live) throw new Error("no live stores");
     live = true;
     updatedAt = home.updatedAt;
-    stats = {
-      storesTracked: home.storesTracked,
-      newThisWeek: home.newThisWeek,
-      plusFlagged: home.plusFlagged,
-      withEmail: home.withEmail ?? 0,
-    };
   } catch {
     live = false;
     updatedAt = null;
-    const s = summarise(sampleLeads);
-    stats = { storesTracked: s.storesTracked, newThisWeek: s.newThisWeek, plusFlagged: s.plusFlagged, withEmail: s.withEmail };
   }
 
   return (
-    <div className="min-h-screen px-4 py-6 md:px-8">
-      <div className="mx-auto max-w-6xl">
-        <nav className="flex flex-wrap items-center justify-between gap-3">
-          <Link href="/" className="min-w-0 shrink">
-            <Wordmark size="text-xl sm:text-2xl" tone="cream" />
-          </Link>
-          <div className="flex flex-wrap items-center justify-end gap-2 text-sm">
-            {daysLeft !== null && (
-              <Link
-                href="/billing"
-                className="whitespace-nowrap rounded-full bg-mint px-4 py-1.5 font-medium text-ink transition hover:brightness-95"
-              >
-                {daysLeft} day{daysLeft === 1 ? "" : "s"} left · subscribe
-              </Link>
-            )}
-            {subscriber?.status === "past_due" && (
-              <Link
-                href="/billing"
-                className="rounded-full bg-orange px-4 py-1.5 font-medium text-cream"
-              >
-                Payment failed — update card
-              </Link>
-            )}
-            <Link
-              href="/partners"
-              className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
-            >
-              Partners
-            </Link>
-            <Link
-              href="/insights"
-              className="whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 transition hover:border-cream/50 hover:text-cream"
-            >
-              Insights →
-            </Link>
-            <span className="hidden whitespace-nowrap rounded-full border border-cream/20 px-4 py-1.5 text-cream/70 sm:inline">
-              {live ? (
-                <>
-                  <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-mint align-middle" />
-                  Live feed · {stats.newThisWeek} new this week
-                </>
-              ) : (
-                "Sample data"
-              )}
-            </span>
-            <form action="/api/auth/signout" method="post">
-              <button
-                type="submit"
-                title={email}
-                className="grid h-9 w-9 place-items-center rounded-full bg-orange font-medium uppercase"
-              >
-                {email[0]}
-              </button>
-            </form>
-          </div>
-        </nav>
-
-        <header className="mt-10">
-          <h1 className="font-display text-4xl md:text-5xl">
-            Welcome back
-          </h1>
-          <p className="mt-2 text-cream/60">
-            Signed in as {email} · fresh ecommerce stores across your markets,
-            discovered as they launch.
-          </p>
-          <div className="mt-3">
-            <FreshnessStamp updatedAt={updatedAt} live={live} />
-          </div>
-        </header>
-
-        {!profile && (
-          <Link href="/onboarding"
-            className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-mint/30 bg-mint/10 px-4 py-3 text-sm transition hover:bg-mint/15">
-            <span className="text-cream/85"><b className="text-mint">Tailor your Terrain</b> — 60 seconds to set your persona, lead cadence and digest so we show you the right data.</span>
-            <span className="shrink-0 rounded-full bg-mint px-3 py-1 text-xs font-semibold text-ink">Set up →</span>
-          </Link>
-        )}
-
-        {persona && (
-          <Link href={persona.href}
-            className="mt-6 flex items-center justify-between gap-3 rounded-2xl border border-lilac/25 bg-lilac/[0.06] px-4 py-3 text-sm transition hover:bg-lilac/10">
-            <span className="text-cream/85">{persona.line}</span>
-            <span className="shrink-0 rounded-full border border-lilac/40 px-3 py-1 text-xs font-semibold text-lilac">{persona.cta} →</span>
-          </Link>
-        )}
-
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-cream/55">Fresh ecommerce stores across your markets, discovered as they launch.</p>
+        <FreshnessStamp updatedAt={updatedAt} live={live} />
       </div>
 
-      {/* Browse gets a WIDER centered container than the hero — the leads table has
-          a filter rail + many columns and looked cramped/cut-off inside max-w-6xl.
-          Both are centered, so the page stays balanced. */}
-      <div className="mx-auto mt-10 max-w-[1600px]">
+      {!profile && (
+        <Link href="/onboarding"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-mint/30 bg-mint/10 px-4 py-3 text-sm transition hover:bg-mint/15">
+          <span className="text-cream/85"><b className="text-mint">Tailor your Terrain</b> — 60 seconds to set your persona, lead cadence and digest so we show you the right data.</span>
+          <span className="shrink-0 rounded-full bg-mint px-3 py-1 text-xs font-semibold text-ink">Set up →</span>
+        </Link>
+      )}
+
+      {persona && (
+        <Link href={persona.href}
+          className="flex items-center justify-between gap-3 rounded-2xl border border-lilac/25 bg-lilac/[0.06] px-4 py-3 text-sm transition hover:bg-lilac/10">
+          <span className="text-cream/85">{persona.line}</span>
+          <span className="shrink-0 rounded-full border border-lilac/40 px-3 py-1 text-xs font-semibold text-lilac">{persona.cta} →</span>
+        </Link>
+      )}
+
+      <div>
         <div className="mb-3 flex items-baseline justify-between px-1">
           <h2 className="font-display text-2xl">Browse stores</h2>
           <span className="text-xs text-cream/40">
             {live ? "Live · refreshed every 10 minutes" : "Sample data — live feed unavailable"}
           </span>
         </div>
-        {/* Streamed so the shell + tiles paint instantly — the full live set is a
-            heavy load (~13k rich rows), and we don't want it blocking first paint. */}
+        {/* Streamed so the shell paints instantly — the full live set is a heavy load
+            (~13k rich rows), so we don't block first paint on it. */}
         <Suspense fallback={<BrowseSkeleton />}>
-          <BrowseSection initial={drill} />
+          <BrowseSection initial={initial} />
         </Suspense>
       </div>
     </div>
@@ -217,11 +135,14 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
   const LMAP: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
   const filters: BrowseFilters = {
     q: initial?.q || undefined,
-    country: initial?.country, category: initial?.category, band: initial?.band,
+    country: initial?.country, platform: initial?.platform, category: initial?.category, band: initial?.band,
     theme: initial?.theme, city: initial?.city, payment: initial?.payment, shipping: initial?.shipping,
-    activity: initial?.activity, noPayment: initial?.noPayment || undefined,
+    app: initial?.apps, activity: initial?.activity, hosting: initial?.hosting,
+    plus: initial?.plus || undefined, hasEmail: initial?.email || undefined, noPayment: initial?.noPayment || undefined,
+    tier: (initial?.tier || undefined) as BrowseFilters["tier"],
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
+    sort: initial?.sort as BrowseFilters["sort"],
     limit: 60,
   };
   const data = await browseQuery(filters).catch(() => null);

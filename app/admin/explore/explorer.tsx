@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { saveListAction } from "@/app/(app)/lists/actions";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
 import { scoreColor } from "@/lib/revenue";
@@ -40,6 +41,24 @@ const LAUNCH_OPTS: { key: LaunchKey; label: string; days: number }[] = [
 // The imported `theme` field is polluted with release notes / version strings for
 // some stores ("[2.2.0]… oct release", "checkout (do not change)") — drop those.
 const isCleanTheme = (t: string) => /^[A-Za-z][A-Za-z &'-]{1,24}$/.test(t.trim());
+
+// Merge theme rows that are the same name apart from case/whitespace ("Dawn" + "dawn" + "Dawn ")
+// into one row: summed count, best-cased label. The browse filter already matches theme
+// case/whitespace-insensitively (btrim + ILIKE), so the merged label still selects every variant —
+// this is display-only.
+function mergeThemes(values: [string, number][]): [string, number][] {
+  const label = new Map<string, string>();
+  const best = new Map<string, number>();
+  const total = new Map<string, number>();
+  for (const [v, n] of values) {
+    if (!isCleanTheme(v)) continue;
+    const name = v.trim().replace(/\s+/g, " ");
+    const key = name.toLowerCase();
+    total.set(key, (total.get(key) ?? 0) + n);
+    if (!best.has(key) || n > best.get(key)!) { best.set(key, n); label.set(key, name); }
+  }
+  return [...total.entries()].map(([k, n]) => [label.get(k)!, n] as [string, number]).sort((a, b) => b[1] - a[1]);
+}
 
 // WooCommerce activity tier — the "is this a REAL store or a stale build" reveal.
 // Ordered strongest-first in the facet; labeled for humans in the rail.
@@ -91,8 +110,10 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
-function Facet({ title, values, selected, onToggle, label }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string }) {
-  const [open, setOpen] = useState(true);
+function Facet({ title, values, selected, onToggle, label, defaultOpen = true }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string; defaultOpen?: boolean }) {
+  // Collapsed by default for secondary facets to keep the rail compact — but auto-open if it already
+  // holds a selection, so active filters are never hidden.
+  const [open, setOpen] = useState(selected.size > 0 ? true : defaultOpen);
   const [expand, setExpand] = useState(false);
   const shown = expand ? values : values.slice(0, 6);
   return (
@@ -123,6 +144,20 @@ function Facet({ title, values, selected, onToggle, label }: { title: string; va
   );
 }
 
+// Collapsible wrapper for the non-facet filter groups (Newly discovered, Launched) so every
+// filter section in the rail collapses, not just the facets.
+function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-4 border-b border-cream/10 pb-3">
+      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-cream/50">
+        {title}<span className="text-cream/30">{open ? "–" : "+"}</span>
+      </button>
+      {open && <div className="mt-2 space-y-1">{children}</div>}
+    </div>
+  );
+}
+
 // Drill-through: insights data points link here with a facet pre-applied
 // (e.g. /dashboard?payment=Paystack), and these seed the Explorer's filters.
 export type ExploreInitial = {
@@ -132,6 +167,9 @@ export type ExploreInitial = {
   recency?: RecencyKey;   // seed "newly discovered this week" (7d) etc. from a deep link
   launched?: LaunchKey;   // seed "launched this week" etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
+  // The rest let a Saved list restore the whole view (not just a single-facet deep link).
+  platform?: string[]; apps?: string[]; hosting?: string[];
+  plus?: boolean; email?: boolean; tier?: string; sort?: string;
 };
 
 export function Explorer({ initialData, initial, showStats }: {
@@ -153,17 +191,17 @@ export function Explorer({ initialData, initial, showStats }: {
   const [city, setCity] = useState<Set<string>>(new Set(initial?.city));
   const [payment, setPayment] = useState<Set<string>>(new Set(initial?.payment));
   const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
-  const [app, setApp] = useState<Set<string>>(new Set());
-  const [platform, setPlatform] = useState<Set<string>>(new Set());
+  const [app, setApp] = useState<Set<string>>(new Set(initial?.apps));
+  const [platform, setPlatform] = useState<Set<string>>(new Set(initial?.platform));
   const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
-  const [hosting, setHosting] = useState<Set<string>>(new Set());
-  const [plusOnly, setPlusOnly] = useState(false);
-  const [emailOnly, setEmailOnly] = useState(false);
+  const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
+  const [plusOnly, setPlusOnly] = useState(initial?.plus ?? false);
+  const [emailOnly, setEmailOnly] = useState(initial?.email ?? false);
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
-  const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
+  const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
-  const [sort, setSort] = useState<SortKey>("new");
+  const [sort, setSort] = useState<SortKey>((initial?.sort as SortKey) ?? "new");
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
   const [picked, setPicked] = useState<Set<string>>(new Set());   // ticked rows for selective export
@@ -228,7 +266,7 @@ export function Explorer({ initialData, initial, showStats }: {
     hosting: fv(data.facets.hosting),
     category: fv(data.facets.category),
     band: fv(data.facets.band).sort((a, b) => (bandOrder.get(a[0]) ?? 9) - (bandOrder.get(b[0]) ?? 9)),
-    theme: fv(data.facets.theme).filter(([t]) => isCleanTheme(t)),
+    theme: mergeThemes(fv(data.facets.theme)),
     city: fv(data.facets.city),
     payment: fv(data.facets.payment),
     shipping: fv(data.facets.shipping),
@@ -273,12 +311,37 @@ export function Explorer({ initialData, initial, showStats }: {
     } finally { setExporting(false); }
   };
 
+  // Saved lists — capture the whole current view (the exact shape the Explorer re-seeds from).
+  const currentView = (): ExploreInitial => {
+    const arr = (s: Set<string>) => (s.size ? [...s] : undefined);
+    return {
+      q: q || undefined, country: arr(country), category: arr(category), band: arr(band),
+      theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
+      activity: arr(activity), platform: arr(platform), apps: arr(app), hosting: arr(hosting),
+      plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
+      recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
+      sort: sort !== "new" ? sort : undefined,
+    };
+  };
+  const [saving, setSaving] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [listName, setListName] = useState("");
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const saveList = async () => {
+    if (!listName.trim() || saving) return;
+    setSaving(true); setSavedMsg(null);
+    const r = await saveListAction(listName.trim(), currentView() as Record<string, unknown>, data.total);
+    setSaving(false);
+    if (r.ok) { setSavedMsg(`Saved “${listName.trim()}”`); setSaveOpen(false); setListName(""); setTimeout(() => setSavedMsg(null), 2600); }
+  };
+
   // Platform-aware filter visibility: Shopify-only controls (Plus, the Shopify app-store facet) show
   // only when Shopify is in the filter; Hosting shows only for self-hosted platforms, since for SaaS
   // platforms (Shopify/Wix) the host is always the vendor and tells you nothing.
   // Platform values come in mixed case ('shopify' from discovery, 'Wix' from imports), so compare
   // case-insensitively — otherwise selecting "Shopify" wouldn't reveal the Plus / Apps controls.
   const shopifySelected = [...platform].some((p) => p.toLowerCase() === "shopify");
+  const wooSelected = [...platform].some((p) => p.toLowerCase() === "woocommerce");
   const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p.toLowerCase()));
 
   return (
@@ -317,58 +380,54 @@ export function Explorer({ initialData, initial, showStats }: {
         </div>
 
         {/* Newly discovered — when WE first saw it. The key control for new stores. Single-select. */}
-        <div className="mt-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Newly discovered</div>
-          <div className="mt-2 space-y-1">
-            {RECENCY_OPTS.map((o) => {
-              const on = recency === o.key;
-              return (
-                <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                  <span className="flex items-center gap-2">
-                    <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
-                    {o.label}
-                  </span>
-                  <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <Section title="Newly discovered">
+          {RECENCY_OPTS.map((o) => {
+            const on = recency === o.key;
+            return (
+              <button key={o.key} onClick={() => { setRecency(on ? "" : o.key); setLimit(PAGE); }}
+                className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                <span className="flex items-center gap-2">
+                  <span className={`h-3 w-3 rounded-full border ${on ? "border-cyan bg-cyan" : "border-cream/25"}`} />
+                  {o.label}
+                </span>
+                <span className="text-xs text-cream/40">{recencyCount(o.key).toLocaleString()}</span>
+              </button>
+            );
+          })}
+        </Section>
 
         {/* Launched — when the store started selling. Single-select (nested windows). */}
         {hasLaunchData && (
-          <div className="mt-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-cream/50">Launched</div>
-            <div className="mt-2 space-y-1">
-              {LAUNCH_OPTS.map((o) => {
-                const on = launched === o.key;
-                return (
-                  <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setLimit(PAGE); }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
-                    <span className="flex items-center gap-2">
-                      <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
-                      {o.label}
-                    </span>
-                    <span className="text-xs tabular-nums text-cream/40">{launchCount(o.key).toLocaleString()}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <Section title="Launched">
+            {LAUNCH_OPTS.map((o) => {
+              const on = launched === o.key;
+              return (
+                <button key={o.key} onClick={() => { setLaunched(on ? "" : o.key); setLimit(PAGE); }}
+                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-sm ${on ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+                  <span className="flex items-center gap-2">
+                    <span className={`h-3 w-3 rounded-full border ${on ? "border-orange bg-orange" : "border-cream/25"}`} />
+                    {o.label}
+                  </span>
+                  <span className="text-xs tabular-nums text-cream/40">{launchCount(o.key).toLocaleString()}</span>
+                </button>
+              );
+            })}
+          </Section>
         )}
 
-        {/* Secondary facets. Woo activity shows only when there's Woo data; Hosting only for self-hosted
-            platforms; the Shopify app-store facet only when Shopify is selected. */}
-        {facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} />}
-        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} />}
-        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} />
-        <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} />
-        <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} />
-        <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} />
-        <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} />
-        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} />}
-        <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} />
+        {/* Secondary facets — collapsed by default to keep the rail compact (they auto-open when they
+            hold a selection). WooCommerce-specific controls (Woo activity) show only when WooCommerce
+            is selected; Hosting only for self-hosted platforms; the Shopify app facet only for Shopify;
+            City only once a country is chosen (city lists are meaningless across every market at once). */}
+        {wooSelected && facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} defaultOpen={false} />}
+        {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} defaultOpen={false} />}
+        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} defaultOpen={false} />
+        <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} defaultOpen={false} />
+        <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} defaultOpen={false} />
+        <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} defaultOpen={false} />
+        <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
+        {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
+        {country.size > 0 && <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} defaultOpen={false} />}
       </aside>
 
       {/* main */}
@@ -409,9 +468,28 @@ export function Explorer({ initialData, initial, showStats }: {
             {loading && <span className="ml-1 text-cream/35">· updating…</span>}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {savedMsg && <span className="text-xs text-mint">{savedMsg}</span>}
             {picked.size > 0 && (
               <button onClick={() => setPicked(new Set())} className="text-xs text-cream/50 hover:text-cream">Clear selection</button>
             )}
+            <div className="relative">
+              <button onClick={() => setSaveOpen((o) => !o)} className="rounded-full border border-cream/15 px-4 py-2 text-sm text-cream/75 transition hover:border-cream/40 hover:text-cream">☆ Save list</button>
+              {saveOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setSaveOpen(false)} />
+                  <div className="absolute right-0 z-20 mt-2 w-64 rounded-2xl border border-cream/12 bg-ink-deep p-3 shadow-2xl">
+                    <div className="text-xs font-medium uppercase tracking-wide text-cream/45">Save this view</div>
+                    <p className="mt-1 text-[11px] leading-snug text-cream/40">Saves the current filters as a reusable list ({data.total.toLocaleString()} leads right now).</p>
+                    <input autoFocus value={listName} onChange={(e) => setListName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveList()} placeholder="e.g. ZA new WooCommerce"
+                      className="mt-2 w-full rounded-xl border border-cream/15 bg-cream/[0.03] px-3 py-2 text-sm text-cream placeholder:text-cream/30 outline-none focus:border-mint/60" />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button onClick={() => { setSaveOpen(false); setListName(""); }} className="rounded-full px-3 py-1.5 text-xs text-cream/50 hover:text-cream">Cancel</button>
+                      <button onClick={saveList} disabled={!listName.trim() || saving} className="rounded-full bg-mint px-4 py-1.5 text-xs font-semibold text-ink transition hover:brightness-105 disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <button onClick={exportCsv} disabled={exporting} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
               {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
             </button>

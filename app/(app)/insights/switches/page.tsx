@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Wordmark } from "@/app/components/logo";
+import { InsightsNav } from "../insights-nav";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { switchesLog } from "@/lib/provider-insights";
@@ -32,14 +32,14 @@ export default async function SwitchesPage({
   const ranged = !!(from || to);
 
   return (
-    <main className="min-h-screen px-4 py-6 md:px-8">
+    <div>
       <div className="mx-auto max-w-3xl">
-        <nav className="flex items-center justify-between">
-          <Link href="/"><Wordmark size="text-lg" /></Link>
-          <Link href={backHref} className="text-sm text-cream/60 hover:text-cream">← Back</Link>
-        </nav>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <InsightsNav active="Payments" />
+          <Link href={backHref} className="shrink-0 text-sm text-cream/60 hover:text-cream">← Back</Link>
+        </div>
 
-        <header className="mt-8">
+        <header className="mt-6">
           <h1 className="font-display text-4xl text-cream md:text-5xl">
             {provider ? `${provider} switches` : "Payment provider switches"}
           </h1>
@@ -100,6 +100,6 @@ export default async function SwitchesPage({
           </ul>
         )}
       </div>
-    </main>
+    </div>
   );
 }

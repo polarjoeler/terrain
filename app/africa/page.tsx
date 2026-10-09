@@ -3,7 +3,7 @@ import { Wordmark } from "@/app/components/logo";
 import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
 import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
-import { AfricaReplay } from "@/app/insights/africa/africa-replay";
+import { AfricaReplay } from "@/app/(app)/insights/africa/africa-replay";
 
 // PUBLIC, shareable full-map page — no login gate (unlike /insights/africa). Just the animated map.
 export const metadata = {

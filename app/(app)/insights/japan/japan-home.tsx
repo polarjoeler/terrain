@@ -126,7 +126,7 @@ export function JapanHome({ data, initialLang = "en" }: { data: JapanTimeline; i
   }
 
   return (
-    <main className="pt-4">
+    <div className="pt-4">
       {/* nav */}
       <div className="px-4">
         <nav className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 rounded-full border border-cream/12 bg-cream/[0.06] py-2 pl-5 pr-2 backdrop-blur">
@@ -231,6 +231,6 @@ export function JapanHome({ data, initialLang = "en" }: { data: JapanTimeline; i
           <a href="mailto:hello@tembocommerce.app" className="underline">hello@tembocommerce.app</a>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }

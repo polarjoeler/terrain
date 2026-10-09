@@ -1,17 +1,26 @@
 import type { Metadata } from "next";
-import { Instrument_Serif, Inter } from "next/font/google";
+import { Bricolage_Grotesque, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const instrumentSerif = Instrument_Serif({
-  variable: "--font-instrument-serif",
+// Terrain's type system: a characterful grotesque display (Bricolage), a clean neutral body
+// (Hanken Grotesk), and a monospace for data/tickers (JetBrains Mono) — distinctive and ownable,
+// away from the generic editorial-serif + Inter default.
+const display = Bricolage_Grotesque({
+  variable: "--font-display-face",
   subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
+  weight: ["500", "600", "700", "800"],
+  display: "swap",
 });
-
-const inter = Inter({
-  variable: "--font-inter",
+const body = Hanken_Grotesk({
+  variable: "--font-body-face",
   subsets: ["latin"],
+  display: "swap",
+});
+const mono = JetBrains_Mono({
+  variable: "--font-mono-face",
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  display: "swap",
 });
 
 // Absolute-URL base for canonical links and OG/Twitter cards. Driven by
@@ -31,7 +40,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${instrumentSerif.variable} ${inter.variable} h-full antialiased`}
+      className={`${display.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

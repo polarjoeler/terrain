@@ -4,7 +4,7 @@
 export default function InsightsLoading() {
   const bar = "animate-pulse rounded bg-cream/10";
   return (
-    <main className="min-h-screen px-4 py-6 md:px-8" aria-busy="true" aria-label="Loading insights">
+    <div aria-busy="true" aria-label="Loading insights">
       <div className="mx-auto max-w-6xl">
         <div className={`${bar} h-8 w-64`} />
         <div className={`${bar} mt-3 h-4 w-96 max-w-full`} />
@@ -37,6 +37,6 @@ export default function InsightsLoading() {
           ))}
         </div>
       </div>
-    </main>
+    </div>
   );
 }

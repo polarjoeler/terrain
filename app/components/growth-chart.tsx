@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 
 type Point = {
   date: string; newStores: number; switchedIn: number;
@@ -30,6 +30,7 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
   // When `periodProp` is passed the parent's period control drives the chart (no duplicate
   // selector — the redundancy we're removing); standalone (provider pages) it keeps its own.
   const controlled = !!periodProp;
+  const gid = "gc" + useId().replace(/[:»]/g, ""); // gradient id prefix, unique per chart instance
   const [period, setPeriod] = useState(periodProp ?? "month");
   useEffect(() => { if (periodProp) setPeriod(periodProp); }, [periodProp]);
   // Custom date range: when the parent supplies from/to (the one report-wide date filter) the
@@ -192,12 +193,21 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
           <div className="grid h-64 place-items-center text-sm text-cream/40">No {noun} launched in this range yet.</div>
         ) : (
           <>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
-              {/* zero baseline + left axis */}
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove} style={{ fontFamily: "var(--font-mono)" }}>
+              <defs>
+                <linearGradient id={`${gid}-up`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--color-cyan)" /><stop offset="100%" stopColor="var(--color-cyan)" stopOpacity="0.45" />
+                </linearGradient>
+                <linearGradient id={`${gid}-dn`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--color-orange)" stopOpacity="0.9" /><stop offset="100%" stopColor="var(--color-orange)" stopOpacity="0.4" />
+                </linearGradient>
+              </defs>
+              {/* faint midpoint gridline + zero baseline + left axis */}
+              <line x1={padL} y1={padT + (baseY - padT) / 2} x2={W - padR} y2={padT + (baseY - padT) / 2} stroke="var(--color-cream)" strokeOpacity="0.06" />
               <line x1={padL} y1={baseY} x2={W - padR} y2={baseY} stroke="var(--color-cream)" strokeOpacity="0.3" />
-              <text x={padL - 6} y={padT + 5} textAnchor="end" fill="var(--color-cyan)" fillOpacity="0.8" fontSize="10">{maxNew.toLocaleString()}</text>
+              <text x={padL - 6} y={padT + 5} textAnchor="end" fill="var(--color-cyan)" fillOpacity="0.85" fontSize="10">{maxNew.toLocaleString()}</text>
               <text x={padL - 6} y={baseY + 3} textAnchor="end" fill="var(--color-cream)" fillOpacity="0.45" fontSize="10">0</text>
-              {maxChurn > 0 && <text x={padL - 6} y={padT + ih} textAnchor="end" fill="var(--color-orange)" fillOpacity="0.8" fontSize="10">{maxChurn.toLocaleString()}</text>}
+              {maxChurn > 0 && <text x={padL - 6} y={padT + ih} textAnchor="end" fill="var(--color-orange)" fillOpacity="0.85" fontSize="10">{maxChurn.toLocaleString()}</text>}
               {/* hover column */}
               {hover != null && <rect x={xAt(hover)} y={padT} width={bw} height={ih} fill="var(--color-cream)" opacity="0.06" />}
               {/* diverging bars: adds UP (launched, then switched-in stacked), churn DOWN (defected near
@@ -205,7 +215,7 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
               {pts.map((p, i) => (
                 <g key={p.date}>
                   {/* UP: launched */}
-                  <rect x={bx(i)} width={bwid} y={baseY - upH(p.newStores)} height={upH(p.newStores)} rx="1.5" fill="var(--color-cyan)" opacity={dim(i)} />
+                  <rect x={bx(i)} width={bwid} y={baseY - upH(p.newStores)} height={upH(p.newStores)} rx="1.5" fill={`url(#${gid}-up)`} opacity={dim(i)} />
                   {/* UP: switched in (stacked above launched) */}
                   {bands && p.switchedIn > 0 && (
                     <rect x={bx(i)} width={bwid} y={baseY - upH(p.newStores + p.switchedIn)} height={upH(p.switchedIn)} rx="1.5" fill="var(--color-mint)" opacity={dim(i)} />
@@ -216,7 +226,7 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
                     {/* DOWN: died (below defected) */}
                     {p.churnedDeath > 0 && <rect x={bx(i)} width={bwid} y={baseY + downH(p.churnedSwitch)} height={downH(p.churnedDeath)} rx="1.5" fill="var(--color-lilac)" opacity={dim(i)} />}
                   </>) : (
-                    p.churned > 0 && <rect x={bx(i)} width={bwid} y={baseY} height={downH(p.churned)} rx="1.5" fill="var(--color-orange)" opacity={dim(i)} />
+                    p.churned > 0 && <rect x={bx(i)} width={bwid} y={baseY} height={downH(p.churned)} rx="1.5" fill={`url(#${gid}-dn)`} opacity={dim(i)} />
                   )}
                 </g>
               ))}
