@@ -36,6 +36,7 @@ const platformLabel = (p: string): string =>
 const platformDot = (p: string): string => PLATFORM_META[p]?.dot ?? "#8fb0c4";
 import { GrowthChart } from "@/app/components/growth-chart";
 import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
+import { InsightsNav } from "./insights-nav";
 
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
@@ -472,11 +473,9 @@ export function InsightsView({
         </div>
       )}
       <div className={`mx-auto max-w-6xl transition-opacity duration-200 ${pending ? "pointer-events-none opacity-50" : ""}`}>
-        <div className="flex items-center justify-end gap-3">
-          <Link href="/insights/africa" className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-sm font-medium text-cyan hover:bg-cyan/20">🌍 Africa map</Link>
-          <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">
-            Live data
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <InsightsNav active="Markets" />
+          <span className="shrink-0 rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">Live data</span>
         </div>
 
         <header className="mt-6">
