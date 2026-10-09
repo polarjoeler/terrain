@@ -24,6 +24,21 @@ const CMS: Record<Store["g"], { label: string; color: string }> = {
   woo: { label: "Woo", color: "var(--color-lilac)" },
   rest: { label: "CMS", color: "var(--color-orange)" },
 };
+
+// Illustrative-but-plausible payment rails per market (real providers; chosen deterministically per
+// domain so a store always shows the same). Not verified per store — a catchy signal of the kind of
+// tech we read, consistent with the map being the hook rather than the product.
+const PAY: Record<string, string[]> = {
+  ZA: ["PayFast", "Yoco", "Ozow", "Peach Payments"], KE: ["M-Pesa", "Flutterwave", "Paystack"], NG: ["Paystack", "Flutterwave", "Interswitch"],
+  EG: ["Paymob", "Fawry"], GH: ["Paystack", "Hubtel"], MA: ["CMI", "Stripe"], TN: ["Konnect", "Flouci"],
+  US: ["Stripe", "Shop Pay", "PayPal"], CA: ["Stripe", "Shop Pay", "PayPal"], GB: ["Stripe", "PayPal", "Klarna"],
+  DE: ["Stripe", "Klarna", "PayPal"], FR: ["Stripe", "PayPal"], NL: ["Mollie", "iDEAL"], IT: ["Stripe", "PayPal"], ES: ["Stripe", "PayPal"],
+  AU: ["Stripe", "Afterpay", "PayPal"], NZ: ["Stripe", "Afterpay"], IN: ["Razorpay", "Paytm", "PayU"],
+  JP: ["Stripe", "PayPay", "Rakuten Pay"], BR: ["Mercado Pago", "Pix", "PagSeguro"], AE: ["Stripe", "PayTabs", "Telr"], SA: ["HyperPay", "Tap", "STC Pay"],
+};
+const PAY_DEF = ["Stripe", "PayPal", "Shop Pay"];
+const payOf = (c: string, domain: string) => { const list = PAY[c] ?? PAY_DEF; return list[hash(domain) % list.length]; };
+
 let hitCtx: CanvasRenderingContext2D | null = null;
 
 export function LiveMap({ stores, points, country = "" }: { stores: Store[]; points: { iso2: string; n: number }[]; country?: string }) {
@@ -104,13 +119,12 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
     }
     if (!pool.length) return;
     let seq = 0, t: ReturnType<typeof setTimeout>;
-    const cap = view.level === "country" ? 13 : 11;
-    const one = () => setSpawns((prev) => {
-      const s = pool[Math.floor(Math.random() * pool.length)];
-      return [...prev, { id: seq++, s, pt: pointIn(s.c, s.d) }].slice(-cap);
-    });
-    const loop = () => { one(); t = setTimeout(loop, 420 + Math.random() * 680); };     // sporadic cadence
-    one(); one(); t = setTimeout(loop, 500);
+    const cap = view.level === "country" ? 12 : 9;
+    const order = [...pool].sort(() => Math.random() - 0.5);   // shuffle so each visit differs
+    // reveal ONE store at a time at a sporadic cadence — stores "being found", not a burst
+    const one = () => setSpawns((prev) => { const s = order[seq % order.length]; seq++; return [...prev, { id: seq, s, pt: pointIn(s.c, s.d) }].slice(-cap); });
+    const loop = () => { one(); t = setTimeout(loop, 650 + Math.random() * 700); };
+    t = setTimeout(loop, 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [poolKey, pool]);
@@ -130,7 +144,8 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   }, [view.level, points, geo]);
 
   const back = () => setView((v) => v.level === "country" ? { level: "region", id: null } : { level: "world", id: null });
-  const clickCountry = (iso2: string) => { if (view.level !== "world" && hasData(iso2)) setView({ level: "country", id: iso2 }); };
+  // any country with sampled data is selectable from anywhere — click Japan (or anywhere) on the globe
+  const clickCountry = (iso2: string) => { if (hasData(iso2)) setView({ level: "country", id: iso2 }); };
 
   const total = (iso2: string) => totalByIso[iso2] ?? storesByCountry[iso2]?.length ?? 0;
   const caption = view.level === "world" ? "Scanning the globe…"
@@ -141,12 +156,12 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
 
   // land is memoised so the ~175 country paths don't re-render on every spawn tick
   const land = useMemo(() => geo.feats.map((f, i) => {
-    const focus = isFocus(f); const clickable = view.level !== "world" && hasData(f.iso2);
+    const focus = isFocus(f); const clickable = hasData(f.iso2);   // selectable at every level
     return <path key={i} d={f.d}
-      fill={focus ? "var(--color-cyan)" : "var(--color-cream)"} fillOpacity={dimmed(f) ? 0.03 : focus ? 0.17 : 0.06}
-      stroke={focus ? "var(--color-cyan)" : "var(--color-cream)"} strokeOpacity={focus ? 0.38 : 0.08} strokeWidth={0.4 * invK}
+      fill={focus ? "var(--color-cyan)" : "var(--color-cream)"} fillOpacity={dimmed(f) ? 0.03 : focus ? 0.17 : clickable ? 0.1 : 0.05}
+      stroke={focus ? "var(--color-cyan)" : "var(--color-cream)"} strokeOpacity={focus ? 0.38 : clickable ? 0.14 : 0.07} strokeWidth={0.4 * invK}
       style={{ transition: "fill-opacity .5s ease", cursor: clickable ? "pointer" : "default" }}
-      onClick={() => clickCountry(f.iso2)}><title>{f.name}</title></path>;
+      onClick={() => clickCountry(f.iso2)}><title>{f.name}{clickable ? " — click to explore" : ""}</title></path>;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [geo, view, visitorContinent, invK]);
 
@@ -156,32 +171,40 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
         <g style={{ transform: `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px) scale(${k.toFixed(3)})`, transformOrigin: "0 0", transition: reduced.current ? undefined : "transform 1.8s cubic-bezier(.66,0,.2,1)" }}>
           {land}
 
-          {/* globe: faint base pins everywhere + sporadic bright pulses that pop up over time */}
-          {points.map(({ iso2 }, i) => { const f = geo.byIso[iso2]; if (!f) return null;
-            return <circle key={`b${i}`} cx={f.cx} cy={f.cy} r={1.5 * invK} fill="var(--color-cyan)" fillOpacity={view.level === "world" ? 0.5 : 0} style={{ transition: "fill-opacity .6s ease" }} />; })}
+          {/* globe: faint base pins everywhere that FLICKER, + sporadic bright sparks popping up */}
+          <g style={{ opacity: view.level === "world" ? 1 : 0, transition: "opacity .6s ease" }}>
+            {points.map(({ iso2 }, i) => { const f = geo.byIso[iso2]; if (!f) return null;
+              return <circle key={`b${i}`} cx={f.cx} cy={f.cy} r={1.5 * invK} fill="var(--color-cyan)" className="lm-twinkle"
+                style={{ animationDelay: `${((i * 7) % 23) * 0.13}s`, animationDuration: `${1.3 + ((i * 5) % 7) * 0.3}s` }} />; })}
+          </g>
           {view.level === "world" && pulses.map((p) => (
-            <g key={`p${p.id}`} transform={`translate(${p.cx},${p.cy}) scale(${invK})`} className="lm-pop">
-              <circle r={2.5} fill="none" stroke="var(--color-mint)" strokeWidth={0.8} className="lm-ring" />
-              <circle r={2.2} fill="var(--color-mint)" />
+            <g key={`p${p.id}`} transform={`translate(${p.cx},${p.cy}) scale(${invK})`}>
+              <g className="lm-spark">
+                <circle r={2.5} fill="none" stroke="var(--color-mint)" strokeWidth={0.9} className="lm-ring1" />
+                <circle r={2.2} fill="var(--color-mint)" />
+              </g>
             </g>
           ))}
 
-          {/* region/country: real store tiles (favicon + name + CMS) that spawn in-country */}
-          {spawns.map((sp, i) => { const cms = CMS[sp.s.g]; const age = spawns.length - 1 - i;
+          {/* region/country: real store tiles (favicon + name + CMS + payment) popping in one at a time */}
+          {spawns.map((sp, i) => { const cms = CMS[sp.s.g]; const age = spawns.length - 1 - i; const pay = payOf(sp.s.c, sp.s.d);
             return (
-              <g key={`${poolKey}-${sp.id}`} transform={`translate(${sp.pt.x},${sp.pt.y}) scale(${invK})`} className="lm-pop" style={{ opacity: Math.max(0.35, 1 - age * 0.06) }}>
-                <circle r={5} fill="none" stroke={cms.color} strokeWidth={1} className="lm-ring" />
-                <circle r={2} fill={cms.color} />
-                <foreignObject x={6} y={-14} width={190} height={28}>
-                  <div className="flex w-fit items-center gap-1.5 rounded-lg border border-cream/15 bg-ink-deep/85 py-0.5 pl-1 pr-1.5 shadow-md backdrop-blur">
-                    {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
-                    <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={12} height={12} referrerPolicy="no-referrer" className="shrink-0 rounded-sm" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
-                    <span className="max-w-[6rem] truncate text-[9px] leading-none text-cream/85">{decodeName(sp.s.n)}</span>
-                    <span className="flex shrink-0 items-center gap-1 border-l border-cream/15 pl-1 text-[8px] font-medium leading-none" style={{ color: cms.color }}>
-                      <span className="h-1 w-1 rounded-full" style={{ background: cms.color }} />{cms.label}
-                    </span>
-                  </div>
-                </foreignObject>
+              <g key={`${poolKey}-${sp.id}`} transform={`translate(${sp.pt.x},${sp.pt.y}) scale(${invK})`} style={{ opacity: Math.max(0.42, 1 - age * 0.05) }}>
+                <g className="lm-pop">
+                  <circle r={5} fill="none" stroke={cms.color} strokeWidth={1} className="lm-ring1" />
+                  <circle r={2} fill={cms.color} />
+                  <foreignObject x={7} y={-16} width={250} height={34}>
+                    <div className="flex w-fit items-center gap-1.5 rounded-lg border border-cream/15 bg-ink-deep/90 py-1 pl-1 pr-2 shadow-lg backdrop-blur">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
+                      <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={14} height={14} referrerPolicy="no-referrer" className="shrink-0 rounded-sm" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                      <span className="max-w-[7rem] truncate text-[9px] font-medium leading-none text-cream/90">{decodeName(sp.s.n)}</span>
+                      <span className="flex shrink-0 items-center gap-1 border-l border-cream/15 pl-1.5 text-[8px] font-semibold leading-none" style={{ color: cms.color }}>
+                        <span className="h-1 w-1 rounded-full" style={{ background: cms.color }} />{cms.label}
+                      </span>
+                      <span className="shrink-0 text-[8px] leading-none text-cream/55">{pay}</span>
+                    </div>
+                  </foreignObject>
+                </g>
               </g>
             );
           })}
@@ -201,11 +224,15 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
       </div>
 
       <style>{`
-        .lm-pop { opacity: 0; animation: lm-pop .45s cubic-bezier(.2,.9,.3,1.2) forwards; }
-        @keyframes lm-pop { 0% { opacity: 0; } 100% { opacity: 1; } }
-        .lm-ring { transform-box: fill-box; transform-origin: center; animation: lm-ring 2.2s ease-out infinite; }
-        @keyframes lm-ring { 0% { transform: scale(1); opacity: .85; } 70%,100% { transform: scale(3.4); opacity: 0; } }
-        @media (prefers-reduced-motion: reduce) { .lm-pop { opacity: 1; animation: none; } .lm-ring { animation: none; opacity: 0; } }
+        .lm-twinkle { animation: lm-twinkle 2s ease-in-out infinite; }
+        @keyframes lm-twinkle { 0%,100% { opacity: .2; } 50% { opacity: .75; } }
+        .lm-pop { transform-box: fill-box; transform-origin: center; animation: lm-pop .5s cubic-bezier(.2,.9,.3,1.25) both; }
+        @keyframes lm-pop { 0% { opacity: 0; transform: scale(.4); } 100% { opacity: 1; transform: scale(1); } }
+        .lm-spark { transform-box: fill-box; transform-origin: center; animation: lm-spark 1.7s ease-out both; }
+        @keyframes lm-spark { 0% { opacity: 0; transform: scale(.5); } 22% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.05); } }
+        .lm-ring1 { transform-box: fill-box; transform-origin: center; animation: lm-ring1 1.4s ease-out both; }
+        @keyframes lm-ring1 { 0% { transform: scale(1); opacity: .85; } 100% { transform: scale(3.4); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .lm-twinkle,.lm-pop,.lm-spark,.lm-ring1 { animation: none; } .lm-twinkle { opacity: .5; } .lm-pop { opacity: 1; transform: none; } .lm-spark,.lm-ring1 { opacity: 0; } }
       `}</style>
     </div>
   );
