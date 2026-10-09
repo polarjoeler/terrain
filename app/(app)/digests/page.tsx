@@ -1,46 +1,51 @@
-import Link from "next/link";
 import { currentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
+import { getAccount } from "@/lib/account";
+import { DigestsManager } from "./digests-manager";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Terrain — Digests" };
 
+type Item = { title: string; desc: string };
+
+// What a given persona gets in their briefing. Everyone gets the base market movement; some company
+// types get an extra, more specific signal on top.
+const BASE: Item[] = [
+  { title: "New stores in your markets", desc: "Fresh launches by country and platform, the week they appear." },
+  { title: "Platform migrations", desc: "Stores that moved onto (or off) Shopify, WooCommerce and the rest." },
+  { title: "Shopify Plus upgrades", desc: "Merchants that stepped up to Plus — your highest-value signals." },
+  { title: "Payment & checkout shifts", desc: "Providers added or dropped at checkout across the market." },
+  { title: "Store churn", desc: "Stores that went dark — stopped selling or disappeared." },
+];
+const EXTRA: Record<string, Item> = {
+  payments: { title: "Stores with no provider yet", desc: "New merchants that haven't wired up a gateway — prime outreach." },
+  shipping: { title: "Carrier wins & losses", desc: "Which couriers are winning at checkout in your markets." },
+  app_developer: { title: "App adoption gaps", desc: "Where merchants are installing — and where the gaps are for your app." },
+  agency: { title: "Partner movement", desc: "Agencies and service partners active around your target stores." },
+  investor: { title: "Market growth signals", desc: "Launch and churn trends shaping where the market is heading." },
+};
+
 export default async function DigestsPage() {
   const email = await currentUser();
   if (!email) redirect("/login");
+
   const profile = await getUserProfile(email).catch(() => null);
   const org = await getOrgProfile(orgKey(email)).catch(() => null);
-  const optedIn = !!profile?.digest;
+  const account = await getAccount(email).catch(() => null);
+
+  const subscribed = !!profile?.digest;
+  const cadence = profile?.leadCadence ?? "weekly";
+  const extra = org?.companyType ? EXTRA[org.companyType] : undefined;
+  const contents = extra ? [extra, ...BASE] : BASE;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <div className="rounded-3xl border border-cream/10 bg-cream/[0.02] p-6">
-        <h2 className="font-display text-2xl text-cream">Your digests</h2>
-        <p className="mt-2 text-sm text-cream/55">
-          Recurring briefings — new stores, migrations, payment shifts and market movement — delivered on your schedule.
-        </p>
-
-        <div className="mt-5 flex items-center justify-between rounded-2xl border border-cream/10 bg-cream/[0.02] px-4 py-3">
-          <div>
-            <div className="text-sm font-medium text-cream">Weekly email digest</div>
-            <div className="mt-0.5 text-xs text-cream/45">{optedIn ? "You're subscribed." : "Not subscribed yet."}</div>
-          </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-medium ${optedIn ? "bg-mint/15 text-mint" : "border border-cream/15 text-cream/50"}`}>
-            {optedIn ? "On" : "Off"}
-          </span>
-        </div>
-
-        {!profile && (
-          <Link href="/onboarding" className="mt-4 inline-block rounded-full bg-mint px-5 py-2 text-sm font-semibold text-ink transition hover:brightness-105">
-            Set up your digest →
-          </Link>
-        )}
-      </div>
-
-      <p className="px-1 text-xs text-cream/35">
-        Per-topic digests{org?.companyType ? "" : ""} and channel controls (Slack, WhatsApp) are being built — for now the weekly email covers your markets.
-      </p>
-    </div>
+    <DigestsManager
+      subscribed={subscribed}
+      cadence={cadence}
+      email={account?.email ?? email}
+      workspace={account?.workspace ?? "your workspace"}
+      contents={contents}
+    />
   );
 }
