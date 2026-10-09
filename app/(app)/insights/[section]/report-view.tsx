@@ -3,6 +3,13 @@
 import Link from "next/link";
 import type { SectionReport, ReportItem } from "@/lib/insights";
 import { ProviderAdoptionChart } from "./provider-adoption-chart";
+import { InsightsNav } from "../insights-nav";
+
+// Which catalog category each report section belongs to (highlights the active dropdown).
+const CATEGORY_OF: Record<string, string> = {
+  payments: "Payments", leading: "Payments", subscriptions: "Payments",
+  themes: "Technology", apps: "Technology", categories: "Technology", shipping: "Technology", cities: "Technology",
+};
 
 const PERIODS = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]] as const;
 const PERIOD_NOUN: Record<string, string> = { day: "day", week: "week", month: "month", quarter: "quarter", year: "year" };
@@ -107,12 +114,12 @@ export function ReportView({ report, country, countries, platform }: { report: S
   return (
     <div>
       <div className="mx-auto max-w-3xl">
-        <nav className="flex items-center justify-between">
-          <Link href="/insights" className="text-sm text-cream/60 hover:text-cream">← Insights</Link>
-          <span className="rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/50">{country}</span>
-        </nav>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <InsightsNav active={CATEGORY_OF[report.section]} />
+          <span className="shrink-0 rounded-full border border-cream/15 px-3 py-1 text-xs text-cream/50">{country}</span>
+        </div>
 
-        <header className="mt-8">
+        <header className="mt-6">
           <h1 className="font-display text-4xl text-cream md:text-5xl">{report.title}</h1>
           <p className="mt-2 text-cream/60">
             {hasShare

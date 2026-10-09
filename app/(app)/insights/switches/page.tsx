@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { InsightsNav } from "../insights-nav";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { switchesLog } from "@/lib/provider-insights";
@@ -33,8 +34,9 @@ export default async function SwitchesPage({
   return (
     <div>
       <div className="mx-auto max-w-3xl">
-        <div className="flex items-center justify-end">
-          <Link href={backHref} className="text-sm text-cream/60 hover:text-cream">← Back</Link>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <InsightsNav active="Payments" />
+          <Link href={backHref} className="shrink-0 text-sm text-cream/60 hover:text-cream">← Back</Link>
         </div>
 
         <header className="mt-6">
