@@ -6,7 +6,8 @@ import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
 import { browseQuery, type BrowseFilters } from "@/lib/browse";
-import { Explorer } from "@/app/admin/explore/explorer";
+import { getList } from "@/lib/lists";
+import { Explorer, type ExploreInitial } from "@/app/admin/explore/explorer";
 
 // Per-user paywall — never cache this page across requests.
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export default async function Dashboard({
   searchParams: Promise<{
     country?: string; q?: string; payment?: string; shipping?: string;
     theme?: string; city?: string; category?: string; band?: string;
-    new?: string; nopay?: string; launched?: string;
+    new?: string; nopay?: string; launched?: string; list?: string;
   }>;
 }) {
   const email = await currentUser();
@@ -57,13 +58,16 @@ export default async function Dashboard({
   const recency = (["7d", "30d", "365d"] as const).includes(sp.new as never) ? (sp.new as "7d" | "30d" | "365d") : undefined;
   const launched = (["7d", "30d", "90d", "365d"] as const).includes(sp.launched as never)
     ? (sp.launched as "7d" | "30d" | "90d" | "365d") : undefined;
-  const drill = {
+  const drill: ExploreInitial = {
     q: sp.q,
     country: sp.country ? [sp.country] : undefined,
     payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
     recency, launched, noPayment: sp.nopay === "1",
   };
+  // ?list=<id> opens a Saved list — its stored view fully re-seeds the Explorer (overrides any drill).
+  const savedView = sp.list ? await getList(email, sp.list).then((l) => l?.view ?? null).catch(() => null) : null;
+  const initial: ExploreInitial = (savedView as ExploreInitial) ?? drill;
 
   // Tile numbers all come from the single getHomeStats() aggregate (one indexed
   // COUNT query) — same source as /insights and the homepage, so the counts agree.
@@ -115,7 +119,7 @@ export default async function Dashboard({
         {/* Streamed so the shell paints instantly — the full live set is a heavy load
             (~13k rich rows), so we don't block first paint on it. */}
         <Suspense fallback={<BrowseSkeleton />}>
-          <BrowseSection initial={drill} />
+          <BrowseSection initial={initial} />
         </Suspense>
       </div>
     </div>
@@ -131,11 +135,14 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
   const LMAP: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
   const filters: BrowseFilters = {
     q: initial?.q || undefined,
-    country: initial?.country, category: initial?.category, band: initial?.band,
+    country: initial?.country, platform: initial?.platform, category: initial?.category, band: initial?.band,
     theme: initial?.theme, city: initial?.city, payment: initial?.payment, shipping: initial?.shipping,
-    activity: initial?.activity, noPayment: initial?.noPayment || undefined,
+    app: initial?.apps, activity: initial?.activity, hosting: initial?.hosting,
+    plus: initial?.plus || undefined, hasEmail: initial?.email || undefined, noPayment: initial?.noPayment || undefined,
+    tier: (initial?.tier || undefined) as BrowseFilters["tier"],
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
+    sort: initial?.sort as BrowseFilters["sort"],
     limit: 60,
   };
   const data = await browseQuery(filters).catch(() => null);

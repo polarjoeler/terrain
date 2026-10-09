@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { saveListAction } from "@/app/(app)/lists/actions";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
 import { scoreColor } from "@/lib/revenue";
@@ -166,6 +167,9 @@ export type ExploreInitial = {
   recency?: RecencyKey;   // seed "newly discovered this week" (7d) etc. from a deep link
   launched?: LaunchKey;   // seed "launched this week" etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
+  // The rest let a Saved list restore the whole view (not just a single-facet deep link).
+  platform?: string[]; apps?: string[]; hosting?: string[];
+  plus?: boolean; email?: boolean; tier?: string; sort?: string;
 };
 
 export function Explorer({ initialData, initial, showStats }: {
@@ -187,17 +191,17 @@ export function Explorer({ initialData, initial, showStats }: {
   const [city, setCity] = useState<Set<string>>(new Set(initial?.city));
   const [payment, setPayment] = useState<Set<string>>(new Set(initial?.payment));
   const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
-  const [app, setApp] = useState<Set<string>>(new Set());
-  const [platform, setPlatform] = useState<Set<string>>(new Set());
+  const [app, setApp] = useState<Set<string>>(new Set(initial?.apps));
+  const [platform, setPlatform] = useState<Set<string>>(new Set(initial?.platform));
   const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
-  const [hosting, setHosting] = useState<Set<string>>(new Set());
-  const [plusOnly, setPlusOnly] = useState(false);
-  const [emailOnly, setEmailOnly] = useState(false);
+  const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
+  const [plusOnly, setPlusOnly] = useState(initial?.plus ?? false);
+  const [emailOnly, setEmailOnly] = useState(initial?.email ?? false);
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
-  const [tier, setTier] = useState<"" | "top100" | "top500">(""); // curated Top 100 / Top 500
+  const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
-  const [sort, setSort] = useState<SortKey>("new");
+  const [sort, setSort] = useState<SortKey>((initial?.sort as SortKey) ?? "new");
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
   const [picked, setPicked] = useState<Set<string>>(new Set());   // ticked rows for selective export
@@ -305,6 +309,30 @@ export function Explorer({ initialData, initial, showStats }: {
       a.click();
       URL.revokeObjectURL(a.href);
     } finally { setExporting(false); }
+  };
+
+  // Saved lists — capture the whole current view (the exact shape the Explorer re-seeds from).
+  const currentView = (): ExploreInitial => {
+    const arr = (s: Set<string>) => (s.size ? [...s] : undefined);
+    return {
+      q: q || undefined, country: arr(country), category: arr(category), band: arr(band),
+      theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
+      activity: arr(activity), platform: arr(platform), apps: arr(app), hosting: arr(hosting),
+      plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
+      recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
+      sort: sort !== "new" ? sort : undefined,
+    };
+  };
+  const [saving, setSaving] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [listName, setListName] = useState("");
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const saveList = async () => {
+    if (!listName.trim() || saving) return;
+    setSaving(true); setSavedMsg(null);
+    const r = await saveListAction(listName.trim(), currentView() as Record<string, unknown>, data.total);
+    setSaving(false);
+    if (r.ok) { setSavedMsg(`Saved “${listName.trim()}”`); setSaveOpen(false); setListName(""); setTimeout(() => setSavedMsg(null), 2600); }
   };
 
   // Platform-aware filter visibility: Shopify-only controls (Plus, the Shopify app-store facet) show
@@ -440,9 +468,28 @@ export function Explorer({ initialData, initial, showStats }: {
             {loading && <span className="ml-1 text-cream/35">· updating…</span>}
           </span>
           <div className="ml-auto flex items-center gap-2">
+            {savedMsg && <span className="text-xs text-mint">{savedMsg}</span>}
             {picked.size > 0 && (
               <button onClick={() => setPicked(new Set())} className="text-xs text-cream/50 hover:text-cream">Clear selection</button>
             )}
+            <div className="relative">
+              <button onClick={() => setSaveOpen((o) => !o)} className="rounded-full border border-cream/15 px-4 py-2 text-sm text-cream/75 transition hover:border-cream/40 hover:text-cream">☆ Save list</button>
+              {saveOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setSaveOpen(false)} />
+                  <div className="absolute right-0 z-20 mt-2 w-64 rounded-2xl border border-cream/12 bg-ink-deep p-3 shadow-2xl">
+                    <div className="text-xs font-medium uppercase tracking-wide text-cream/45">Save this view</div>
+                    <p className="mt-1 text-[11px] leading-snug text-cream/40">Saves the current filters as a reusable list ({data.total.toLocaleString()} leads right now).</p>
+                    <input autoFocus value={listName} onChange={(e) => setListName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveList()} placeholder="e.g. ZA new WooCommerce"
+                      className="mt-2 w-full rounded-xl border border-cream/15 bg-cream/[0.03] px-3 py-2 text-sm text-cream placeholder:text-cream/30 outline-none focus:border-mint/60" />
+                    <div className="mt-2 flex justify-end gap-2">
+                      <button onClick={() => { setSaveOpen(false); setListName(""); }} className="rounded-full px-3 py-1.5 text-xs text-cream/50 hover:text-cream">Cancel</button>
+                      <button onClick={saveList} disabled={!listName.trim() || saving} className="rounded-full bg-mint px-4 py-1.5 text-xs font-semibold text-ink transition hover:brightness-105 disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <button onClick={exportCsv} disabled={exporting} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
               {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
             </button>
