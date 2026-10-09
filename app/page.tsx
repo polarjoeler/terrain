@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { Wordmark } from "@/app/components/logo";
 import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
 import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
+import WORLD_POINTS from "@/lib/world-points-snapshot.json";
 import { AfricaReplay } from "@/app/(app)/insights/africa/africa-replay";
+import { WorldHero, type WorldRegion } from "@/app/components/world-hero";
 import { Capabilities, TechStrip } from "@/app/components/home-sections";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
@@ -55,6 +58,11 @@ export default async function Home() {
   const data = await Promise.race([agg, new Promise<AfricaTimeline>((r) => setTimeout(() => r(SNAP), 4000))]);
   const ready = data.months.length > 0;
 
+  // Zoom the global flight to the visitor's region (Vercel edge geo). Japan gets 日本; everyone else
+  // lands on Africa — the home market. No DB work: the world outline + store weights are committed.
+  const country = (await headers()).get("x-vercel-ip-country")?.toUpperCase() ?? "";
+  const region: WorldRegion = country === "JP" ? "japan" : "africa";
+
   return (
     <main className="pt-4">
       <div className="px-4"><Nav /></div>
@@ -70,19 +78,24 @@ export default async function Home() {
         </p>
         <div className="mt-7 flex flex-wrap items-center gap-3">
           <a href="#join" className="rounded-full bg-cyan px-6 py-3 text-sm font-medium text-cyan-deep transition hover:brightness-110">Get early access</a>
-          <a href="#capabilities" className="rounded-full border border-cream/20 px-6 py-3 text-sm text-cream/75 transition hover:text-cream">See what it does</a>
+          <a href="#map" className="rounded-full border border-cream/20 px-6 py-3 text-sm text-cream/75 transition hover:text-cream">See it in full</a>
         </div>
       </header>
 
-      {/* the live map — the catchy hook, bounded to the hero */}
-      <section id="map" className="px-4 py-12">
+      {/* the global flight — the catchy hook: stores pop up worldwide, then zoom into your region */}
+      <section className="mx-auto max-w-5xl px-4 pb-4 pt-8">
+        <WorldHero region={region} points={WORLD_POINTS as { iso2: string; n: number }[]} />
+      </section>
+
+      {/* the detailed, real, interactive replay — the depth behind the spectacle */}
+      <section id="map" className="px-4 py-14">
         <div className="mx-auto max-w-5xl">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-2">
             <div>
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Live from the field</span>
-              <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Watch the market build itself.</h2>
+              <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Africa, store by store.</h2>
             </div>
-            <p className="max-w-xs text-sm text-cream/50">Every store appears on the day it launched — a decade of African eCommerce, replayed.</p>
+            <p className="max-w-xs text-sm text-cream/50">Every store appears on the day it launched — a decade of African eCommerce, replayed from real data.</p>
           </div>
           {ready ? <AfricaReplay data={data} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
         </div>
