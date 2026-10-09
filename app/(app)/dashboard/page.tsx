@@ -19,6 +19,7 @@ export default async function Dashboard({
     country?: string; q?: string; payment?: string; shipping?: string;
     theme?: string; city?: string; category?: string; band?: string;
     new?: string; nopay?: string; launched?: string; list?: string;
+    plus?: string; status?: string; checked?: string;
   }>;
 }) {
   const email = await currentUser();
@@ -58,12 +59,15 @@ export default async function Dashboard({
   const recency = (["7d", "30d", "365d"] as const).includes(sp.new as never) ? (sp.new as "7d" | "30d" | "365d") : undefined;
   const launched = (["7d", "30d", "90d", "365d"] as const).includes(sp.launched as never)
     ? (sp.launched as "7d" | "30d" | "90d" | "365d") : undefined;
+  const status = sp.status === "migrated" || sp.status === "dead" ? sp.status : undefined;
+  const checkedDays = sp.checked && /^\d{1,4}$/.test(sp.checked) ? Number(sp.checked) : undefined;
   const drill: ExploreInitial = {
     q: sp.q,
     country: sp.country ? [sp.country] : undefined,
     payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
     recency, launched, noPayment: sp.nopay === "1",
+    plus: sp.plus === "1" || undefined, status, checkedDays,
   };
   // ?list=<id> opens a Saved list — its stored view fully re-seeds the Explorer (overrides any drill).
   const savedView = sp.list ? await getList(email, sp.list).then((l) => l?.view ?? null).catch(() => null) : null;
@@ -109,6 +113,16 @@ export default async function Dashboard({
         </Link>
       )}
 
+      {(status || sp.plus === "1") && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-cyan/25 bg-cyan/[0.06] px-4 py-2.5 text-sm">
+          <span className="text-cream/85">
+            Showing {status === "migrated" ? "stores that migrated off-platform" : status === "dead" ? "stores that went dark" : "Shopify Plus stores"}
+            {launched ? ` · launched in the last ${launched.replace("d", " days")}` : checkedDays ? ` · in the last ${checkedDays} days` : ""}.
+          </span>
+          <Link href="/dashboard" className="shrink-0 font-medium text-cyan hover:underline">Clear →</Link>
+        </div>
+      )}
+
       <div>
         <div className="mb-3 flex items-baseline justify-between px-1">
           <h2 className="font-display text-2xl">Browse stores</h2>
@@ -140,6 +154,7 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
     app: initial?.apps, activity: initial?.activity, hosting: initial?.hosting,
     plus: initial?.plus || undefined, hasEmail: initial?.email || undefined, noPayment: initial?.noPayment || undefined,
     tier: (initial?.tier || undefined) as BrowseFilters["tier"],
+    status: initial?.status, checkedDays: initial?.checkedDays,
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
     sort: initial?.sort as BrowseFilters["sort"],

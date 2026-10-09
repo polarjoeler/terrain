@@ -39,6 +39,8 @@ export type BrowseFilters = {
   domains?: string[];         // explicit selection (export the ticked rows), overrides the broad filter
   launchedDays?: number;      // launched within N days
   discoveredDays?: number;    // we first tracked it within N days
+  status?: "migrated" | "dead"; // show stores in this terminal state (overrides the default live-only filter)
+  checkedDays?: number;       // ...whose status was confirmed within N days (pairs with `status`)
   sort?: SortKey;
   limit?: number; offset?: number;
   refresh?: boolean;          // internal: force a fresh aggregate (bypass caches) — used by refresh-browse
@@ -90,11 +92,17 @@ function buildWhere(f: BrowseFilters) {
   );
   const conds = [
     sql`published`,
-    sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`,
     sql`country = ANY(${[...VISIBLE_MARKETS]})`,
-    // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
-    sql`activity_tier IS DISTINCT FROM 'not_a_store'`,
   ];
+  if (f.status === "migrated" || f.status === "dead") {
+    // Terminal-state view (from the Overview "Migrations" / "Went dark" chips) — show exactly those.
+    conds.push(sql`live_status = ${f.status}`);
+    if (f.checkedDays) conds.push(sql`live_checked_at >= CURRENT_DATE - ${f.checkedDays}::int`);
+  } else {
+    conds.push(sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`);
+    // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
+    conds.push(sql`activity_tier IS DISTINCT FROM 'not_a_store'`);
+  }
   if (f.domains?.length) conds.push(sql`domain = ANY(${f.domains})`);
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
   if (f.country?.length) conds.push(sql`country = ANY(${f.country})`);
