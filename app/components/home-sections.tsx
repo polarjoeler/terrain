@@ -189,20 +189,16 @@ const PLATFORMS: { name: string; file?: string }[] = [
   { name: "Ecwid" },
 ];
 
-// One platform mark: the brand glyph (masked to the current text colour) + name, or a wordmark when
-// we don't yet have the official artwork. Hovering lifts glyph and name together via currentColor.
-function PlatformMark({ name, file }: { name: string; file?: string }) {
-  if (!file) return <span className="font-display text-base font-semibold text-cream/45 transition hover:text-cream/80">{name}</span>;
+// One platform mark: just the brand glyph, masked to the current text colour so it stays monochrome
+// and brightens on hover. The name lives in the title/aria-label (tooltip + a11y), not on screen.
+function PlatformMark({ name, file }: { name: string; file: string }) {
   return (
-    <span className="flex items-center gap-2 text-cream/45 transition hover:text-cream/90">
-      <span aria-hidden className="h-5 w-5 shrink-0 bg-current" style={{
-        WebkitMaskImage: `url(/logos/${file})`, maskImage: `url(/logos/${file})`,
-        WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
-        WebkitMaskPosition: "center", maskPosition: "center",
-        WebkitMaskSize: "contain", maskSize: "contain",
-      }} />
-      <span className="font-display text-base font-semibold">{name}</span>
-    </span>
+    <span role="img" aria-label={name} title={name} className="h-8 w-8 shrink-0 bg-cream/45 transition hover:bg-cream/90" style={{
+      WebkitMaskImage: `url(/logos/${file})`, maskImage: `url(/logos/${file})`,
+      WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
+      WebkitMaskPosition: "center", maskPosition: "center",
+      WebkitMaskSize: "contain", maskSize: "contain",
+    }} />
   );
 }
 
@@ -218,8 +214,10 @@ export function TechStrip() {
         <p className="mx-auto mt-3 max-w-xl text-sm text-cream/50">
           Whatever a store is built on, Terrain detects it — and the themes, apps, payment and shipping tech layered on top.
         </p>
-        <div className="mt-9 flex flex-wrap items-center justify-center gap-x-9 gap-y-5">
-          {PLATFORMS.map((p) => <PlatformMark key={p.name} {...p} />)}
+        {/* logos only — platforms without official artwork (Adobe Commerce, Ecwid) stay hidden until
+            their mark lands in /public/logos, at which point they appear automatically */}
+        <div className="mt-9 flex flex-wrap items-center justify-center gap-x-10 gap-y-6">
+          {PLATFORMS.filter((p) => p.file).map((p) => <PlatformMark key={p.name} name={p.name} file={p.file!} />)}
         </div>
       </div>
     </section>

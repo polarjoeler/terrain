@@ -5,10 +5,19 @@ import { cachedAgg } from "@/lib/agg-cache";
 import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
 import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
 import WORLD_POINTS from "@/lib/world-points-snapshot.json";
-import { AfricaReplay } from "@/app/(app)/insights/africa/africa-replay";
-import { WorldHero, type WorldRegion } from "@/app/components/world-hero";
+import { GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
+import { LiveMap } from "@/app/components/live-map";
 import { Capabilities, TechStrip } from "@/app/components/home-sections";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
+
+// Cumulative tracked stores by CMS (Shopify / WooCommerce / Other), summed across all countries —
+// feeds the standalone growth chart under the map. Pure; runs server-side.
+function cmsCumulative(d: AfricaTimeline) {
+  const N = d.months.length; const shop = new Array(N).fill(0), woo = new Array(N).fill(0), rest = new Array(N).fill(0);
+  for (const g of Object.values(d.countries)) { let s = 0, w = 0, r = 0;
+    for (let i = 0; i < N; i++) { s += g.shopify[i] || 0; w += g.woo[i] || 0; r += g.rest[i] || 0; shop[i] += s; woo[i] += w; rest[i] += r; } }
+  return { shop, woo, rest };
+}
 
 export const metadata = { title: "Terrain — African eCommerce, coming to life" };
 // force-dynamic (not ISR): ISR prerenders at BUILD, which runs africaTimeline's DB aggregate during
@@ -57,7 +66,8 @@ export default async function Home() {
   // Zoom the global flight to the visitor's region (Vercel edge geo). Japan gets 日本; everyone else
   // lands on Africa — the home market. No DB work: the world outline + store weights are committed.
   const country = (await headers()).get("x-vercel-ip-country")?.toUpperCase() ?? "";
-  const region: WorldRegion = country === "JP" ? "japan" : "africa";
+  const region: "africa" | "japan" = country === "JP" ? "japan" : "africa";
+  const cum = cmsCumulative(data);
 
   return (
     <main className="pt-4">
@@ -78,22 +88,23 @@ export default async function Home() {
         </div>
       </header>
 
-      {/* the global flight — the catchy hook: stores pop up worldwide, then zoom into your region */}
-      <section className="mx-auto max-w-5xl px-4 pb-4 pt-8">
-        <WorldHero region={region} points={WORLD_POINTS as { iso2: string; n: number }[]} />
-      </section>
-
-      {/* the detailed, real, interactive replay — the depth behind the spectacle */}
-      <section id="map" className="px-4 py-14">
+      {/* one interactive map: globe → your continent → click a country to drill into its live stores */}
+      <section id="map" className="px-4 py-10">
         <div className="mx-auto max-w-5xl">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-2">
             <div>
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Live from the field</span>
-              <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Africa, store by store.</h2>
+              <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Zoom into the market.</h2>
             </div>
-            <p className="max-w-xs text-sm text-cream/50">Every store appears on the day it launched — a decade of African eCommerce, replayed from real data.</p>
+            <p className="max-w-xs text-sm text-cream/50">The globe flies into your region, then click any country to watch its real stores appear.</p>
           </div>
-          {ready ? <AfricaReplay data={data} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
+          {ready ? <LiveMap data={data} points={WORLD_POINTS as { iso2: string; n: number }[]} region={region} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
+          {ready && (
+            <div className="mt-6">
+              <GrowthChart shopCum={cum.shop} wooCum={cum.woo} restCum={cum.rest} months={data.months}
+                showShop showWoo showRest prog={data.months.length - 1} lastRefresh={data.meta.lastRefresh} />
+            </div>
+          )}
         </div>
       </section>
 
