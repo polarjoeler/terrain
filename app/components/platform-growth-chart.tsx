@@ -142,7 +142,7 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
           <div className="grid h-64 place-items-center text-sm text-cream/40">Not enough dated {noun} yet to chart growth.</div>
         ) : (
           <>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove} style={{ fontFamily: "var(--font-mono)" }}>
               {[0, 0.25, 0.5, 0.75, 1].map((f) => (
                 <g key={f}>
                   <line x1={padL} y1={padT + ih - f * ih} x2={W - padR} y2={padT + ih - f * ih} stroke="var(--color-cream)" strokeOpacity="0.08" />
