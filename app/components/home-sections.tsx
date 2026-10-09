@@ -178,10 +178,14 @@ const PLATFORMS: { name: string; file?: string }[] = [
   { name: "Shopify", file: "shopify.svg" },
   { name: "WooCommerce", file: "woocommerce.svg" },
   { name: "Wix", file: "wix.svg" },
-  { name: "Adobe Commerce" },
   { name: "Squarespace", file: "squarespace.svg" },
   { name: "BigCommerce", file: "bigcommerce.svg" },
+  { name: "Webflow", file: "webflow.svg" },
   { name: "PrestaShop", file: "prestashop.svg" },
+  { name: "Shopware", file: "shopware.svg" },
+  { name: "VTEX", file: "vtex.svg" },
+  { name: "Big Cartel", file: "bigcartel.svg" },
+  { name: "Adobe Commerce" },
   { name: "Ecwid" },
 ];
 
