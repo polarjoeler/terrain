@@ -5,6 +5,7 @@ import { overviewData } from "@/lib/overview";
 import { getAccount } from "@/lib/account";
 import { getOrgProfile, orgKey } from "@/lib/profile";
 import { marketLabel, marketFlag } from "@/lib/markets";
+import { weekRead, type Read } from "@/lib/read";
 import { StatChip, LaunchTrend } from "@/app/components/command";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function OverviewPage() {
   const email = await currentUser();
   if (!email) redirect("/login");
 
-  const [data, account, org] = [await overviewData(), await getAccount(email).catch(() => null), await getOrgProfile(orgKey(email)).catch(() => null)];
+  const [data, account, org, reads] = [await overviewData(), await getAccount(email).catch(() => null), await getOrgProfile(orgKey(email)).catch(() => null), await weekRead().catch(() => [] as Read[])];
   const { pulse, launches, trend, markets } = data;
   const name = (account?.name ?? "there").split(" ")[0];
   const marketMax = Math.max(1, ...markets.map((m) => m.live));
@@ -58,6 +59,9 @@ export default async function OverviewPage() {
           <StatChip label="Went dark" value={pulse.churnWeek} prev={pulse.churnPrev} accent="orange" goodUp={false} />
         </div>
       </section>
+
+      {/* Terrain's read on the week */}
+      <ReadPanel reads={reads} />
 
       {/* Launch stream */}
       <section className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
@@ -137,6 +141,49 @@ export default async function OverviewPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function ReadPanel({ reads }: { reads: Read[] }) {
+  const TONE: Record<string, { ic: string; cls: string; mag: string }> = {
+    up: { ic: "⇡", cls: "bg-mint/15 text-mint", mag: "text-mint" },
+    down: { ic: "⇣", cls: "bg-cream/10 text-cream/50", mag: "text-cream/50" },
+    alert: { ic: "▲", cls: "bg-orange/15 text-orange", mag: "text-orange" },
+  };
+  return (
+    <section className="rounded-2xl border border-cyan/20 bg-gradient-to-b from-cyan/[0.06] to-transparent p-5 md:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 font-display text-lg text-cream">
+          <span className="grid h-6 w-6 place-items-center rounded-lg bg-cyan/15 text-xs text-cyan">✦</span> Terrain&apos;s read on the week
+        </h3>
+        <span className="font-mono text-[11px] text-cream/40">vs the prior 9 weeks</span>
+      </div>
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-cream/45">
+        <span className="text-mint">✓</span> Built on launch-dated cohorts — normalised for our scan volume, so an import week can&apos;t fake a trend.
+      </p>
+      {reads.length === 0 ? (
+        <p className="mt-4 text-sm text-cream/55">Nothing unusual this week — new launches, platform mix and churn are all tracking their normal pace.</p>
+      ) : (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {reads.map((r) => {
+            const t = TONE[r.tone] ?? TONE.up;
+            return (
+              <Link key={r.key} href={r.href} className="group flex items-center gap-3 rounded-xl border border-cream/10 bg-cream/[0.015] p-3 transition hover:border-cream/25 hover:bg-cream/[0.04]">
+                <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-xs ${t.cls}`}>{t.ic}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-semibold text-cream">{r.title}</span>
+                  <span className="mt-0.5 block text-xs leading-snug text-cream/45">{r.detail}</span>
+                </span>
+                <span className="flex shrink-0 flex-col items-end gap-1">
+                  <span className={`font-mono text-xs font-semibold ${t.mag}`}>{r.magnitude}</span>
+                  <span className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] ${r.confidence === "high" ? "bg-mint/15 text-mint" : "bg-orange-soft/15 text-orange-soft"}`}>{r.confidence}</span>
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
