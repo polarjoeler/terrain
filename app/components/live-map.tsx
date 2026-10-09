@@ -37,7 +37,19 @@ const PAY: Record<string, string[]> = {
   JP: ["Stripe", "PayPay", "Rakuten Pay"], BR: ["Mercado Pago", "Pix", "PagSeguro"], AE: ["Stripe", "PayTabs", "Telr"], SA: ["HyperPay", "Tap", "STC Pay"],
 };
 const PAY_DEF = ["Stripe", "PayPal", "Shop Pay"];
-const payOf = (c: string, domain: string) => { const list = PAY[c] ?? PAY_DEF; return list[hash(domain) % list.length]; };
+// 1–2 deterministic rails per store
+const paysOf = (c: string, domain: string) => { const list = PAY[c] ?? PAY_DEF; const h = hash(domain); const a = list[h % list.length], b = list[(h >> 4) % list.length]; return a === b ? [a] : [a, b]; };
+
+// quick-jump chips so every region (and Japan) is reachable in one click — not just by hunting a tiny
+// country on the globe
+const CHIPS: { label: string; level: Level; id: string | null }[] = [
+  { label: "🌍 Globe", level: "world", id: null },
+  { label: "Africa", level: "region", id: "Africa" },
+  { label: "Europe", level: "region", id: "Europe" },
+  { label: "Asia", level: "region", id: "Asia" },
+  { label: "Americas", level: "region", id: "Americas" },
+  { label: "🇯🇵 Japan", level: "country", id: "JP" },
+];
 
 let hitCtx: CanvasRenderingContext2D | null = null;
 
@@ -65,7 +77,12 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   const totalByIso = useMemo(() => { const m: Record<string, number> = {}; for (const p of points) m[p.iso2] = p.n; return m; }, [points]);
   const storesByCountry = useMemo(() => { const m: Record<string, Store[]> = {}; for (const s of stores) (m[s.c] ??= []).push(s); return m; }, [stores]);
   const visitorContinent = geo.byIso[country]?.continent || "Africa";
+  const continentOf = (iso2: string) => geo.byIso[iso2]?.continent || "";
   const hasData = (iso2: string) => !!storesByCountry[iso2]?.length && !!geo.byIso[iso2];
+  // the continent in focus: the region we're viewing, the home of the country we drilled into, or the
+  // visitor's own continent on the globe. `view.id` carries the continent name at region level.
+  const activeContinent = view.level === "country" && view.id ? (continentOf(view.id) || visitorContinent)
+    : view.level === "region" && view.id ? view.id : visitorContinent;
 
   // deterministic in-country point placement (own cache; must not share AfricaReplay's projection cache)
   const ptCache = useRef(new Map<string, { x: number; y: number }>());
@@ -80,7 +97,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   };
 
   // ---- fly target for the current view ----
-  const regionSet = useMemo(() => geo.feats.filter((f) => f.continent === visitorContinent).map((f) => f.iso2), [geo, visitorContinent]);
+  const regionSet = useMemo(() => geo.feats.filter((f) => f.continent === activeContinent).map((f) => f.iso2), [geo, activeContinent]);
   const target = useMemo(() => {
     const boundsOf = (isos: string[]) => { const fs = isos.map((i) => geo.byIso[i]).filter(Boolean) as Feat[]; if (!fs.length) return { x0: 0, y0: 0, x1: W, y1: H };
       return { x0: Math.min(...fs.map((f) => f.bbox[0])), y0: Math.min(...fs.map((f) => f.bbox[1])), x1: Math.max(...fs.map((f) => f.bbox[2])), y1: Math.max(...fs.map((f) => f.bbox[3])) }; };
@@ -98,8 +115,8 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   // ---- auto intro: globe → the visitor's continent ----
   useEffect(() => {
     reduced.current = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduced.current) { setView({ level: "region", id: null }); return; }
-    const id = setTimeout(() => setView((v) => (v.level === "world" ? { level: "region", id: null } : v)), 2900);
+    if (reduced.current) { setView({ level: "region", id: visitorContinent }); return; }
+    const id = setTimeout(() => setView((v) => (v.level === "world" ? { level: "region", id: visitorContinent } : v)), 2900);
     return () => clearTimeout(id);
   }, [visitorContinent]);
 
@@ -108,7 +125,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   const poolKey = view.level + "|" + (view.id ?? visitorContinent);
   const pool = useMemo(() => {
     if (view.level === "country" && view.id) return storesByCountry[view.id] ?? [];
-    if (view.level === "region") return stores.filter((s) => geo.byIso[s.c]?.continent === visitorContinent);
+    if (view.level === "region") return stores.filter((s) => geo.byIso[s.c]?.continent === activeContinent);
     return [];
   }, [view, stores, storesByCountry, geo, visitorContinent]);
   useEffect(() => {
@@ -143,15 +160,15 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.level, points, geo]);
 
-  const back = () => setView((v) => v.level === "country" ? { level: "region", id: null } : { level: "world", id: null });
+  const back = () => setView((v) => v.level === "country" ? { level: "region", id: continentOf(v.id ?? "") || visitorContinent } : { level: "world", id: null });
   // any country with sampled data is selectable from anywhere — click Japan (or anywhere) on the globe
   const clickCountry = (iso2: string) => { if (hasData(iso2)) setView({ level: "country", id: iso2 }); };
 
   const total = (iso2: string) => totalByIso[iso2] ?? storesByCountry[iso2]?.length ?? 0;
   const caption = view.level === "world" ? "Scanning the globe…"
     : view.level === "country" && view.id ? `${flagOf(view.id)} ${geo.byIso[view.id]?.name ?? view.id}${total(view.id) ? ` — ${total(view.id).toLocaleString()} stores tracked` : ""}`
-    : `Live across ${visitorContinent} — click any country to zoom in`;
-  const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.continent === visitorContinent;
+    : `Live across ${activeContinent} — click any country to zoom in`;
+  const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.continent === activeContinent;
   const dimmed = (f: Feat) => view.level === "country" && f.iso2 !== view.id;
 
   // land is memoised so the ~175 country paths don't re-render on every spawn tick
@@ -171,14 +188,15 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
         <g style={{ transform: `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px) scale(${k.toFixed(3)})`, transformOrigin: "0 0", transition: reduced.current ? undefined : "transform 1.8s cubic-bezier(.66,0,.2,1)" }}>
           {land}
 
-          {/* globe: faint base pins everywhere that FLICKER, + sporadic bright sparks popping up */}
-          <g style={{ opacity: view.level === "world" ? 1 : 0, transition: "opacity .6s ease" }}>
+          {/* globe: faint base pins everywhere that FLICKER, + sporadic bright sparks popping up.
+              pointer-events none throughout so the decorations never swallow a country click. */}
+          <g style={{ opacity: view.level === "world" ? 1 : 0, transition: "opacity .6s ease", pointerEvents: "none" }}>
             {points.map(({ iso2 }, i) => { const f = geo.byIso[iso2]; if (!f) return null;
               return <circle key={`b${i}`} cx={f.cx} cy={f.cy} r={1.5 * invK} fill="var(--color-cyan)" className="lm-twinkle"
                 style={{ animationDelay: `${((i * 7) % 23) * 0.13}s`, animationDuration: `${1.3 + ((i * 5) % 7) * 0.3}s` }} />; })}
           </g>
           {view.level === "world" && pulses.map((p) => (
-            <g key={`p${p.id}`} transform={`translate(${p.cx},${p.cy}) scale(${invK})`}>
+            <g key={`p${p.id}`} transform={`translate(${p.cx},${p.cy}) scale(${invK})`} style={{ pointerEvents: "none" }}>
               <g className="lm-spark">
                 <circle r={2.5} fill="none" stroke="var(--color-mint)" strokeWidth={0.9} className="lm-ring1" />
                 <circle r={2.2} fill="var(--color-mint)" />
@@ -186,22 +204,25 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
             </g>
           ))}
 
-          {/* region/country: real store tiles (favicon + name + CMS + payment) popping in one at a time */}
-          {spawns.map((sp, i) => { const cms = CMS[sp.s.g]; const age = spawns.length - 1 - i; const pay = payOf(sp.s.c, sp.s.d);
+          {/* region/country: real store tiles — square cards (favicon + name + CMS + payment rails),
+              popping in one at a time. pointer-events none so they don't block drilling into countries. */}
+          {spawns.map((sp, i) => { const cms = CMS[sp.s.g]; const age = spawns.length - 1 - i; const pays = paysOf(sp.s.c, sp.s.d);
             return (
-              <g key={`${poolKey}-${sp.id}`} transform={`translate(${sp.pt.x},${sp.pt.y}) scale(${invK})`} style={{ opacity: Math.max(0.42, 1 - age * 0.05) }}>
+              <g key={`${poolKey}-${sp.id}`} transform={`translate(${sp.pt.x},${sp.pt.y}) scale(${invK})`} style={{ opacity: Math.max(0.45, 1 - age * 0.05), pointerEvents: "none" }}>
                 <g className="lm-pop">
                   <circle r={5} fill="none" stroke={cms.color} strokeWidth={1} className="lm-ring1" />
-                  <circle r={2} fill={cms.color} />
-                  <foreignObject x={7} y={-16} width={250} height={34}>
-                    <div className="flex w-fit items-center gap-1.5 rounded-lg border border-cream/15 bg-ink-deep/90 py-1 pl-1 pr-2 shadow-lg backdrop-blur">
-                      {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
-                      <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={14} height={14} referrerPolicy="no-referrer" className="shrink-0 rounded-sm" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
-                      <span className="max-w-[7rem] truncate text-[9px] font-medium leading-none text-cream/90">{decodeName(sp.s.n)}</span>
-                      <span className="flex shrink-0 items-center gap-1 border-l border-cream/15 pl-1.5 text-[8px] font-semibold leading-none" style={{ color: cms.color }}>
-                        <span className="h-1 w-1 rounded-full" style={{ background: cms.color }} />{cms.label}
-                      </span>
-                      <span className="shrink-0 text-[8px] leading-none text-cream/55">{pay}</span>
+                  <circle r={2.2} fill={cms.color} />
+                  <foreignObject x={8} y={-64} width={200} height={72} style={{ overflow: "visible" }}>
+                    <div className="w-[132px] rounded-xl border border-cream/15 bg-ink-deep/92 p-1.5 shadow-xl backdrop-blur">
+                      <div className="flex items-center gap-1.5">
+                        {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
+                        <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={15} height={15} referrerPolicy="no-referrer" className="shrink-0 rounded" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                        <span className="truncate text-[9px] font-semibold leading-tight text-cream/90">{decodeName(sp.s.n)}</span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span className="rounded px-1 py-0.5 text-[8px] font-semibold leading-none" style={{ background: `color-mix(in srgb, ${cms.color} 22%, transparent)`, color: cms.color }}>{cms.label}</span>
+                        {pays.map((p) => <span key={p} className="rounded bg-cream/10 px-1 py-0.5 text-[8px] leading-none text-cream/65">{p}</span>)}
+                      </div>
                     </div>
                   </foreignObject>
                 </g>
@@ -211,16 +232,24 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
         </g>
       </svg>
 
-      {/* overlay: caption + controls */}
+      {/* quick-jump chips — reach any region, or Japan, in one click (not just by hunting the globe) */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-1.5 p-4">
+        {CHIPS.map((c) => {
+          const active = c.level === "world" ? view.level === "world"
+            : c.level === "country" ? (view.level === "country" && view.id === c.id)
+            : (view.level === "region" && activeContinent === c.id);
+          return <button key={c.label} onClick={() => setView({ level: c.level, id: c.id })}
+            className={`pointer-events-auto rounded-full border px-3 py-1 text-xs backdrop-blur transition ${active ? "border-cyan/40 bg-cyan/15 text-cream" : "border-cream/12 bg-ink-deep/40 text-cream/55 hover:text-cream"}`}>{c.label}</button>;
+        })}
+      </div>
+
+      {/* overlay: caption + zoom-out */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 p-5">
         <div className="pointer-events-auto flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-mint">
           <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-70" /><span className="relative inline-flex h-2 w-2 rounded-full bg-mint" /></span>
           {caption}
         </div>
-        <div className="pointer-events-auto flex items-center gap-2">
-          {view.level !== "world" && <button onClick={back} className="rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">← Zoom out</button>}
-          {view.level === "world" && <button onClick={() => setView({ level: "region", id: null })} className="rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">Skip to {visitorContinent} →</button>}
-        </div>
+        {view.level !== "world" && <button onClick={back} className="pointer-events-auto shrink-0 rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">← Zoom out</button>}
       </div>
 
       <style>{`
