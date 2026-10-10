@@ -169,7 +169,7 @@ export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[];
   const [replayN, setReplayN] = useState(0);
   useEffect(() => {
     if (view.level === "world" || reduced.current) { setT(Ntl - 1); return; }
-    setT(0); let raf = 0, start = 0; const dur = 6500;
+    setT(0); let raf = 0, start = 0; const dur = 13000;   // replay length — slow enough to read the counts climb
     const tick = (now: number) => { if (!start) start = now; const p = Math.min(1, (now - start) / dur); setT(p * (Ntl - 1)); if (p < 1) raf = requestAnimationFrame(tick); };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
