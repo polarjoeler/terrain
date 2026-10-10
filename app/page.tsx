@@ -1,45 +1,18 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import { Wordmark } from "@/app/components/logo";
-import { cachedAgg } from "@/lib/agg-cache";
-import { africaTimeline, type AfricaTimeline } from "@/lib/africa-timeline";
-import SNAPSHOT from "@/lib/africa-timeline-snapshot.json";
 import WORLD_POINTS from "@/lib/world-points-snapshot.json";
 import WORLD_STORES from "@/lib/world-stores-snapshot.json";
-import { GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
+import GEO_TIMELINE from "@/lib/geo-timeline-snapshot.json";
 import { LiveMap } from "@/app/components/live-map";
 import { WhatWeDo, Capabilities, TechStrip, PlatformPreview, DigestByRole } from "@/app/components/home-sections";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
-// Cumulative tracked stores by CMS (Shopify / WooCommerce / Other), summed across all countries —
-// feeds the standalone growth chart under the map. Pure; runs server-side.
-function cmsCumulative(d: AfricaTimeline) {
-  const N = d.months.length; const shop = new Array(N).fill(0), woo = new Array(N).fill(0), rest = new Array(N).fill(0);
-  for (const g of Object.values(d.countries)) { let s = 0, w = 0, r = 0;
-    for (let i = 0; i < N; i++) { s += g.shopify[i] || 0; w += g.woo[i] || 0; r += g.rest[i] || 0; shop[i] += s; woo[i] += w; rest[i] += r; } }
-  return { shop, woo, rest };
-}
-
 export const metadata = { title: "Terrain — African eCommerce, coming to life" };
-// force-dynamic (not ISR): ISR prerenders at BUILD, which runs africaTimeline's DB aggregate during
-// every deploy and spikes the burstable instance → the "it breaks after each deploy" cycle. Dynamic
-// keeps this off the build path; at request time cachedAgg serves the warm/stale row fast.
+// force-dynamic: the page reads the visitor's region from request headers (x-vercel-ip-country) to aim
+// the map's fly-in. All map data (world outline, store samples, per-country/city time series) is
+// committed snapshots, so there's zero per-request DB work.
 export const dynamic = "force-dynamic";
-
-// Committed real snapshot (refreshed by the refresh-browse cron). The map NEVER renders blank — even on
-// a cold cache or a DB outage, we fall back to this instead of an empty state. See scripts/snapshot-africa.
-const SNAP = SNAPSHOT as unknown as AfricaTimeline;
-
-const SEGMENTS = [
-  ["🔬", "Researchers", "Clean, structured market data to cite and build on."],
-  ["🧭", "Freelancers & Consultants", "Win pitches with the whole landscape in one view."],
-  ["🏢", "Agencies", "Find prospects and prove the market to clients."],
-  ["📈", "Investors", "Size markets and spot momentum before it's obvious."],
-  ["💳", "Payment Providers", "See who's live, on what rails, and who to win."],
-  ["🧩", "App Builders", "Reach the right merchants with the right integrations."],
-  ["📦", "Shipping Providers", "Map demand and route into growing store clusters."],
-  ["🛍️", "Online Stores", "Benchmark against the market and find your edge."],
-];
 
 function Nav({ showJapan }: { showJapan: boolean }) {
   return (
@@ -49,7 +22,6 @@ function Nav({ showJapan }: { showJapan: boolean }) {
         <a href="#map" className="hover:text-cream">The map</a>
         <a href="#platform" className="hover:text-cream">Platform</a>
         <a href="#digest" className="hover:text-cream">Digest</a>
-        <a href="#who" className="hover:text-cream">Who it&apos;s for</a>
         {showJapan && <Link href="/japan" className="hover:text-cream">日本</Link>}
       </div>
       <a href="#join" className="shrink-0 whitespace-nowrap rounded-full bg-cyan px-5 py-2.5 text-sm font-medium text-cyan-deep transition hover:brightness-110">Join the list</a>
@@ -58,18 +30,10 @@ function Nav({ showJapan }: { showJapan: boolean }) {
 }
 
 export default async function Home() {
-  // force-dynamic renders per-request, so NEVER block on a cold aggregate: serve the warm cache if ready
-  // within 4s, otherwise fall back to the committed snapshot (real data, never blank). The cron keeps the
-  // live row warm; this race only guards the rare cold-key moment so the page is always instant.
-  const agg = cachedAgg("africa:timeline:v3", 30 * 60 * 1000, africaTimeline).catch(() => SNAP);
-  const data = await Promise.race([agg, new Promise<AfricaTimeline>((r) => setTimeout(() => r(SNAP), 4000))]);
-  const ready = data.months.length > 0;
-
-  // Zoom the global flight to the visitor's region (Vercel edge geo). Japan gets 日本; everyone else
-  // lands on Africa — the home market. No DB work: the world outline + store weights are committed.
+  // Aim the map's fly-in at the visitor's region (Vercel edge geo); show the 日本 switcher only for
+  // visitors from Japan. No DB work — every map input is a committed snapshot.
   const country = (await headers()).get("x-vercel-ip-country")?.toUpperCase() ?? "";
-  const showJapan = country === "JP";   // only surface the 日本 switcher for visitors from Japan
-  const cum = cmsCumulative(data);
+  const showJapan = country === "JP";
 
   return (
     <main className="pt-4">
@@ -90,23 +54,17 @@ export default async function Home() {
         </div>
       </header>
 
-      {/* one interactive map: globe → your continent → click a country to drill into its live stores */}
+      {/* one interactive map: globe → your region → click a country, with a ticking leaderboard + chart */}
       <section id="map" className="px-4 py-10">
-        <div className="mx-auto max-w-5xl">
+        <div className="mx-auto max-w-6xl">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-2">
             <div>
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Live from the field</span>
               <h2 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">Zoom into the market.</h2>
             </div>
-            <p className="max-w-xs text-sm text-cream/50">The globe flies into your region, then click any country to watch its real stores appear.</p>
+            <p className="max-w-xs text-sm text-cream/50">The globe flies into your region — pick any region or country and watch it grow, store by store.</p>
           </div>
-          {ready ? <LiveMap stores={WORLD_STORES as { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" }[]} points={WORLD_POINTS as { iso2: string; n: number }[]} country={country} /> : <p className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-8 text-sm text-cream/40">Map warming up…</p>}
-          {ready && (
-            <div className="mt-6">
-              <GrowthChart shopCum={cum.shop} wooCum={cum.woo} restCum={cum.rest} months={data.months}
-                showShop showWoo showRest prog={data.months.length - 1} lastRefresh={data.meta.lastRefresh} />
-            </div>
-          )}
+          <LiveMap stores={WORLD_STORES as { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" }[]} points={WORLD_POINTS as { iso2: string; n: number }[]} tl={GEO_TIMELINE as never} country={country} />
         </div>
       </section>
 
@@ -124,23 +82,6 @@ export default async function Home() {
 
       {/* every signal we read — the four capability bands */}
       <Capabilities />
-
-      {/* who it's for */}
-      <section id="who" className="px-4 py-8 pb-20">
-        <div className="mx-auto max-w-6xl">
-          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Who it&apos;s for</span>
-          <h2 className="mt-3 font-display text-4xl tracking-tight md:text-5xl">Built for the people who move the market.</h2>
-          <div className="mt-10 grid grid-cols-2 gap-3 md:grid-cols-4">
-            {SEGMENTS.map((s) => (
-              <div key={s[1]} className="rounded-2xl border border-cream/12 bg-cream/[0.02] p-5">
-                <span className="text-xl">{s[0]}</span>
-                <div className="mt-2 font-semibold text-cream">{s[1]}</div>
-                <div className="mt-1 text-[12.5px] text-cream/55">{s[2]}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
 
       <NewsletterCTA />
 

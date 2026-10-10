@@ -10,9 +10,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { geoMercator, geoPath } from "d3-geo";
 import world from "@/lib/geo/world.json";
-import { hash, mulberry32, decodeName } from "@/app/(app)/insights/africa/africa-replay";
+import { hash, mulberry32, decodeName, fmtMonth, GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
 
 type Store = { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" };
+type Timeline = { months: string[]; countries: Record<string, { s: number[]; w: number[]; r: number[] }>; cities: Record<string, Record<string, number[]>> };
 type Feat = { iso2: string; name: string; region: string; d: string; bbox: [number, number, number, number]; cx: number; cy: number; path: Path2D | null };
 type Level = "world" | "region" | "country";
 const W = 960, H = 620;
@@ -55,7 +56,7 @@ const CHIPS: { label: string; level: Level; id: string | null }[] = [
 
 let hitCtx: CanvasRenderingContext2D | null = null;
 
-export function LiveMap({ stores, points, country = "" }: { stores: Store[]; points: { iso2: string; n: number }[]; country?: string }) {
+export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[]; points: { iso2: string; n: number }[]; tl: Timeline; country?: string }) {
   const reduced = useRef(false);
   const [view, setView] = useState<{ level: Level; id: string | null }>({ level: "world", id: null });
 
@@ -162,19 +163,64 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.level, points, geo]);
 
+  // ---- timeline replay: counts tick up over time; the leaderboard + chart move in sync ----
+  const Ntl = tl.months.length;
+  const [t, setT] = useState(Ntl - 1);
+  const [replayN, setReplayN] = useState(0);
+  useEffect(() => {
+    if (view.level === "world" || reduced.current) { setT(Ntl - 1); return; }
+    setT(0); let raf = 0, start = 0; const dur = 6500;
+    const tick = (now: number) => { if (!start) start = now; const p = Math.min(1, (now - start) / dur); setT(p * (Ntl - 1)); if (p < 1) raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poolKey, replayN, Ntl]);
+  const mi = Math.max(0, Math.min(Ntl - 1, Math.floor(t)));
+  const frac = Math.min(1, t - mi);
+
+  // leaderboard entities: region → its countries; country → its top cities
+  const entities = useMemo(() => {
+    if (view.level === "country" && view.id) {
+      const cs = tl.cities[view.id]; if (!cs) return [] as { key: string; label: string; flag: string; monthly: number[] }[];
+      return Object.entries(cs).map(([name, monthly]) => ({ key: name, label: name, flag: "📍", monthly }));
+    }
+    const set = view.level === "region" ? new Set(regionSet) : null;
+    return Object.entries(tl.countries).filter(([iso2]) => !set || set.has(iso2))
+      .map(([iso2, o]) => ({ key: iso2, label: geo.byIso[iso2]?.name ?? iso2, flag: flagOf(iso2), monthly: o.s.map((v, i) => v + o.w[i] + o.r[i]) }));
+  }, [view, tl, regionSet, geo]);
+  const entityCum = useMemo(() => entities.map((e) => { const cum: number[] = []; let run = 0; for (let i = 0; i < e.monthly.length; i++) { run += e.monthly[i]; cum.push(run); } return { ...e, cum }; }), [entities]);
+
+  // scoped CMS cumulative for the chart below
+  const cms = useMemo(() => {
+    const s = new Array(Ntl).fill(0), w = new Array(Ntl).fill(0), r = new Array(Ntl).fill(0);
+    const add = (o: { s: number[]; w: number[]; r: number[] }) => { for (let i = 0; i < Ntl; i++) { s[i] += o.s[i] || 0; w[i] += o.w[i] || 0; r[i] += o.r[i] || 0; } };
+    if (view.level === "country" && view.id) { if (tl.countries[view.id]) add(tl.countries[view.id]); }
+    else { const set = view.level === "region" ? new Set(regionSet) : null; for (const [iso2, o] of Object.entries(tl.countries)) if (!set || set.has(iso2)) add(o); }
+    const cum = (a: number[]) => { let run = 0; return a.map((v) => (run += v)); };
+    return { shop: cum(s), woo: cum(w), rest: cum(r) };
+  }, [view, tl, regionSet, Ntl]);
+
+  const ranked = useMemo(() => entityCum.map((e) => {
+    const cur = e.cum[mi] + (mi < Ntl - 1 ? (e.cum[mi + 1] - e.cum[mi]) * frac : 0);
+    return { ...e, cur: Math.round(cur), m: e.cum[mi] - (mi > 0 ? e.cum[mi - 1] : 0) };
+  }).filter((e) => e.cur > 0).sort((a, b) => b.cur - a.cur), [entityCum, mi, frac, Ntl]);
+  const rankIndex = new Map(ranked.map((r, i) => [r.key, i]));
+  const atT = (a: number[]) => a[mi] + (mi < Ntl - 1 ? (a[mi + 1] - a[mi]) * frac : 0);
+  const scopeTotalAtT = Math.round(atT(cms.shop) + atT(cms.woo) + atT(cms.rest));
+  const chartProg = Math.round(t * 3) / 3;   // quantise so the chart repaints a few times/sec, not 60fps
+  const scopeName = view.level === "country" && view.id ? (geo.byIso[view.id]?.name ?? view.id) : activeContinent;
+
   const back = () => setView((v) => v.level === "country" ? { level: "region", id: regionOf(v.id ?? "") || visitorContinent } : { level: "world", id: null });
   // any country with sampled data is selectable from anywhere — click Japan (or anywhere) on the globe
   const clickCountry = (iso2: string) => { if (hasData(iso2)) setView({ level: "country", id: iso2 }); };
 
-  const total = (iso2: string) => totalByIso[iso2] ?? storesByCountry[iso2]?.length ?? 0;
-  // live counters: a regional total + country count at region level, a store total at country level
-  const regionTotal = useMemo(() => regionSet.reduce((a, i) => a + (totalByIso[i] ?? 0), 0), [regionSet, totalByIso]);
-  const regionCountries = useMemo(() => regionSet.filter((i) => !!storesByCountry[i]?.length).length, [regionSet, storesByCountry]);
   const status = view.level === "world" ? "Scanning the globe…"
     : view.level === "country" && view.id ? `${flagOf(view.id)} ${geo.byIso[view.id]?.name ?? view.id}`
     : `Live across ${activeContinent}`;
-  const counter = view.level === "country" && view.id ? (total(view.id) ? `${total(view.id).toLocaleString()} stores tracked` : "")
-    : view.level === "region" ? `${regionTotal.toLocaleString()} stores · ${regionCountries} countries` : "";
+  // ticks up as the replay plays, with the month it has reached
+  const counter = view.level === "world" ? ""
+    : view.level === "country" ? `${scopeTotalAtT.toLocaleString()} stores · ${fmtMonth(tl.months[mi])}`
+    : `${scopeTotalAtT.toLocaleString()} stores · ${ranked.length} countries · ${fmtMonth(tl.months[mi])}`;
   const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.region === activeContinent;
   const dimmed = (f: Feat) => view.level === "country" && f.iso2 !== view.id;
 
@@ -190,7 +236,9 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   }), [geo, view, visitorContinent, invK]);
 
   return (
-    <div className="relative overflow-hidden rounded-[2rem] border border-cream/12 bg-[radial-gradient(130%_120%_at_50%_0%,color-mix(in_srgb,var(--color-cyan)_8%,transparent),transparent_60%)]">
+    <div>
+    <div className={view.level === "world" ? "" : "grid gap-4 lg:grid-cols-[1fr_15rem]"}>
+      <div className="relative overflow-hidden rounded-[2rem] border border-cream/12 bg-[radial-gradient(130%_120%_at_50%_0%,color-mix(in_srgb,var(--color-cyan)_8%,transparent),transparent_60%)]">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Interactive world map of tracked eCommerce stores">
         <g style={{ transform: `translate(${tx.toFixed(2)}px,${ty.toFixed(2)}px) scale(${k.toFixed(3)})`, transformOrigin: "0 0", transition: reduced.current ? undefined : "transform 1.8s cubic-bezier(.66,0,.2,1)" }}>
           {land}
@@ -261,6 +309,47 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
         </div>
         {view.level !== "world" && <button onClick={back} className="pointer-events-auto shrink-0 rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">← Zoom out</button>}
       </div>
+      </div>
+
+      {/* scoped, ticking leaderboard — countries in the region, cities in a country, moving over time */}
+      {view.level !== "world" && (
+        <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-4">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-cream/50">{view.level === "country" ? "By city" : "By country"}</h3>
+            <button onClick={() => setReplayN((n) => n + 1)} className="rounded-full border border-cream/15 px-2.5 py-0.5 text-[10px] text-cream/55 transition hover:text-cream">↻ Replay</button>
+          </div>
+          {ranked.length ? (
+            <div className="relative" style={{ height: 28 * Math.min(14, ranked.length) }}>
+              {ranked.map((e) => { const idx = rankIndex.get(e.key)!; const vis = idx < 14;
+                return (
+                  <div key={e.key} className="absolute inset-x-0 flex items-center justify-between gap-2 rounded-lg px-1.5"
+                    style={{ top: idx * 28, height: 24, transition: "top .5s cubic-bezier(.4,0,.2,1), opacity .4s", opacity: vis ? 1 : 0 }}>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="w-3.5 shrink-0 text-right text-[10px] text-cream/30 tabular-nums">{idx + 1}</span>
+                      <span className="shrink-0 text-sm leading-none">{e.flag}</span>
+                      <span className="truncate text-[12.5px] text-cream/85">{e.label}</span>
+                    </span>
+                    <span className="flex shrink-0 items-baseline gap-1.5 tabular-nums">
+                      <span className="text-[12.5px] text-cream/70">{e.cur.toLocaleString()}</span>
+                      {e.m > 0 && <span className="text-[10px] text-mint">+{e.m}</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <p className="py-6 text-center text-[12px] text-cream/40">No city breakdown yet for this country.</p>}
+          <p className="mt-3 text-[10px] leading-relaxed text-cream/35">Cumulative by launch date{view.level === "country" ? " · top cities" : ""}. Africa is deepest; other regions fill in as coverage widens.</p>
+        </div>
+      )}
+    </div>
+
+      {/* the growth chart, scoped to the current view and driven by the same replay clock */}
+      {view.level !== "world" && (
+        <div className="mt-4">
+          <GrowthChart shopCum={cms.shop} wooCum={cms.woo} restCum={cms.rest} months={tl.months}
+            showShop showWoo showRest prog={chartProg} lastRefresh={null} scope={scopeName} scopeAdj={scopeName} />
+        </div>
+      )}
 
       <style>{`
         .lm-twinkle { animation: lm-twinkle 2s ease-in-out infinite; }
