@@ -384,6 +384,10 @@ export const GrowthChart = memo(function GrowthChart(
 ) {
   const N = months.length, cw = 1000, ch = 160, padB = 18;
   const rest = restCum ?? new Array(N).fill(0);
+  // final-month shares for the legend — surfaces how small (or large) each slice really is
+  const fShop = shopCum[N - 1] || 0, fWoo = wooCum[N - 1] || 0, fRest = rest[N - 1] || 0;
+  const shareTot = Math.max(1, (showShop ? fShop : 0) + (showWoo ? fWoo : 0) + (showRest ? fRest : 0));
+  const pct = (v: number) => { const p = (100 * v) / shareTot; return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`; };
   const top = new Array(N); for (let i = 0; i < N; i++) top[i] = (showShop ? shopCum[i] : 0) + (showWoo ? wooCum[i] : 0) + (showRest ? rest[i] : 0);
   const maxY = Math.max(1, top[N - 1]);
   const xs = (i: number) => (i / (N - 1)) * cw;
@@ -416,9 +420,9 @@ export const GrowthChart = memo(function GrowthChart(
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-cream/50">{lang === "ja" ? `CMS別の累計追跡店舗数 · ${scope === "Japan" ? "日本" : scope}` : `Cumulative tracked stores by CMS · ${scope}`}</h2>
         <div className="flex items-center gap-3 text-[11px]">
-          {showShop && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-mint)" }} /> Shopify</span>}
-          {showWoo && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-lilac)" }} /> WooCommerce</span>}
-          {showRest && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-orange)" }} /> Other CMS</span>}
+          {showShop && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-mint)" }} /> Shopify <span className="text-cream/35 tabular-nums">{pct(fShop)}</span></span>}
+          {showWoo && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-lilac)" }} /> WooCommerce <span className="text-cream/35 tabular-nums">{pct(fWoo)}</span></span>}
+          {showRest && <span className="flex items-center gap-1.5 text-cream/55"><span className="h-2 w-2 rounded-full" style={{ background: "var(--color-orange)" }} /> Other CMS <span className="text-cream/35 tabular-nums">{pct(fRest)}</span></span>}
           <span className="font-display text-xl text-cream tabular-nums">{Math.round(curVal).toLocaleString()}</span>
         </div>
       </div>

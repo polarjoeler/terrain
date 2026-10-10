@@ -317,7 +317,14 @@ const DESTINATIONS = [
   { file: "slack.svg", name: "Slack", line: "New-store and switch alerts in your channel." },
   { file: "whatsapp.svg", name: "WhatsApp", line: "Hot leads straight to your phone." },
 ];
-const CRMS = [{ file: "hubspot.svg", name: "HubSpot" }, { file: "salesforce.svg", name: "Salesforce" }, { file: "zoho.svg", name: "Zoho" }];
+// Pipedrive & Apollo aren't in the open icon set — wordmark until their official SVG lands in /public/logos/integrations.
+const CRMS: { name: string; file?: string }[] = [
+  { name: "HubSpot", file: "hubspot.svg" },
+  { name: "Salesforce", file: "salesforce.svg" },
+  { name: "Pipedrive" },
+  { name: "Apollo" },
+  { name: "Zoho", file: "zoho.svg" },
+];
 
 /** Preview of the product + the integrations that get leads into the user's workflow. */
 export function PlatformPreview() {
@@ -343,8 +350,10 @@ export function PlatformPreview() {
             </div>
             <div className="mt-6 border-t border-cream/10 pt-5">
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-cream/40">…and sync to your CRM</div>
-              <div className="mt-3 flex items-center gap-5">
-                {CRMS.map((c) => <Mark key={c.name} src={`/logos/integrations/${c.file}`} name={c.name} size="h-6 w-6" tint="bg-cream/55" />)}
+              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3">
+                {CRMS.map((c) => c.file
+                  ? <Mark key={c.name} src={`/logos/integrations/${c.file}`} name={c.name} size="h-6 w-6" tint="bg-cream/55" />
+                  : <span key={c.name} title={c.name} className="font-display text-sm font-semibold text-cream/45">{c.name}</span>)}
               </div>
             </div>
           </div>

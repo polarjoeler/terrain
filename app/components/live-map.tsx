@@ -167,9 +167,14 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   const clickCountry = (iso2: string) => { if (hasData(iso2)) setView({ level: "country", id: iso2 }); };
 
   const total = (iso2: string) => totalByIso[iso2] ?? storesByCountry[iso2]?.length ?? 0;
-  const caption = view.level === "world" ? "Scanning the globe…"
-    : view.level === "country" && view.id ? `${flagOf(view.id)} ${geo.byIso[view.id]?.name ?? view.id}${total(view.id) ? ` — ${total(view.id).toLocaleString()} stores tracked` : ""}`
-    : `Live across ${activeContinent} — click any country to zoom in`;
+  // live counters: a regional total + country count at region level, a store total at country level
+  const regionTotal = useMemo(() => regionSet.reduce((a, i) => a + (totalByIso[i] ?? 0), 0), [regionSet, totalByIso]);
+  const regionCountries = useMemo(() => regionSet.filter((i) => !!storesByCountry[i]?.length).length, [regionSet, storesByCountry]);
+  const status = view.level === "world" ? "Scanning the globe…"
+    : view.level === "country" && view.id ? `${flagOf(view.id)} ${geo.byIso[view.id]?.name ?? view.id}`
+    : `Live across ${activeContinent}`;
+  const counter = view.level === "country" && view.id ? (total(view.id) ? `${total(view.id).toLocaleString()} stores tracked` : "")
+    : view.level === "region" ? `${regionTotal.toLocaleString()} stores · ${regionCountries} countries` : "";
   const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.region === activeContinent;
   const dimmed = (f: Feat) => view.level === "country" && f.iso2 !== view.id;
 
@@ -212,18 +217,18 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
             return (
               <g key={`${poolKey}-${sp.id}`} transform={`translate(${sp.pt.x},${sp.pt.y}) scale(${invK})`} style={{ opacity: Math.max(0.45, 1 - age * 0.05), pointerEvents: "none" }}>
                 <g className="lm-pop">
-                  <circle r={5} fill="none" stroke={cms.color} strokeWidth={1} className="lm-ring1" />
-                  <circle r={2.2} fill={cms.color} />
-                  <foreignObject x={8} y={-64} width={200} height={72} style={{ overflow: "visible" }}>
-                    <div className="w-[132px] rounded-xl border border-cream/15 bg-ink-deep/92 p-1.5 shadow-xl backdrop-blur">
-                      <div className="flex items-center gap-1.5">
+                  <circle r={4} fill="none" stroke={cms.color} strokeWidth={1} className="lm-ring1" />
+                  <circle r={1.9} fill={cms.color} />
+                  <foreignObject x={6} y={-54} width={180} height={60} style={{ overflow: "visible" }}>
+                    <div className="w-[108px] rounded-lg border border-cream/15 bg-ink-deep/92 p-1 shadow-xl backdrop-blur">
+                      <div className="flex items-center gap-1">
                         {/* eslint-disable-next-line @next/next/no-img-element -- external favicon service */}
-                        <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={15} height={15} referrerPolicy="no-referrer" className="shrink-0 rounded" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
-                        <span className="truncate text-[9px] font-semibold leading-tight text-cream/90">{decodeName(sp.s.n)}</span>
+                        <img src={`https://www.google.com/s2/favicons?domain=${sp.s.d}&sz=32`} alt="" width={12} height={12} referrerPolicy="no-referrer" className="shrink-0 rounded-sm" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                        <span className="truncate text-[8.5px] font-semibold leading-tight text-cream/90">{decodeName(sp.s.n)}</span>
                       </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                        <span className="rounded px-1 py-0.5 text-[8px] font-semibold leading-none" style={{ background: `color-mix(in srgb, ${cms.color} 22%, transparent)`, color: cms.color }}>{cms.label}</span>
-                        {pays.map((p) => <span key={p} className="rounded bg-cream/10 px-1 py-0.5 text-[8px] leading-none text-cream/65">{p}</span>)}
+                      <div className="mt-1 flex flex-wrap items-center gap-0.5">
+                        <span className="rounded px-1 py-px text-[7.5px] font-semibold leading-none" style={{ background: `color-mix(in srgb, ${cms.color} 22%, transparent)`, color: cms.color }}>{cms.label}</span>
+                        {pays.map((p) => <span key={p} className="rounded bg-cream/10 px-1 py-px text-[7.5px] leading-none text-cream/65">{p}</span>)}
                       </div>
                     </div>
                   </foreignObject>
@@ -247,9 +252,12 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
 
       {/* overlay: caption + zoom-out */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 p-5">
-        <div className="pointer-events-auto flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-mint">
-          <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-70" /><span className="relative inline-flex h-2 w-2 rounded-full bg-mint" /></span>
-          {caption}
+        <div className="pointer-events-auto">
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-mint">
+            <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-70" /><span className="relative inline-flex h-2 w-2 rounded-full bg-mint" /></span>
+            {status}
+          </div>
+          {counter && <div className="mt-1 font-display text-lg leading-none text-cream tabular-nums">{counter}</div>}
         </div>
         {view.level !== "world" && <button onClick={back} className="pointer-events-auto shrink-0 rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">← Zoom out</button>}
       </div>
