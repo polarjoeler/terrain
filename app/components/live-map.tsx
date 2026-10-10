@@ -320,14 +320,15 @@ export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[];
           </div>
           {ranked.length ? (
             <div className="relative" style={{ height: 28 * Math.min(14, ranked.length) }}>
-              {ranked.map((e) => { const idx = rankIndex.get(e.key)!; const vis = idx < 14;
+              {ranked.map((e) => { const idx = rankIndex.get(e.key)!; const vis = idx < 14; const rc = view.level === "region" && hasData(e.key);
                 return (
-                  <div key={e.key} className="absolute inset-x-0 flex items-center justify-between gap-2 rounded-lg px-1.5"
+                  <div key={e.key} onClick={rc ? () => clickCountry(e.key) : undefined} title={rc ? `Zoom into ${e.label}` : undefined}
+                    className={`absolute inset-x-0 flex items-center justify-between gap-2 rounded-lg px-1.5 ${rc ? "cursor-pointer hover:bg-cream/[0.06]" : ""}`}
                     style={{ top: idx * 28, height: 24, transition: "top .5s cubic-bezier(.4,0,.2,1), opacity .4s", opacity: vis ? 1 : 0 }}>
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className="w-3.5 shrink-0 text-right text-[10px] text-cream/30 tabular-nums">{idx + 1}</span>
                       <span className="shrink-0 text-sm leading-none">{e.flag}</span>
-                      <span className="truncate text-[12.5px] text-cream/85">{e.label}</span>
+                      <span className={`truncate text-[12.5px] ${rc ? "text-cream/85 group-hover:text-cream" : "text-cream/85"}`}>{e.label}</span>
                     </span>
                     <span className="flex shrink-0 items-baseline gap-1.5 tabular-nums">
                       <span className="text-[12.5px] text-cream/70">{e.cur.toLocaleString()}</span>
