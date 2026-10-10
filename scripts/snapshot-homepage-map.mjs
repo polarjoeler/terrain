@@ -21,6 +21,26 @@ const alias = (c) => ALIAS[c] ?? c;
 const grp = (p) => { p = (p || "").toLowerCase(); return p === "woocommerce" ? "woo" : (p === "" || p === "shopify" ? "shopify" : "rest"); };
 const sizeKB = (f) => (statSync(f).size / 1024).toFixed(0) + "KB";
 
+// City names are messy in non-ZA markets (sub-localities, Arabic/English dupes, case). Collapse known
+// neighbourhoods into their city, drop stray non-English entries, title-case the rest. Low-count foreign
+// noise ("Fort Worth" in KE) is handled by the >=3 floor below.
+const CITY_ALIAS = {
+  KE: { "city centre sublocation": "Nairobi", "kilimani": "Nairobi", "kilimani division": "Nairobi", "karen": "Nairobi", "karen ward": "Nairobi", "karen hardy": "Nairobi", "highridge division": "Nairobi", "highridge": "Nairobi", "mugumo-ini ward": "Nairobi", "westlands": "Nairobi", "parklands": "Nairobi", "lavington": "Nairobi", "kileleshwa": "Nairobi", "runda": "Nairobi", "langata": "Nairobi", "embakasi": "Nairobi", "cbd": "Nairobi", "upper hill": "Nairobi", "upperhill": "Nairobi", "ngong road": "Nairobi", "nairobi city": "Nairobi" },
+  NG: { "lekki": "Lagos", "ikeja": "Lagos", "victoria island": "Lagos", "vi": "Lagos", "ikoyi": "Lagos", "somolu": "Lagos", "shomolu": "Lagos", "yaba": "Lagos", "surulere": "Lagos", "ajah": "Lagos", "lagos island": "Lagos", "gbagada": "Lagos", "maryland": "Lagos", "oshodi": "Lagos", "apapa": "Lagos", "ikorodu": "Lagos", "wuse": "Abuja", "wuse 2": "Abuja", "gwarinpa": "Abuja", "garki": "Abuja", "maitama": "Abuja", "asokoro": "Abuja", "kubwa": "Abuja", "lugbe": "Abuja", "jabi": "Abuja", "utako": "Abuja", "central business district": "Abuja" },
+  EG: { "القاهرة": "Cairo", "cairo": "Cairo", "بولاق": "Cairo", "باب اللوق": "Cairo", "الموسكى": "Cairo", "مدينة نصر": "Cairo", "nasr city": "Cairo", "new cairo": "Cairo", "new cairo 1": "Cairo", "el nozha": "Cairo", "heliopolis": "Cairo", "مصر الجديدة": "Cairo", "maadi": "Cairo", "المعادي": "Cairo", "zamalek": "Cairo", "الزمالك": "Cairo", "6th of october": "Cairo", "6 october": "Cairo", "6th of october city": "Cairo", "shubra": "Cairo", "shubra el kheima": "Cairo", "el mokattam": "Cairo", "obour": "Cairo", "madinaty": "Cairo", "sheikh zayed": "Cairo", "sheikh zayed city": "Cairo", "الإسكندرية": "Alexandria", "alex": "Alexandria", "الجيزة": "Giza", "giza": "Giza", "al giza": "Giza" },
+  GH: { "awudome estates": "Accra", "greater accra region": "Accra", "greater accra": "Accra", "east legon": "Accra", "labadi, accra": "Accra", "labadi": "Accra", "ministries": "Accra", "south industrial area": "Accra", "osu": "Accra", "cantonments": "Accra", "airport residential": "Accra", "spintex": "Accra", "dansoman": "Accra", "adabraka": "Accra" },
+};
+// obvious non-African cities that show up misattributed (store country is African, city isn't) — drop them
+const FOREIGN = new Set(["london", "paris", "new york city", "new york", "los angeles", "chicago", "st albans", "newark", "birmingham", "manchester", "dublin", "amsterdam", "berlin", "madrid", "rome", "sydney", "toronto", "fort worth", "claymont", "jackson", "chatsworth", "clifton", "hanover", "colonia", "mountain view", "first avenue", "villeneuve d ascq"]);
+const titleCaseAscii = (s) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+function cleanCity(country, city) {
+  const s = (city || "").trim(); if (!s) return "";
+  const low = s.toLowerCase().replace(/\s+/g, " ");
+  const m = CITY_ALIAS[country];
+  const out = m && m[low] ? m[low] : (/[^\x00-\x7F]/.test(s) ? "" : titleCaseAscii(low));   // drop unmapped non-ASCII
+  return out && FOREIGN.has(out.toLowerCase()) ? "" : out;                                   // drop foreign noise
+}
+
 try {
   // ── 1) world-points: top 90 countries by live store count ──────────────────────────────────────
   const pRows = await sql`
@@ -75,10 +95,11 @@ try {
     WHERE published AND launched_at >= '2015-01-01' AND country = ANY(${FOCUS_CITY}) AND city IS NOT NULL AND btrim(city) <> '' AND ${LIVE}
     GROUP BY 1,2,3`;
   const cityAgg = {};
-  for (const r of cityRows) { const i = mi[r.m]; if (i == null) continue; ((cityAgg[r.c] ??= {})[r.city] ??= Array(N).fill(0))[i] += r.n; }
+  for (const r of cityRows) { const i = mi[r.m]; if (i == null) continue; const name = cleanCity(r.c, r.city); if (!name) continue; ((cityAgg[r.c] ??= {})[name] ??= Array(N).fill(0))[i] += r.n; }
   const cities = {};
   for (const [c, obj] of Object.entries(cityAgg)) {
-    const tops = Object.entries(obj).map(([city, arr]) => [city, arr, arr.reduce((a, b) => a + b, 0)]).sort((a, b) => b[2] - a[2]).slice(0, 12);
+    const tops = Object.entries(obj).map(([city, arr]) => [city, arr, arr.reduce((a, b) => a + b, 0)])
+      .filter(([, , total]) => total >= 3).sort((a, b) => b[2] - a[2]).slice(0, 12);          // drop tiny/noise cities
     cities[c] = Object.fromEntries(tops.map(([city, arr]) => [city, arr]));
   }
   writeFileSync("lib/geo-timeline-snapshot.json", JSON.stringify({ months, countries, cities }));
