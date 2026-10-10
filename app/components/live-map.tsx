@@ -1,6 +1,6 @@
 "use client";
 /** One continuous, interactive, worldwide map. On the globe, store lights pop up sporadically across
- *  the world; it flies into the visitor's continent, where real store tiles (with their CMS) spawn
+ *  the world; it flies into the visitor's region, where real store tiles (with their CMS) spawn
  *  organically in-country; click any country to zoom in and watch its live stores appear the same way.
  *  Works for any country with sampled data — Africa, Japan, Europe, the Americas, …
  *
@@ -13,7 +13,7 @@ import world from "@/lib/geo/world.json";
 import { hash, mulberry32, decodeName } from "@/app/(app)/insights/africa/africa-replay";
 
 type Store = { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" };
-type Feat = { iso2: string; name: string; continent: string; d: string; bbox: [number, number, number, number]; cx: number; cy: number; path: Path2D | null };
+type Feat = { iso2: string; name: string; region: string; d: string; bbox: [number, number, number, number]; cx: number; cy: number; path: Path2D | null };
 type Level = "world" | "region" | "country";
 const W = 960, H = 620;
 
@@ -40,15 +40,17 @@ const PAY_DEF = ["Stripe", "PayPal", "Shop Pay"];
 // 1–2 deterministic rails per store
 const paysOf = (c: string, domain: string) => { const list = PAY[c] ?? PAY_DEF; const h = hash(domain); const a = list[h % list.length], b = list[(h >> 4) % list.length]; return a === b ? [a] : [a, b]; };
 
-// quick-jump chips so every region (and Japan) is reachable in one click — not just by hunting a tiny
-// country on the globe
+// quick-jump chips so every region is reachable in one click (then click a country inside it to drill
+// in — e.g. Asia → Japan). Region ids match the `region` property baked into the world outline.
 const CHIPS: { label: string; level: Level; id: string | null }[] = [
   { label: "🌍 Globe", level: "world", id: null },
-  { label: "Africa", level: "region", id: "Africa" },
+  { label: "North America", level: "region", id: "North America" },
+  { label: "South America", level: "region", id: "South America" },
   { label: "Europe", level: "region", id: "Europe" },
+  { label: "Middle East", level: "region", id: "Middle East" },
+  { label: "Africa", level: "region", id: "Africa" },
   { label: "Asia", level: "region", id: "Asia" },
-  { label: "Americas", level: "region", id: "Americas" },
-  { label: "🇯🇵 Japan", level: "country", id: "JP" },
+  { label: "South Pacific", level: "region", id: "South Pacific" },
 ];
 
 let hitCtx: CanvasRenderingContext2D | null = null;
@@ -59,7 +61,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
 
   // ---- geometry: one world Mercator; per-country path, bounds, centroid, hit-test shape ----
   const geo = useMemo(() => {
-    const fc = (world as unknown as { features: { properties: { iso2?: string; name: string; continent?: string }; geometry: unknown }[] }).features;
+    const fc = (world as unknown as { features: { properties: { iso2?: string; name: string; region?: string }; geometry: unknown }[] }).features;
     const projection = geoMercator().fitExtent([[6, 6], [W - 6, H - 6]], world as never);
     const gp = geoPath(projection as never).digits(2);
     const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -67,7 +69,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
     for (const f of fc) {
       const d = gp(f as never) || ""; if (!d) continue;
       const b = gp.bounds(f as never); const c = gp.centroid(f as never);
-      feats.push({ iso2: f.properties.iso2 ?? "", name: f.properties.name, continent: f.properties.continent ?? "", d,
+      feats.push({ iso2: f.properties.iso2 ?? "", name: f.properties.name, region: f.properties.region ?? "", d,
         bbox: [b[0][0], b[0][1], b[1][0], b[1][1]], cx: r2(c[0]), cy: r2(c[1]), path: typeof Path2D !== "undefined" ? new Path2D(d) : null });
     }
     const byIso: Record<string, Feat> = {}; for (const f of feats) if (f.iso2) byIso[f.iso2] = f;
@@ -76,12 +78,12 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
 
   const totalByIso = useMemo(() => { const m: Record<string, number> = {}; for (const p of points) m[p.iso2] = p.n; return m; }, [points]);
   const storesByCountry = useMemo(() => { const m: Record<string, Store[]> = {}; for (const s of stores) (m[s.c] ??= []).push(s); return m; }, [stores]);
-  const visitorContinent = geo.byIso[country]?.continent || "Africa";
-  const continentOf = (iso2: string) => geo.byIso[iso2]?.continent || "";
+  const visitorContinent = geo.byIso[country]?.region || "Africa";
+  const regionOf = (iso2: string) => geo.byIso[iso2]?.region || "";
   const hasData = (iso2: string) => !!storesByCountry[iso2]?.length && !!geo.byIso[iso2];
-  // the continent in focus: the region we're viewing, the home of the country we drilled into, or the
-  // visitor's own continent on the globe. `view.id` carries the continent name at region level.
-  const activeContinent = view.level === "country" && view.id ? (continentOf(view.id) || visitorContinent)
+  // the region in focus: the region we're viewing, the home of the country we drilled into, or the
+  // visitor's own region on the globe. `view.id` carries the region name at region level.
+  const activeContinent = view.level === "country" && view.id ? (regionOf(view.id) || visitorContinent)
     : view.level === "region" && view.id ? view.id : visitorContinent;
 
   // deterministic in-country point placement (own cache; must not share AfricaReplay's projection cache)
@@ -97,7 +99,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   };
 
   // ---- fly target for the current view ----
-  const regionSet = useMemo(() => geo.feats.filter((f) => f.continent === activeContinent).map((f) => f.iso2), [geo, activeContinent]);
+  const regionSet = useMemo(() => geo.feats.filter((f) => f.region === activeContinent).map((f) => f.iso2), [geo, activeContinent]);
   const target = useMemo(() => {
     const boundsOf = (isos: string[]) => { const fs = isos.map((i) => geo.byIso[i]).filter(Boolean) as Feat[]; if (!fs.length) return { x0: 0, y0: 0, x1: W, y1: H };
       return { x0: Math.min(...fs.map((f) => f.bbox[0])), y0: Math.min(...fs.map((f) => f.bbox[1])), x1: Math.max(...fs.map((f) => f.bbox[2])), y1: Math.max(...fs.map((f) => f.bbox[3])) }; };
@@ -112,7 +114,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   }, [target]);
   const invK = 1 / k;
 
-  // ---- auto intro: globe → the visitor's continent ----
+  // ---- auto intro: globe → the visitor's region ----
   useEffect(() => {
     reduced.current = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (reduced.current) { setView({ level: "region", id: visitorContinent }); return; }
@@ -125,7 +127,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   const poolKey = view.level + "|" + (view.id ?? visitorContinent);
   const pool = useMemo(() => {
     if (view.level === "country" && view.id) return storesByCountry[view.id] ?? [];
-    if (view.level === "region") return stores.filter((s) => geo.byIso[s.c]?.continent === activeContinent);
+    if (view.level === "region") return stores.filter((s) => geo.byIso[s.c]?.region === activeContinent);
     return [];
   }, [view, stores, storesByCountry, geo, visitorContinent]);
   useEffect(() => {
@@ -160,7 +162,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.level, points, geo]);
 
-  const back = () => setView((v) => v.level === "country" ? { level: "region", id: continentOf(v.id ?? "") || visitorContinent } : { level: "world", id: null });
+  const back = () => setView((v) => v.level === "country" ? { level: "region", id: regionOf(v.id ?? "") || visitorContinent } : { level: "world", id: null });
   // any country with sampled data is selectable from anywhere — click Japan (or anywhere) on the globe
   const clickCountry = (iso2: string) => { if (hasData(iso2)) setView({ level: "country", id: iso2 }); };
 
@@ -168,7 +170,7 @@ export function LiveMap({ stores, points, country = "" }: { stores: Store[]; poi
   const caption = view.level === "world" ? "Scanning the globe…"
     : view.level === "country" && view.id ? `${flagOf(view.id)} ${geo.byIso[view.id]?.name ?? view.id}${total(view.id) ? ` — ${total(view.id).toLocaleString()} stores tracked` : ""}`
     : `Live across ${activeContinent} — click any country to zoom in`;
-  const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.continent === activeContinent;
+  const isFocus = (f: Feat) => view.level === "country" ? f.iso2 === view.id : f.region === activeContinent;
   const dimmed = (f: Feat) => view.level === "country" && f.iso2 !== view.id;
 
   // land is memoised so the ~175 country paths don't re-render on every spawn tick

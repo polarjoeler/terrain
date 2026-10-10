@@ -130,14 +130,30 @@ const BANDS: Band[] = [
     body: "Platform, theme, apps, shipping — and the payment rails merchants actually choose at checkout, ranked by adoption and tracked as they rise and fall across each market." },
 ];
 
+/** The umbrella intro — "What Terrain does" — framing everything below it: the lead dashboard and
+ *  integrations, the role-based digest, and the market signals we read. */
+export function WhatWeDo() {
+  return (
+    <section id="what" className="px-4 pt-20 pb-4">
+      <div className="mx-auto max-w-6xl">
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">What Terrain does</span>
+        <h2 className="mt-3 max-w-3xl font-display text-4xl tracking-tight md:text-5xl">One market — turned into leads, intelligence and a weekly digest.</h2>
+        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-cream/60">
+          We read every store on the continent — the platform it&apos;s built on, the payments and tech it runs, the group it belongs to, the clones chasing it, and every migration — then hand it to you three ways: a live <span className="text-cream/80">lead dashboard</span> you can push into Sheets, your CRM, Slack or WhatsApp; the <span className="text-cream/80">market intelligence</span> behind it; and a <span className="text-cream/80">weekly digest</span> tuned to your role.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 /** The capability rhythm: alternating text / visual bands, same shape each time. */
 export function Capabilities() {
   return (
-    <section id="capabilities" className="px-4 py-20">
+    <section id="capabilities" className="px-4 pb-20 pt-8">
       <div className="mx-auto max-w-6xl">
-        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">What Terrain does</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan">Every signal we read</span>
         <h2 className="mt-3 max-w-2xl font-display text-4xl tracking-tight md:text-5xl">The whole market, read four ways.</h2>
-        <p className="mt-3 max-w-xl text-cream/55">Every store, what it&apos;s built with, who it pays, and how it moves — turned into intelligence you can act on.</p>
+        <p className="mt-3 max-w-xl text-cream/55">Under every lead sits the full picture — what a store is built with, who it pays, the group it belongs to, and the clones chasing it.</p>
 
         <div className="mt-14 flex flex-col gap-16 md:gap-24">
           {BANDS.map((b, i) => (

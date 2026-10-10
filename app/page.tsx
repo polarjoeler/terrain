@@ -8,7 +8,7 @@ import WORLD_POINTS from "@/lib/world-points-snapshot.json";
 import WORLD_STORES from "@/lib/world-stores-snapshot.json";
 import { GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
 import { LiveMap } from "@/app/components/live-map";
-import { Capabilities, TechStrip, PlatformPreview, DigestByRole } from "@/app/components/home-sections";
+import { WhatWeDo, Capabilities, TechStrip, PlatformPreview, DigestByRole } from "@/app/components/home-sections";
 import { NewsletterCTA } from "@/app/components/newsletter-cta";
 
 // Cumulative tracked stores by CMS (Shopify / WooCommerce / Other), summed across all countries —
@@ -113,14 +113,17 @@ export default async function Home() {
       {/* what we read — the CMS credibility band, with official platform marks */}
       <TechStrip />
 
-      {/* what Terrain does — the product, as a calm four-band rhythm */}
-      <Capabilities />
+      {/* what Terrain does — umbrella intro framing everything below (dashboard, digest, signals) */}
+      <WhatWeDo />
 
       {/* the platform — the Overview/lead dashboard + pushing leads into Sheets, CRM, Slack, WhatsApp */}
       <PlatformPreview />
 
       {/* the weekly digest — the paid payoff, tailored per role */}
       <DigestByRole />
+
+      {/* every signal we read — the four capability bands */}
+      <Capabilities />
 
       {/* who it's for */}
       <section id="who" className="px-4 py-8 pb-20">
