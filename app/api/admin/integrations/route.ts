@@ -5,13 +5,13 @@ import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
 import {
   setConnection, updateConfig, deleteConnection, verifyKey, listCampaigns,
-  type ProviderKey,
+  PROVIDERS, type ProviderKey,
 } from "@/lib/integrations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PROVIDERS: ProviderKey[] = ["instantly", "smartlead"];
+const ALLOWED = new Set<string>(PROVIDERS.map((p) => p.key));
 
 export async function POST(req: Request) {
   const email = await currentUser();
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   let body: { action?: string; provider?: string; apiKey?: string; config?: Record<string, unknown> };
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const provider = body.provider as ProviderKey;
-  if (!PROVIDERS.includes(provider)) return NextResponse.json({ error: "unknown provider" }, { status: 400 });
+  if (!ALLOWED.has(provider)) return NextResponse.json({ error: "unknown provider" }, { status: 400 });
 
   try {
     if (body.action === "disconnect") {
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
     // connect: verify the key by listing campaigns, then store it.
     const apiKey = (body.apiKey ?? "").trim();
     if (!apiKey) return NextResponse.json({ error: "API key required" }, { status: 400 });
-    const campaigns = await verifyKey(provider, apiKey);
+    const campaigns = await verifyKey(provider, apiKey, body.config ?? {});
     await setConnection(email!, provider, apiKey, body.config ?? {});
     return NextResponse.json({ ok: true, campaigns });
   } catch (err) {
