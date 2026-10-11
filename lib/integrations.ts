@@ -36,10 +36,11 @@ function decrypt(blob: string): string {
 }
 
 /* ---- providers ------------------------------------------------------------ */
-export type ProviderKey = "instantly" | "smartlead";
+export type ProviderKey = "instantly" | "smartlead" | "slack";
 export const PROVIDERS: { key: ProviderKey; label: string; hint: string }[] = [
   { key: "instantly", label: "Instantly.ai", hint: "API key from Settings → Integrations → API" },
   { key: "smartlead", label: "Smartlead", hint: "API key from Settings → API Keys" },
+  { key: "slack", label: "Slack", hint: "Incoming Webhook URL — Slack → Apps → Incoming Webhooks → Add to a channel" },
 ];
 
 export type PushLead = { email: string; company?: string | null; website?: string | null };
@@ -95,6 +96,33 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
         if (res.ok) pushed += Math.min(100, lead_list.length - i);
       }
       return { pushed };
+    },
+  },
+  // Slack — the "API key" is an Incoming Webhook URL. No campaigns: we post the lead list straight to
+  // the channel the webhook is bound to. https://api.slack.com/messaging/webhooks
+  slack: {
+    async listCampaigns(webhookUrl) {
+      if (!/^https:\/\/hooks\.slack\.com\/services\//.test(webhookUrl)) {
+        throw new Error("Not a Slack Incoming Webhook URL (expected https://hooks.slack.com/services/…)");
+      }
+      // posting confirms the webhook is live + shows the user it's connected
+      const res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: ":white_check_mark: *Terrain connected* — leads you push will land in this channel." }) });
+      if (!res.ok) throw new Error(`Slack ${res.status}: ${(await res.text()).slice(0, 160)}`);
+      return [{ id: "channel", name: "This channel" }];
+    },
+    async pushLeads(webhookUrl, _campaignId, leads) {
+      const site = (w?: string | null) => (w || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const shown = leads.slice(0, 50);
+      const lines = shown.map((l) => {
+        const name = l.company || site(l.website) || l.email;
+        const web = site(l.website);
+        return `• *${name}*${web ? ` — <https://${web}|${web}>` : ""}${l.email ? ` · ${l.email}` : ""}`;
+      });
+      const more = leads.length > shown.length ? `\n…and ${leads.length - shown.length} more.` : "";
+      const text = `:dart: *${leads.length} lead${leads.length === 1 ? "" : "s"} from Terrain*\n${lines.join("\n")}${more}`;
+      const res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      return res.ok ? { pushed: leads.length } : { pushed: 0, error: `Slack ${res.status}` };
     },
   },
 };
