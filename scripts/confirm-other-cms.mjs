@@ -95,12 +95,12 @@ async function main() {
         const canPublish = isStore && !!name;
         if (canPublish) { published++; byCms[r.platform] = (byCms[r.platform] || 0) + 1; }
         else if (!isStore) noEcom++;
-        if (name && !existing) named++;
+        if (name && name !== existing) named++;   // counts re-extractions over a bad/empty stored name
         if (DRY) {
           if (canPublish && shown < 18) { shown++; console.log(`✓ PUBLISH  ${clean(r.domain)} [${r.platform}/${r.country}]  "${name}"`); }
         } else {
           await sql`UPDATE imported_stores SET
-            name = COALESCE(NULLIF(name,''), ${name}),
+            name = ${name ?? sql`name`},
             live_status = 'active', live_checked_at = now(),
             published = ${canPublish ? true : sql`published`}
           WHERE domain = ${clean(r.domain)}`.catch(() => {});
