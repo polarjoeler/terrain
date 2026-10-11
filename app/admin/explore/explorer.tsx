@@ -313,6 +313,25 @@ export function Explorer({ initialData, initial, showStats }: {
     } finally { setExporting(false); }
   };
 
+  // Export the same filtered set straight into a Google Sheet the user has shared with our service
+  // account (so it lands live in their Drive, not a download). Sheet URL is remembered per browser.
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const exportSheet = async () => {
+    const SA = "shopify-radar@shopify-radar-503921.iam.gserviceaccount.com";
+    const saved = (() => { try { return localStorage.getItem("terrainSheetUrl") || ""; } catch { return ""; } })();
+    const sheet = window.prompt(`Paste a Google Sheet URL to export into.\n\nFirst share the sheet (Editor) with:\n${SA}`, saved);
+    if (!sheet || !sheet.trim()) return;
+    setSheetBusy(true);
+    try {
+      const body = { sheet: sheet.trim(), filters: picked.size > 0 ? { domains: [...picked] } : filters };
+      const res = await fetch("/api/leads/export-sheet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(j.error || "Export failed"); return; }
+      try { localStorage.setItem("terrainSheetUrl", sheet.trim()); } catch { /* private window */ }
+      window.open(j.url as string, "_blank");
+    } finally { setSheetBusy(false); }
+  };
+
   // Saved lists — capture the whole current view (the exact shape the Explorer re-seeds from).
   const currentView = (): ExploreInitial => {
     const arr = (s: Set<string>) => (s.size ? [...s] : undefined);
@@ -495,6 +514,9 @@ export function Explorer({ initialData, initial, showStats }: {
             <button onClick={exportCsv} disabled={exporting} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
               {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
             </button>
+            <button onClick={exportSheet} disabled={sheetBusy} title="Export the filtered set into a Google Sheet" className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
+              {sheetBusy ? "Exporting…" : "→ Google Sheets"}
+            </button>
           </div>
         </div>
 
@@ -512,7 +534,7 @@ export function Explorer({ initialData, initial, showStats }: {
                     })} />
                 </th>
                 <th className="px-4 py-3">Store</th><th className="px-4 py-3">Platform</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
-                <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Catalog</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
+                <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Traffic</th><th className="px-4 py-3">Catalog</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
               </tr>
             </thead>
             <tbody>
@@ -547,6 +569,19 @@ export function Explorer({ initialData, initial, showStats }: {
                       <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${bandTone(b)}`}>{bd.local}</span>
                       <span className="ml-1 text-xs text-cream/30">{bd.usd}</span>
                     </td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      {l.cruxRank == null
+                        ? <span className="text-xs text-cream/30">unranked</span>
+                        : <span className="flex items-baseline gap-1.5">
+                            <span className="rounded-full border border-cream/15 bg-cream/5 px-2 py-0.5 text-xs font-medium text-cream/80">{rankLabel(l.cruxRank)}</span>
+                            {l.cruxTrend && l.cruxTrend !== "flat"
+                              ? <span className={trendTone(l.cruxTrend)} title={`${l.cruxTrend} vs the previous CrUX month`}>{trendGlyph(l.cruxTrend)}</span>
+                              : null}
+                            {l.cruxRankMonth
+                              ? <span className="text-[11px] text-cream/35" title="CrUX month this ranking is from">{monthLabel(l.cruxRankMonth)}</span>
+                              : null}
+                          </span>}
+                    </td>
                     <td className="px-4 py-2.5 whitespace-nowrap text-xs text-cream/50">
                       {l.productCount != null ? `${l.productCount >= 250 ? "250+" : l.productCount} products` : <span className="text-cream/25">—</span>}
                       {l.aovUsd != null && <span className="text-cream/30"> · ${Math.round(l.aovUsd)} AOV</span>}
@@ -580,3 +615,21 @@ export function Explorer({ initialData, initial, showStats }: {
     </div>
   );
 }
+
+/** CrUX ranks are log10 BUCKETS (1000 = "in the top 1,000 origins for this country"), not an
+ *  exact position — label them as such so nobody reads 50000 as 50,000th. */
+function rankLabel(rank: number): string {
+  if (rank >= 1_000_000) return "top 1M";
+  if (rank >= 1_000) return `top ${rank / 1_000}k`;
+  return `top ${rank}`;
+}
+/** "202608" -> "Aug '26". This is the freshness of the ranking, not of our record. */
+function monthLabel(m: string): string {
+  if (!/^\d{6}$/.test(m)) return m;
+  const mm = Number(m.slice(4, 6));
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${names[mm - 1] ?? m.slice(4, 6)} '${m.slice(2, 4)}`;
+}
+const trendGlyph = (t: string) => (t === "up" ? "▲" : t === "down" ? "▼" : t === "new" ? "✦" : "");
+const trendTone = (t: string) =>
+  t === "up" ? "text-[11px] text-emerald-400" : t === "down" ? "text-[11px] text-rose-400" : "text-[11px] text-sky-400";
