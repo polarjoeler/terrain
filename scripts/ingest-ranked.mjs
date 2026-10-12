@@ -170,7 +170,7 @@ try {
   const cands = await candidateDomains(sql, month);
   console.log(`ingest-ranked: ${COUNTRY} ${month} · ${cands.length} untracked candidates (rank<=${MAX_RANK}, conc ${CONC})${DRY ? " [DRY]" : ""}`);
 
-  let store = 0, custom = 0, notStore = 0, dead = 0;
+  let store = 0, custom = 0, notStore = 0, dead = 0, done = 0;
   const byPlat = new Map();
   let i = 0;
   async function worker() {
@@ -193,6 +193,7 @@ try {
         VALUES (${domain}, ${COUNTRY}, ${rank}, ${verdict}, ${platform})
         ON CONFLICT (domain) DO UPDATE SET verdict=EXCLUDED.verdict, platform=EXCLUDED.platform, checked_at=now()`.catch(() => {});
       if (DRY) console.log(`  ${String(rank).padStart(7)}  ${verdict.padEnd(9)} ${(platform ?? "").padEnd(12)} ${domain}`);
+      if (!DRY && ++done % 200 === 0) console.log(`  …${done}/${cands.length}  stores=${store} custom=${custom} not_store=${notStore} dead=${dead}`);
       await sleep(PAUSE_MS);
     }
   }
