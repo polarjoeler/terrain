@@ -21,8 +21,16 @@ const LIMIT = ALL ? 0 : li > -1 ? Number(process.argv[li + 1]) : 3000;
 const ci = process.argv.indexOf("--country");
 const COUNTRIES = ci > -1 ? process.argv[ci + 1].split(",").map((c) => c.trim().toUpperCase()).filter(Boolean) : null;
 // Low concurrency + a per-request pause: hitting products.json too fast gets our IP
-// HTTP 429'd (Shopify/Cloudflare throttle), which was tanking the hit rate.
-const POOL = 6, CONCURRENCY = 4, PAUSE_MS = 250;
+// HTTP 429'd (Shopify/Cloudflare throttle), which was tanking the hit rate. --recheck is
+// pagination-heavy (it targets large catalogues by design), so it paces gentler by default.
+// Override with --concurrency N / --pause MS.
+const flagNum = (name, dflt) => { const i = process.argv.indexOf(name); return i > -1 ? Number(process.argv[i + 1]) : dflt; };
+const POOL = 6;
+// --recheck re-probes large-catalogue stores (it selects on product_count>=250), so it paginates
+// heavily; concurrent workers then never let the shared IP's Shopify-edge throttle recover and nearly
+// everything 429s. So recheck runs SEQUENTIALLY by default — one request at a time with spacing.
+const CONCURRENCY = flagNum("--concurrency", RECHECK ? 1 : 4);
+const PAUSE_MS = flagNum("--pause", RECHECK ? 600 : 250);
 // Pagination cap: up to 3,000 products/store. Only stores with a full first page ever fetch a
 // second, so this adds requests for large catalogues only — keeps the shared IP's Shopify-edge
 // rate budget intact (see memory: residential-ip-rate-budget).
@@ -55,16 +63,26 @@ function catalogAov(products) {
 
 // note = null on success; retriable=true means don't mark it done (try again next run:
 // rate-limits and transient errors clear), false means terminal (not Shopify / gone).
+// Fetch one page, backing off IN PLACE on 429/5xx. The shared IP's throttle clears in seconds, so a
+// short wait-and-retry recovers the page instead of discarding the whole (often multi-page) store.
+async function fetchPage(domain, page) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`https://${domain}/products.json?limit=250&page=${page}`, {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(15000), redirect: "follow",
+    });
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) { await sleep(1500 * (attempt + 1)); continue; }
+    return res;
+  }
+}
+
 async function fetchCatalog(domain) {
   const all = [];
   const seen = new Set();       // dedupe by product id — robust even if a store ignores ?page
   try {
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await fetch(`https://${domain}/products.json?limit=250&page=${page}`, {
-        headers: { "User-Agent": UA, Accept: "application/json" },
-        signal: AbortSignal.timeout(15000), redirect: "follow",
-      });
-      // transient — redo the whole store next run rather than bank a short count
+      const res = await fetchPage(domain, page);
+      // still throttled after retries — redo the whole store next run rather than bank a short count
       if (res.status === 429 || res.status >= 500) return { note: `http_${res.status}`, retriable: true };
       if (!res.ok) { if (page === 1) return { note: `http_${res.status}`, retriable: false }; break; }
       const j = await res.json().catch(() => null);
