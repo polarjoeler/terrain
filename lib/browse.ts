@@ -60,6 +60,10 @@ export type BrowseRow = {
   email: string | null; instagram: string | null; facebook: string | null; tiktok: string | null;
   launchedAt: string | null; discoveredAt: string | null;
   top100: boolean; top500: boolean;
+  /** CrUX traffic-rank bucket (1000 = top 1k, lower is bigger) and the CrUX month it came from,
+   *  so the table can show both the ranking and how fresh it is. `cruxTrend` is the move since
+   *  the previous month we hold: up | down | flat | new. */
+  cruxRank: number | null; cruxRankMonth: string | null; cruxTrend: string | null;
   score: number;
 };
 
@@ -298,6 +302,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            activity_tier, email, instagram, facebook, tiktok,
            instagram_followers, facebook_followers, product_count, avg_product_price, currency,
            ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
+           crux_rank, crux_rank_month, crux_trend,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500
     FROM imported_stores WHERE ${where}
@@ -323,6 +328,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         launchedAt: d(r.launched_on ? String(r.launched_on) : null),
         discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
         top100: !!r.top100, top500: !!r.top500,
+        cruxRank: r.crux_rank == null ? null : Number(r.crux_rank),
+        cruxRankMonth: (r.crux_rank_month as string) ?? null,
+        cruxTrend: (r.crux_trend as string) ?? null,
         score: Number(r.fit_score) || 0,
       };
     }),
@@ -373,7 +381,10 @@ export async function refreshBrowseCache(): Promise<number> {
  *  paginated rows no longer carry the full field set, so the export re-queries it here. Capped so a
  *  pathological filter can't stream the whole table; ordered by revenue like the old export. */
 const EXPORT_CAP = 50_000;
-export async function browseExportCsv(f: BrowseFilters = {}): Promise<string> {
+export type ExportCell = string | number | boolean | null;
+/** The full filtered export as a header + structured rows — shared by the CSV download and the Google
+ *  Sheets export (which needs real cells, not an escaped CSV string). */
+export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header: string[]; rows: ExportCell[][] }> {
   const sql = db();
   const where = buildWhere(f);
   const usd = sql.unsafe(usdSqlExpr());
@@ -386,15 +397,20 @@ export async function browseExportCsv(f: BrowseFilters = {}): Promise<string> {
     FROM imported_stores WHERE ${where}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
     LIMIT ${EXPORT_CAP}`;
-  const head = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
-  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lines = out.map((r) => {
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
+  const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
     return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
       r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
       sales, revenueBand(sales), r.plus, r.email, r.payments, r.shipping_providers, r.apps,
-      r.instagram, r.facebook, r.tiktok].map(esc).join(",");
+      r.instagram, r.facebook, r.tiktok] as ExportCell[];
   });
-  return [head.join(","), ...lines].join("\n");
+  return { header, rows };
+}
+
+export async function browseExportCsv(f: BrowseFilters = {}): Promise<string> {
+  const { header, rows } = await browseExportRows(f);
+  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return [header.join(","), ...rows.map((row) => row.map(esc).join(","))].join("\n");
 }

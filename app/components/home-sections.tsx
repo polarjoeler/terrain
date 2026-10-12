@@ -124,8 +124,8 @@ const BANDS: Band[] = [
     body: "Stores don't stay still. We track every move off an old platform or provider and onto a new one — who's switching, where, and to whom — so you see share change before it shows up anywhere else." },
   { tag: "Groups & portfolios", title: "One brand, many storefronts — stitched together.", viz: <GroupsViz />,
     body: "The biggest operators run dozens of stores across their own domains. We link them back into a single group, so a portfolio reads as one player instead of scattered noise." },
-  { tag: "Radar · clones & fraud", title: "Find the stores copying you.", viz: <FraudViz />,
-    body: "Radar fingerprints a catalogue — images, SKUs, prices — and sweeps the market for storefronts copying it, then keeps watching for new ones. Brand abuse, caught early." },
+  { tag: "Radar · clones & fraud", title: "Find the stores cloning your customers.", viz: <FraudViz />,
+    body: "Radar fingerprints each of your customers' catalogues — images, SKUs, prices — and sweeps the market for storefronts copying them, then keeps watching for new ones. Brand abuse, caught early." },
   { tag: "Tech & payments", title: "See the stack every store runs.", viz: <RailsViz />,
     body: "Platform, theme, apps, shipping — and the payment rails merchants actually choose at checkout, ranked by adoption and tracked as they rise and fall across each market." },
 ];

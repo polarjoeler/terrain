@@ -23,6 +23,11 @@ export type LeadDetail = {
   launched_at: string | null; launched_source: string | null;
   first_seen: string | null; first_product_at: string | null; discovered_at: string | null;
   source: string | null; live_status: string | null;
+  /** CrUX traffic-rank bucket, the CrUX month it is from (so the drawer can show how fresh the
+   *  ranking is) and the move since the previous month we hold. */
+  crux_rank: number | null; crux_rank_month: string | null; crux_trend: string | null;
+  /** Ballpark revenue band + its confidence (see scripts/revenue-ballpark.mjs). */
+  revenue_band: string | null; revenue_confidence: string | null;
 };
 
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
@@ -35,7 +40,8 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            email, contact_email, contact_phone,
            instagram, facebook, tiktok, instagram_followers, facebook_followers,
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
-           source, live_status
+           source, live_status,
+           crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
   return r ?? null;
 }

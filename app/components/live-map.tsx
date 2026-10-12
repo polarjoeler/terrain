@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { geoMercator, geoPath } from "d3-geo";
 import world from "@/lib/geo/world.json";
-import { hash, mulberry32, decodeName, fmtMonth, GrowthChart } from "@/app/(app)/insights/africa/africa-replay";
+import { hash, mulberry32, decodeName, fmtMonth, GrowthChart, maskDomain } from "@/app/(app)/insights/africa/africa-replay";
 
 type Store = { c: string; d: string; n: string; g: "shopify" | "woo" | "rest" };
 type Timeline = { months: string[]; countries: Record<string, { s: number[]; w: number[]; r: number[] }>; cities: Record<string, Record<string, number[]>> };
@@ -55,6 +55,45 @@ const CHIPS: { label: string; level: Level; id: string | null }[] = [
 ];
 
 let hitCtx: CanvasRenderingContext2D | null = null;
+
+// A compact live log of stores being found, overlaid on the map and scoped to the current view.
+// Domains are MASKED (same maskDomain the gated replay uses) so the public feed can't be scraped
+// into a lead list. Rows stream from a monotonic tick walking the scoped sample.
+const FIND_VERBS = ["Found", "Discovered", "Detected", "Verified"];
+const cmsLabel = (g: Store["g"]) => (g === "shopify" ? "Shopify" : g === "woo" ? "WooCommerce" : "Other CMS");
+
+function FindFeed({ stores, playing }: { stores: Store[]; playing: boolean }) {
+  const [tick, setTick] = useState(4);
+  const n = stores.length;
+  useEffect(() => {
+    if (!n || !playing) return;
+    const id = setInterval(() => setTick((t) => t + 1), 2000);
+    return () => clearInterval(id);
+  }, [n, playing]);
+  if (!n) return null;
+  const rows = Array.from({ length: Math.min(4, n) }, (_, k) => {
+    const i = ((tick - k) % n + n) % n;
+    return { id: tick - k, verb: FIND_VERBS[((tick - k) % FIND_VERBS.length + FIND_VERBS.length) % FIND_VERBS.length], s: stores[i] };
+  });
+  return (
+    <div className="pointer-events-none absolute bottom-16 right-3 z-10 w-[216px] max-w-[60%] rounded-2xl border border-cream/12 bg-ink-deep/55 p-3 backdrop-blur-md sm:bottom-20 sm:right-4">
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-cream/50">
+        <span className="relative flex h-1.5 w-1.5"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-mint opacity-70" /><span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-mint" /></span>
+        Live · stores found
+      </div>
+      <div className="space-y-1 font-mono text-[10.5px]">
+        {rows.map((r, i) => (
+          <div key={r.id} className="flex items-center gap-1.5 whitespace-nowrap" style={{ opacity: 1 - i * 0.2 }}>
+            <span className="text-mint">▸</span>
+            <span className="shrink-0 text-cream/45">{r.verb}</span>
+            <span className="truncate text-cream/85">{maskDomain(r.s.d)}</span>
+            <span className="ml-auto shrink-0 text-cream/40">{flagOf(r.s.c)} {cmsLabel(r.s.g)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[]; points: { iso2: string; n: number }[]; tl: Timeline; country?: string }) {
   const reduced = useRef(false);
@@ -101,6 +140,20 @@ export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[];
 
   // ---- fly target for the current view ----
   const regionSet = useMemo(() => geo.feats.filter((f) => f.region === activeContinent).map((f) => f.iso2), [geo, activeContinent]);
+
+  // stores for the live-found feed, scoped to what we're looking at (a country → its stores; a region
+  // → that region's; the globe → everything), then deterministically shuffled so the feed interleaves
+  // countries/CMS instead of running alphabetically. Deterministic → SSR-safe (no hydration drift).
+  const feedStores = useMemo(() => {
+    const rs = new Set(regionSet);
+    const base = view.level === "country" && view.id ? storesByCountry[view.id] ?? []
+      : view.level === "world" ? stores
+      : stores.filter((s) => rs.has(s.c));
+    const list = (base.length ? base : stores).slice(0, 1200);
+    const rnd = mulberry32((list.length * 2654435761) >>> 0);
+    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = list[i]; list[i] = list[j]; list[j] = t; }
+    return list;
+  }, [view, regionSet, storesByCountry, stores]);
   const target = useMemo(() => {
     const boundsOf = (isos: string[]) => { const fs = isos.map((i) => geo.byIso[i]).filter(Boolean) as Feat[]; if (!fs.length) return { x0: 0, y0: 0, x1: W, y1: H };
       return { x0: Math.min(...fs.map((f) => f.bbox[0])), y0: Math.min(...fs.map((f) => f.bbox[1])), x1: Math.max(...fs.map((f) => f.bbox[2])), y1: Math.max(...fs.map((f) => f.bbox[3])) }; };
@@ -309,6 +362,9 @@ export function LiveMap({ stores, points, tl, country = "" }: { stores: Store[];
         </div>
         {view.level !== "world" && <button onClick={back} className="pointer-events-auto shrink-0 rounded-full border border-cream/15 bg-ink-deep/40 px-3 py-1.5 text-xs text-cream/70 backdrop-blur transition hover:text-cream">← Zoom out</button>}
       </div>
+
+      {/* live log of stores being found — scoped to the current view, domains masked */}
+      <FindFeed stores={feedStores} playing={!reduced.current} />
       </div>
 
       {/* scoped, ticking leaderboard — countries in the region, cities in a country, moving over time */}
