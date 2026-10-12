@@ -175,6 +175,29 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             )}
 
             <Section title="Revenue & catalog">
+              <Row label="Ballpark revenue" value={data.revenue_band
+                ? <span className="flex items-baseline gap-2">
+                    <span>{String(data.revenue_band)}</span>
+                    {data.revenue_confidence
+                      ? <span className={`text-[11px] ${data.revenue_confidence === "good" ? "text-emerald-400" : data.revenue_confidence === "medium" ? "text-amber-400" : "text-cream/35"}`}>
+                          {String(data.revenue_confidence)} confidence
+                        </span>
+                      : null}
+                  </span>
+                : null} />
+              <Row label="Traffic rank" value={data.crux_rank != null
+                ? <span className="flex items-baseline gap-2">
+                    <span>{rankLabel(Number(data.crux_rank))}</span>
+                    {data.crux_trend && data.crux_trend !== "flat"
+                      ? <span className={`text-[11px] ${data.crux_trend === "up" ? "text-emerald-400" : data.crux_trend === "down" ? "text-rose-400" : "text-sky-400"}`}>
+                          {String(data.crux_trend)}
+                        </span>
+                      : null}
+                    {data.crux_rank_month
+                      ? <span className="text-[11px] text-cream/35">updated {monthLabel(String(data.crux_rank_month))}</span>
+                      : null}
+                  </span>
+                : null} />
               <Row label="Est. monthly sales" value={money(data.estimated_monthly_sales, data.currency)} />
               <Row label="Est. revenue (USD)" value={money(data.est_revenue_usd, "$")} />
               <Row label="Products" value={data.product_count != null ? data.product_count.toLocaleString() : null} />
@@ -216,4 +239,17 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
       </aside>
     </div>
   );
+}
+
+/** CrUX ranks are log10 BUCKETS, not exact positions — label them "top N". */
+function rankLabel(rank: number): string {
+  if (rank >= 1_000_000) return "top 1M";
+  if (rank >= 1_000) return `top ${rank / 1_000}k`;
+  return `top ${rank}`;
+}
+/** "202608" -> "Aug '26" — the freshness of the RANKING, not of our record. */
+function monthLabel(m: string): string {
+  if (!/^\d{6}$/.test(m)) return m;
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${names[Number(m.slice(4, 6)) - 1] ?? m.slice(4, 6)} '${m.slice(2, 4)}`;
 }
