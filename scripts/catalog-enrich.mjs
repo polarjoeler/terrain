@@ -4,11 +4,16 @@
  *  Lead Fit Score have real signals instead of the noisy imported figures.
  *
  *  Value-ranked, resumable (skips stores already enriched), bounded worker pool.
- *   node --env-file=.env.local scripts/catalog-enrich.mjs [--limit 3000] [--all]
+ *   node --env-file=.env.local scripts/catalog-enrich.mjs [--limit 3000] [--all] [--country ZA,KE]
+ *   node … scripts/catalog-enrich.mjs --recheck --all   # re-enrich rows the old (buggy) pass got wrong
  */
 import postgres from "postgres";
 
 const ALL = process.argv.includes("--all");
+// --recheck re-runs stores the first pass measured with the two known bugs: product_count pinned at
+// the 250 page-limit (no pagination), or an outlier-inflated avg_product_price. Everything else is
+// left alone, so the re-run only touches the ~6k broken rows, not the whole fleet.
+const RECHECK = process.argv.includes("--recheck");
 const li = process.argv.indexOf("--limit");
 const LIMIT = ALL ? 0 : li > -1 ? Number(process.argv[li + 1]) : 3000;
 // --country ZA,KE,NG,… scopes the backfill to the markets we sell into (the launch metric is
@@ -18,29 +23,63 @@ const COUNTRIES = ci > -1 ? process.argv[ci + 1].split(",").map((c) => c.trim().
 // Low concurrency + a per-request pause: hitting products.json too fast gets our IP
 // HTTP 429'd (Shopify/Cloudflare throttle), which was tanking the hit rate.
 const POOL = 6, CONCURRENCY = 4, PAUSE_MS = 250;
+// Pagination cap: up to 3,000 products/store. Only stores with a full first page ever fetch a
+// second, so this adds requests for large catalogues only — keeps the shared IP's Shopify-edge
+// rate budget intact (see memory: residential-ip-rate-budget).
+const MAX_PAGES = 12;
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const round2 = (n) => Math.round(n * 100) / 100;
+function median(nums) {
+  if (!nums.length) return null;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+// AOV = median across products of each product's median variant price. Two robustness wins over the
+// old plain mean of every variant: a many-variant product (30 size/colour SKUs) counts ONCE not 30×,
+// and a single wholesale/pallet/bundle SKU can't drag the figure up (median ignores the tail). Gift
+// cards are excluded — they're not a real basket item. Currency-agnostic (no per-market price cap).
+function catalogAov(products) {
+  const perProduct = [];
+  for (const p of products) {
+    const t = `${p.product_type || ""} ${p.title || ""}`.toLowerCase();
+    if (t.includes("gift card") || t.includes("gift voucher") || t.includes("egift")) continue;
+    const vp = (p.variants ?? []).map((v) => parseFloat(v.price)).filter((n) => n > 0);
+    if (vp.length) perProduct.push(median(vp));
+  }
+  const m = median(perProduct);
+  return m != null ? round2(m) : null;
+}
 
 // note = null on success; retriable=true means don't mark it done (try again next run:
 // rate-limits and transient errors clear), false means terminal (not Shopify / gone).
 async function fetchCatalog(domain) {
+  const all = [];
+  const seen = new Set();       // dedupe by product id — robust even if a store ignores ?page
   try {
-    const res = await fetch(`https://${domain}/products.json?limit=250`, {
-      headers: { "User-Agent": UA, Accept: "application/json" },
-      signal: AbortSignal.timeout(15000), redirect: "follow",
-    });
-    if (res.status === 429 || res.status >= 500) return { note: `http_${res.status}`, retriable: true };
-    if (!res.ok) return { note: `http_${res.status}`, retriable: false };
-    const j = await res.json().catch(() => null);
-    if (!j || !Array.isArray(j.products)) return { note: "not_shopify_json", retriable: false };
-    const prices = [];
-    for (const p of j.products) for (const v of p.variants ?? []) { const pr = parseFloat(v.price); if (pr > 0) prices.push(pr); }
-    const avg = prices.length ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100 : null;
-    // Own-sourced launch date: the earliest product's publish date ≈ when the store
-    // went live. Independent of any vendor's "first_seen".
-    const dates = j.products.map((p) => p.published_at || p.created_at).filter(Boolean).sort();
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(`https://${domain}/products.json?limit=250&page=${page}`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        signal: AbortSignal.timeout(15000), redirect: "follow",
+      });
+      // transient — redo the whole store next run rather than bank a short count
+      if (res.status === 429 || res.status >= 500) return { note: `http_${res.status}`, retriable: true };
+      if (!res.ok) { if (page === 1) return { note: `http_${res.status}`, retriable: false }; break; }
+      const j = await res.json().catch(() => null);
+      if (!j || !Array.isArray(j.products)) { if (page === 1) return { note: "not_shopify_json", retriable: false }; break; }
+      let added = 0;
+      for (const p of j.products) if (!seen.has(p.id)) { seen.add(p.id); all.push(p); added++; }
+      // Stop unless this was a full page of NEW products. added===0 means ?page was ignored
+      // (same 250 returned) → we already have them all; a short page means the real last page.
+      if (j.products.length < 250 || added === 0) break;
+      await sleep(PAUSE_MS);
+    }
+    // Own-sourced launch date: the earliest product's publish date ≈ when the store went live.
+    const dates = all.map((p) => p.published_at || p.created_at).filter(Boolean).sort();
     const launched = dates.length ? String(dates[0]).slice(0, 10) : null;
-    return { count: j.products.length, avg, launched, note: null };   // 250 = full page (lower bound)
+    return { count: all.length, avg: catalogAov(all), launched, note: null };
   } catch (e) {
     return { note: e.name === "TimeoutError" ? "timeout" : "error", retriable: e.name === "TimeoutError" };
   }
@@ -53,7 +92,10 @@ async function main() {
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-        AND catalog_checked_at IS NULL
+        ${RECHECK
+          // the two bug signatures: count truncated at the 250 page-limit, or an inflated AOV
+          ? sql`AND catalog_checked_at IS NOT NULL AND (product_count >= 250 OR avg_product_price > 2000)`
+          : sql`AND catalog_checked_at IS NULL`}
         AND lower(platform) IS DISTINCT FROM 'woocommerce'   -- Woo has its own probe; products.json is Shopify-only
         ${COUNTRIES ? sql`AND country = ANY(${COUNTRIES})` : sql``}
       -- Priority for the LAUNCH metric: catalog-enrich fills launched_at (= earliest product date)
