@@ -192,7 +192,7 @@ export function Capabilities() {
 // fall back to a styled wordmark. Drop an official SVG in and add its filename here to light it up.
 const PLATFORMS: { name: string; file?: string }[] = [
   { name: "Shopify", file: "shopify.svg" },
-  { name: "WooCommerce", file: "woocommerce.svg" },
+  { name: "Woo", file: "woo.svg" },
   { name: "Wix", file: "wix.svg" },
   { name: "Squarespace", file: "squarespace.svg" },
   { name: "BigCommerce", file: "bigcommerce.svg" },
@@ -317,7 +317,7 @@ const DESTINATIONS: { file?: string; name: string; line: string }[] = [
   { file: "googlesheets.svg", name: "Google Sheets", line: "Export a live, filtered sheet in a click." },
   { file: "slack.svg", name: "Slack", line: "New-store and switch alerts in your channel." },
   { file: "whatsapp.svg", name: "WhatsApp", line: "Hot leads straight to your phone." },
-  { name: "Clay", line: "Push leads to a Clay table to enrich." },
+  { file: "clay.svg", name: "Clay", line: "Push leads to a Clay table to enrich." },
 ];
 // Pipedrive & Apollo aren't in the open icon set — wordmark until their official SVG lands in /public/logos/integrations.
 const CRMS: { name: string; file?: string }[] = [
