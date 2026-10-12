@@ -49,7 +49,7 @@ const PLATFORMS = [
   { name: "Ecwid",          kind: "native", sig: ["ecwid", "app.ecwid.com", "ecwid_script"] },
   { name: "Big Cartel",     kind: "native", sig: ["bigcartel.com", "data-bc-"] },
   { name: "ShopStar",       kind: "native", sig: ["shopstar.co.za", "_tillyoudrop_session"] },
-  { name: "Wix",            kind: "mixed",  sig: ["wixstatic.com", "wix.com", "_wix", "x-wix-"] },
+  { name: "Wix",            kind: "mixed",  sig: ["wixstatic.com", "x-wix-", "wix-warmup", "wixcode"] },
   { name: "Squarespace",    kind: "mixed",  sig: ["squarespace.com", "static1.squarespace", "squarespace-cdn"] },
   { name: "Webflow",        kind: "mixed",  sig: ["webflow.io", "assets.website-files.com", "data-wf-"] },
   { name: "Odoo",           kind: "mixed",  sig: ["odoo", "web/static/src"] },
@@ -108,11 +108,13 @@ function classify(html) {
   for (const p of PLATFORMS) if (p.sig.some((s) => hay.includes(s))) { platform = p.name; kind = p.kind; break; }
   const hasStoreMarkers = STORE_MARKERS.some((m) => hay.includes(m));
   const gateways = [...new Set(GATEWAYS.filter(([re]) => re.test(html)).map(([, n]) => n))];
-  // native platform → store; mixed → store only with markers; none → 'custom' iff store markers.
+  // native platform → store; mixed → store only with markers; none → 'custom' only with real store
+  // markers. A payment gateway ALONE is NOT enough: betting/booking/donation sites all carry one
+  // (Ozow/Stripe) without being retail stores — require cart/checkout/product/structured-data.
   let verdict, outPlatform = platform;
   if (kind === "native") verdict = "store";
   else if (kind === "mixed") verdict = hasStoreMarkers ? "store" : "not_store";
-  else if (hasStoreMarkers || gateways.length) { verdict = "custom"; outPlatform = "custom"; }
+  else if (hasStoreMarkers) { verdict = "custom"; outPlatform = "custom"; }
   else verdict = "not_store";
   return { verdict, platform: outPlatform, gateways };
 }
