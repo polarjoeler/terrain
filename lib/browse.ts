@@ -393,7 +393,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
     SELECT domain, name, category, country, city, platform, activity_tier, activity_score,
            hosting_provider, platform_version, btrim(theme) AS theme, product_count, avg_product_price,
            currency, ${usd}::int AS usd, ${band} AS band, plus, email, payments, shipping_providers,
-           apps, plugins, technologies, instagram, facebook, tiktok
+           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok
     FROM imported_stores WHERE ${where}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
     LIMIT ${EXPORT_CAP}`;
@@ -401,13 +401,16 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // (wp-content/plugins, /modules/…) + cross-platform third-party `technologies` (Klaviyo, Gorgias, …).
   // Normalise `apps` to bare slugs so the column reads the same across platforms.
   const appSlugs = (s: unknown) => String(s ?? "").match(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)?.map((u) => u.split("/").pop()).join("; ") || null;
+  // `shipping_providers` is the Shopify checkout read; `logistics_apps` is the cross-platform homepage
+  // carrier fingerprint (Bob Go, Pargo, TUNL…). Merge them so non-Shopify stores show shipping too.
+  const shipMerged = (a: unknown, b: unknown) => [...new Set(`${a ?? ""};${b ?? ""}`.split(";").map((x) => x.trim()).filter(Boolean))].join("; ") || null;
   const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "facebook", "tiktok"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
     return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
       r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
-      sales, revenueBand(sales), r.plus, r.email, r.payments, r.shipping_providers, appSlugs(r.apps),
+      sales, revenueBand(sales), r.plus, r.email, r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
       r.plugins, r.technologies, r.instagram, r.facebook, r.tiktok] as ExportCell[];
   });
   return { header, rows };
