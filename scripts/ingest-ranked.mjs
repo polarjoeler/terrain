@@ -57,6 +57,12 @@ const PLATFORMS = [
   { name: "Spree",          kind: "native", sig: ["data-spree", "/spree/", "spree_"] },
   { name: "X-Cart",         kind: "native", sig: ["x-cart", "xcart"] },
   { name: "GoDaddy",        kind: "mixed",  sig: ["img1.wsimg.com", "websites.godaddy", "/ds/web/"] },
+  // More platforms the custom-bucket reclassify surfaced — Shoplazza (cross-border dropshipping, big
+  // in Africa) + nopCommerce, and the African creator-commerce tools Selar & Bumpa.
+  { name: "Shoplazza",      kind: "native", sig: ["shoplazza", "myshoplaza"] },
+  { name: "nopCommerce",    kind: "native", sig: ["nopcommerce"] },
+  { name: "Selar",          kind: "native", sig: ["selar.co"] },
+  { name: "Bumpa",          kind: "native", sig: ["getbumpa", "bumpa.shop"] },
   { name: "Wix",            kind: "mixed",  sig: ["wixstatic.com", "x-wix-", "wix-warmup", "wixcode"] },
   { name: "Squarespace",    kind: "mixed",  sig: ["squarespace.com", "static1.squarespace", "squarespace-cdn"] },
   { name: "Webflow",        kind: "mixed",  sig: ["webflow.io", "assets.website-files.com", "data-wf-"] },
