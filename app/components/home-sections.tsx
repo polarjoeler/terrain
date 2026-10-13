@@ -192,7 +192,7 @@ export function Capabilities() {
 // fall back to a styled wordmark. Drop an official SVG in and add its filename here to light it up.
 const PLATFORMS: { name: string; file?: string }[] = [
   { name: "Shopify", file: "shopify.svg" },
-  { name: "WooCommerce", file: "woocommerce.svg" },
+  { name: "Woo", file: "woo.svg" },
   { name: "Wix", file: "wix.svg" },
   { name: "Squarespace", file: "squarespace.svg" },
   { name: "BigCommerce", file: "bigcommerce.svg" },
@@ -312,10 +312,12 @@ function DashboardMock() {
   );
 }
 
-const DESTINATIONS = [
+// Clay has no official monochrome SVG in the open sets yet — wordmark until one lands in /public/logos/integrations.
+const DESTINATIONS: { file?: string; name: string; line: string }[] = [
   { file: "googlesheets.svg", name: "Google Sheets", line: "Export a live, filtered sheet in a click." },
   { file: "slack.svg", name: "Slack", line: "New-store and switch alerts in your channel." },
   { file: "whatsapp.svg", name: "WhatsApp", line: "Hot leads straight to your phone." },
+  { file: "clay.svg", name: "Clay", line: "Push leads to a Clay table to enrich." },
 ];
 // Pipedrive & Apollo aren't in the open icon set — wordmark until their official SVG lands in /public/logos/integrations.
 const CRMS: { name: string; file?: string }[] = [
@@ -343,7 +345,9 @@ export function PlatformPreview() {
             <div className="mt-6 space-y-4">
               {DESTINATIONS.map((d) => (
                 <div key={d.name} className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cream/12 bg-cream/[0.03]"><Mark src={`/logos/integrations/${d.file}`} name={d.name} size="h-5 w-5" tint="bg-cream/80" /></span>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cream/12 bg-cream/[0.03]">{d.file
+                    ? <Mark src={`/logos/integrations/${d.file}`} name={d.name} size="h-5 w-5" tint="bg-cream/80" />
+                    : <span className="font-display text-[11px] font-semibold text-cream/80">{d.name}</span>}</span>
                   <div><div className="text-sm font-semibold text-cream">{d.name}</div><div className="text-[12.5px] text-cream/55">{d.line}</div></div>
                 </div>
               ))}

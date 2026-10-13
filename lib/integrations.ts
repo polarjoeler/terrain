@@ -36,7 +36,7 @@ function decrypt(blob: string): string {
 }
 
 /* ---- providers ------------------------------------------------------------ */
-export type ProviderKey = "instantly" | "smartlead" | "slack" | "whatsapp" | "hubspot";
+export type ProviderKey = "instantly" | "smartlead" | "slack" | "whatsapp" | "hubspot" | "clay";
 
 /** Fields a provider needs at connect time beyond the single secret. The panel
  *  renders one input per field; their values are stored (unencrypted) in config. */
@@ -60,6 +60,11 @@ export const PROVIDERS: { key: ProviderKey; label: string; hint: string; secretL
     key: "hubspot", label: "HubSpot",
     hint: "Private App token — HubSpot → Settings → Integrations → Private Apps. Needs crm.objects.contacts.write.",
     secretLabel: "Private App token",
+  },
+  {
+    key: "clay", label: "Clay",
+    hint: "Webhook URL — in a Clay table: Add source → Import data from Webhook → copy the URL. Each lead lands as a row to enrich.",
+    secretLabel: "Clay webhook URL",
   },
 ];
 
@@ -222,6 +227,36 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
         if (res.ok) pushed += inputs.length;
         else if (res.status === 429) { await new Promise((r) => setTimeout(r, 1500)); i -= 100; } // retry this batch
         else { const t = (await res.text()).slice(0, 160); return { pushed, error: `HubSpot ${res.status}: ${t}` }; }
+      }
+      return { pushed };
+    },
+  },
+  // Clay — the "API key" is a Clay webhook-source URL (Clay table → Add source → Import from Webhook).
+  // We POST one JSON object per lead; each becomes a row Clay can then enrich. The unguessable URL is
+  // the credential (no separate token). https://www.clay.com/university/guide/import-data-via-webhook
+  clay: {
+    async listCampaigns(webhookUrl, _config) {
+      if (!/^https:\/\/[a-z0-9.-]*clay\.com\//i.test(webhookUrl)) {
+        throw new Error("Not a Clay webhook URL (expected https://api.clay.com/… from a table's Webhook source).");
+      }
+      // A webhook has no health check, so confirm connectivity with one clearly-marked test row.
+      const res = await fetch(webhookUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ _terrain: "connection_test", company: "Terrain — connection test", note: "Safe to delete this row." }),
+      });
+      if (!res.ok) throw new Error(`Clay ${res.status}: ${(await res.text()).slice(0, 160)}`);
+      return [{ id: "table", name: "Clay table" }];
+    },
+    async pushLeads(webhookUrl, _campaignId, leads, _config) {
+      const site = (w?: string | null) => (w || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+      let pushed = 0;
+      for (const l of leads) {
+        const res = await fetch(webhookUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain: site(l.website) || undefined, company: l.company ?? undefined, email: l.email || undefined, website: l.website ?? undefined, source: "Terrain" }),
+        });
+        if (res.ok) pushed++;
+        else if (res.status === 429) { await new Promise((r) => setTimeout(r, 1500)); } // Clay throttle — brief pause, skip this one
       }
       return { pushed };
     },
