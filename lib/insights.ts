@@ -153,6 +153,7 @@ const cohortFilter = (tag?: string) =>
 const LIVE = (country: string, tag?: string, platform: PlatformSel = "shopify") =>
   db()`published AND country = ${country}
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+       AND activity_tier IS DISTINCT FROM 'not_a_store'
        ${cohortFilter(tag)} ${platformClause(db(), platform)}`;
 
 // The 54 African ISO2 codes — the map + overview are Africa-only (our DB also holds many global
@@ -194,7 +195,7 @@ export async function africaOverview(
       COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 30)::int AS launched30d
     FROM (
       SELECT country,
-        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${platformClause(sql, platform)}) AS live,
+        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store' ${platformClause(sql, platform)}) AS live,
         COALESCE(
           (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
           launched_at
