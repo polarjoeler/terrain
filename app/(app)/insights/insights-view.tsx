@@ -7,7 +7,7 @@ import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
 import { marketLabel, marketAdjective, groupByRegion } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
-import type { InsightsData, InsightItem, PlatformSel } from "@/lib/insights";
+import type { InsightsData, InsightItem, PlatformSel, DistroKey } from "@/lib/insights";
 
 // CMS decoration for the picker + chart titles. Kept client-side (a copy of PLATFORM_META in
 // lib/insights) so this "use client" file doesn't pull the server-only insights module into the
@@ -263,13 +263,13 @@ function MagentoSections({ magento }: { magento: NonNullable<InsightsData["magen
  *  headline BNPL/PSP signals. Used on BOTH the Shopify and WooCommerce views (Woo now has real
  *  checkout-verified payment data), so a payment company sees the same breakdown per platform. */
 function PaymentIntelligenceCard({
-  data, provByType, baseProvByType, base, tfTouched, pk, pw, country, subtitle,
+  data, provByType, baseProvByType, base, windowed, pk, pw, country, subtitle,
 }: {
   data: InsightsData;
   provByType: Record<PayType, InsightItem[]>;
   baseProvByType: Record<PayType, InsightItem[]> | null;
   base: InsightsData | null;
-  tfTouched: boolean;
+  windowed: boolean;
   pk: "day" | "week" | "month" | "quarter" | "year";
   pw: string;
   country: string;
@@ -280,10 +280,14 @@ function PaymentIntelligenceCard({
   return (
     <Card
       title="Payment intelligence"
-      subtitle={subtitle ?? `Checkout-verified on ${data.coverage.paymentPct}% of reachable stores (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()}) — the rest have no completable checkout to read`}
+      subtitle={subtitle ?? (windowed
+        ? `What the ${data.launchedByPeriod[pk].toLocaleString()} stores that launched ${pw} chose at checkout — the newest-store cohort`
+        : `Checkout-verified on ${data.coverage.paymentPct}% of live stores (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()})`)}
       reportHref={`/insights/payments?country=${country}${pfx}`}
     >
-      {/* Headline signals for payment-company subscribers */}
+      {/* Headline signals — all-time store-level type coverage; hidden in a launch window (where we
+          only have the cohort's provider counts, not store-level PSP/BNPL overlap). */}
+      {!windowed && (
       <div className="mb-6 grid grid-cols-3 gap-3">
         {[
           { n: `${data.paymentsByType.BNPL.pct}%`, l: "offer BNPL" },
@@ -296,6 +300,7 @@ function PaymentIntelligenceCard({
           </div>
         ))}
       </div>
+      )}
       <div className="space-y-7">
         {PAY_TYPES.map((t) =>
           provByType[t].length ? (
@@ -303,10 +308,10 @@ function PaymentIntelligenceCard({
               <div className="mb-3 flex flex-wrap items-baseline gap-x-2">
                 <span className="text-xs font-bold uppercase tracking-wide text-cream/80">{t}</span>
                 <span className="text-[11px] text-cream/40">
-                  {TYPE_LABEL[t]} · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})
+                  {TYPE_LABEL[t]}{!windowed && <> · {data.paymentsByType[t].pct}% of stores ({data.paymentsByType[t].count.toLocaleString()})</>}
                 </span>
               </div>
-              <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].payments : undefined} adoptWord={pw} />
+              <DrillList data={provByType[t]} baseline={baseProvByType?.[t] ?? null} tone={TYPE_TONE[t]} showBaseline={!!base} drillParam="payment" country={country} />
             </div>
           ) : null,
         )}
@@ -388,21 +393,14 @@ export function InsightsView({
     if (pf && pf !== "all") qs.set("platform", pf);
     startTransition(() => router.push(`/insights?${qs.toString()}`));
   };
-  const [period, setPeriod] = useState<Period>("Month");
-  // Report-wide custom date range. Drives the growth chart (real launch/churn over the range);
-  // the preset periods above still drive the tiles + distribution comparisons.
-  const [rangeFrom, setRangeFrom] = useState("");
-  const [rangeTo, setRangeTo] = useState("");
-  const [preset, setPreset] = useState("");   // active time-period preset ("" = all time / custom)
-  const rangeActive = !!(rangeFrom || rangeTo);
-  const applyPreset = (key: string) => {
-    const { from, to } = presetRange(key);
-    setPreset(key); setRangeFrom(from); setRangeTo(to); setTfTouched(true);
-  };
-  const fmtDay = (d: string) => (d ? new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "");
-  // The payment "+N adoptions" column only shows once the user has ACTIVELY engaged the timeframe
-  // (picked a period or set a custom range) — not on the default load, where a bare "+N" is noise.
-  const [tfTouched, setTfTouched] = useState(false);
+  // ONE report lens replaces the old split Timeframe-buttons + Period-range controls: either the
+  // live-market snapshot ("current", the default) or a launch WINDOW that re-scopes EVERY breakdown
+  // below to the stores that launched in it — the newest-store cohort. (Data: data.launchedDistro.)
+  const [lens, setLens] = useState<"current" | Period>("current");
+  const windowed = lens !== "current";
+  const period: Period = windowed ? lens : "Month"; // "Month" = default granularity for the flow cards when current
+  const pk = PERIOD_KEY[period];
+  const pw = windowed ? `in the last ${PERIOD_DAYS[period]} days` : PERIOD_WORD[period];
 
   // Trends/comparisons only look back to the baseline (reset after a bulk import
   // so the batch doesn't skew growth or forward-churn).
@@ -418,7 +416,9 @@ export function InsightsView({
     return older.length ? older[older.length - 1] : null;
   };
   const hasComparison = (p: Period) => baselineFor(p) !== null;
-  const base = hasComparison(period) ? baselineFor(period) : null;
+  // Snapshot-vs-previous-period deltas apply only to the live "current" view; a launch WINDOW is
+  // self-contained (the whole card IS the cohort), so it carries no baseline delta.
+  const base = !windowed && hasComparison(period) ? baselineFor(period) : null;
   // Absolute + % change of a metric vs the selected period's baseline.
   const metric = (key: keyof InsightsData): { abs: number | null; pct: number | null } => {
     const b = base && typeof base[key] === "number" ? (base[key] as number) : null;
@@ -435,7 +435,19 @@ export function InsightsView({
     for (const p of list ?? []) g[classify(p.label)].push(p);
     return g;
   };
-  const provByType = groupByType(data.paymentsByProvider);
+  // In a launch WINDOW every distribution becomes that cohort's (launchedDistro = label→count per
+  // period); otherwise each card shows the live snapshot. `distro()` picks the right source per card.
+  const toItems = (rec?: Record<string, number>): InsightItem[] => {
+    const e = Object.entries(rec ?? {});
+    const tot = e.reduce((s, [, n]) => s + n, 0) || 1;
+    return e.map(([label, count]) => ({ label, count, pct: Math.round((100 * count) / tot) })).sort((a, b) => b.count - a.count);
+  };
+  const wd = windowed ? data.launchedDistro[pk] : null;
+  const distro = (key: DistroKey, allTime: InsightItem[]): InsightItem[] => (wd ? toItems(wd[key]) : allTime);
+  const cohortN = windowed ? data.launchedByPeriod[pk] : 0;
+  // Window-aware "Of N stores" subtitle for the distribution cards.
+  const distroSub = (allTime: string) => (windowed ? `Of ${cohortN.toLocaleString()} stores launched ${pw}` : allTime);
+  const provByType = groupByType(distro("payments", data.paymentsByProvider));
   const baseProvByType = base ? groupByType(base.paymentsByProvider) : null;
 
   // Store survival "going forward" — measured against the earliest snapshot
@@ -447,8 +459,6 @@ export function InsightsView({
   const trackedBase = data.churn.active + fwdMigrated + fwdDead;
   const fwdSurvival = trackedBase > 0 ? Math.round((100 * data.churn.active) / trackedBase) : null;
 
-  const pk = PERIOD_KEY[period];
-  const pw = PERIOD_WORD[period];
   // Provider momentum follows the timeframe selector: newly-launched stores this period vs the
   // previous period of the same length.
   const momentum = momentumByPeriod?.[pk] ?? [];
@@ -551,60 +561,35 @@ export function InsightsView({
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Timeframe</span>
-            {PERIODS.map((p) => {
-              const cmp = hasComparison(p);
-              return (
-                <button
-                  key={p}
-                  onClick={() => { setPeriod(p); setTfTouched(true); }}
-                  title={cmp ? `Stores launched in the last ${PERIOD_DAYS[p]} days · compares vs ${PERIOD_DAYS[p]} days ago` : `Stores launched in the last ${PERIOD_DAYS[p]} days`}
-                  className={`rounded-full px-3.5 py-1.5 text-sm transition ${
-                    period === p
-                      ? "bg-orange text-cream"
-                      : "border border-cream/15 text-cream/60 hover:border-cream/40"
-                  }`}
-                >
-                  {p}
-                </button>
-              );
-            })}
+            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">View</span>
+            {/* ONE lens, replacing the old split Timeframe-buttons + custom-range controls (which only
+                annotated part of the report): the live market, OR a launch window that re-scopes EVERY
+                breakdown below to the stores that launched in it — the newest-store cohort. */}
+            <select
+              value={lens}
+              onChange={(e) => setLens(e.target.value as "current" | Period)}
+              className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep [&>optgroup]:bg-ink-deep"
+            >
+              <option value="current" className="text-ink">Current market · all live stores</option>
+              <optgroup label="New-store cohort — launched in the last…">
+                <option value="Week" className="text-ink">7 days</option>
+                <option value="Month" className="text-ink">30 days</option>
+                <option value="Quarter" className="text-ink">90 days</option>
+                <option value="Year" className="text-ink">12 months</option>
+              </optgroup>
+            </select>
             <span className="ml-1 text-xs text-cream/40">
-              {tfTouched
-                ? base ? `launched ${PERIOD_WORD[period]} · vs ${PERIOD_PREV[period]} (${COMPARISON[period]})` : `showing what launched ${PERIOD_WORD[period]}`
-                : "pick a timeframe to see what launched then"}
+              {windowed
+                ? `every breakdown below = the ${cohortN.toLocaleString()} stores launched ${pw}`
+                : "the full live market — pick a window to see the newest-store cohort"}
             </span>
           </div>
-          {/* Report-wide custom date range — applies to the growth chart (real launch/churn
-              over any window). A visible separator so it reads as its own control. */}
-          <div className="flex flex-wrap items-center gap-2 border-l border-cream/10 pl-6">
-            <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Period</span>
-            {/* Preset dropdown: relative windows + calendar periods (this/last month & quarter, Q1–Q4,
-                YTD). Resolves to an absolute range that drives the growth chart. */}
-            <select value={preset} onChange={(e) => applyPreset(e.target.value)}
-              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep">
-              {["", "Recent", "Calendar", "Quarters"].map((grp) => {
-                const opts = DATE_PRESETS.filter((p) => p.group === grp);
-                return grp === "" ? opts.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)
-                  : <optgroup key={grp} label={grp}>{opts.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</optgroup>;
-              })}
-            </select>
-            <span className="text-cream/30">·</span>
-            <input type="date" value={rangeFrom} onChange={(e) => { setRangeFrom(e.target.value); setPreset(""); setTfTouched(true); }}
-              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
-            <span className="text-cream/30">→</span>
-            <input type="date" value={rangeTo} onChange={(e) => { setRangeTo(e.target.value); setPreset(""); setTfTouched(true); }}
-              className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50" />
-            {rangeActive && (
-              <button onClick={() => { setRangeFrom(""); setRangeTo(""); setPreset(""); }}
-                className="text-xs text-cream/40 hover:text-cream">clear</button>
-            )}
-          </div>
         </div>
-        {rangeActive && (
-          <div className="mt-2 text-xs text-cream/45">
-            Showing <b className="text-cream/70">{fmtDay(rangeFrom) || "start"} → {fmtDay(rangeTo) || "today"}</b>
-            {" "}· as of {fmtDay(data.date)}
+        {windowed && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-orange/25 bg-orange/[0.06] px-4 py-2.5 text-sm text-cream/80">
+            <span className="shrink-0 rounded-full bg-orange/20 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-orange">New-store cohort</span>
+            <span>Every breakdown below is the <b className="text-cream">{cohortN.toLocaleString()}</b> stores that launched {pw} — what the newest {marketLabel(country)} {platform === "all" ? "" : platformLabel(platform) + " "}stores are choosing, not the full live market.</span>
+            <button onClick={() => setLens("current")} className="ml-auto shrink-0 text-xs font-medium text-cyan hover:underline">← Back to current market</button>
           </div>
         )}
 
@@ -669,7 +654,7 @@ export function InsightsView({
         <div className="mt-8 grid gap-5 md:grid-cols-2">
           {/* New launches vs churn per period (diverging bars). On the combined "all" view this is
               all-ecommerce; the cumulative Shopify-vs-Woo trajectory sits beside it below. */}
-          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} from={rangeFrom} to={rangeTo} title={`${country ? marketLabel(country) + " " : ""}${platform === "all" ? "all-ecommerce" : platformLabel(platform)} launches & churn`.replace(/\s+/g, " ")} />
+          <GrowthChart country={country} platform={platform} period={PERIOD_KEY[period]} title={`${country ? marketLabel(country) + " " : ""}${platform === "all" ? "all-ecommerce" : platformLabel(platform)} launches & churn`.replace(/\s+/g, " ")} />
 
           {/* Combined view only: cumulative growth split by platform, so you can see whether Woo or
               Shopify is growing faster (hover a legend chip for its selling/active/dormant split). */}
@@ -678,13 +663,13 @@ export function InsightsView({
           {/* WooCommerce now has real checkout-verified payment data — show the SAME PSP/BNPL/APM
               breakdown as Shopify (its own Woo sections still follow below). */}
           {platform === "woocommerce" && (
-            <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} tfTouched={tfTouched} pk={pk} pw={pw} country={country} />
+            <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} windowed={windowed} pk={pk} pw={pw} country={country} />
           )}
 
           {/* Shopify payment intelligence — hidden on the WooCommerce view (its own sections below) */}
           {platform !== "woocommerce" && (<>
           {/* Payment providers — broken out by PSP / BNPL / APM, each drillable */}
-          <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} tfTouched={tfTouched} pk={pk} pw={pw} country={country} />
+          <PaymentIntelligenceCard data={data} provByType={provByType} baseProvByType={baseProvByType} base={base} windowed={windowed} pk={pk} pw={pw} country={country} />
 
           <div className="space-y-5">
             {/* Shopify Plus is a Shopify-only concept — hide it on the combined "all" view (there it
@@ -702,7 +687,7 @@ export function InsightsView({
             </Card>
             )}
             <Card title="Leading provider at checkout" subtitle="First gateway offered (best-effort)" reportHref={`/insights/leading?country=${country}${pfx}`}>
-              <DrillList data={data.firstProvider} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} adopt={tfTouched ? data.launchedDistro[pk].leading : undefined} adoptWord={pw} />
+              <DrillList data={distro("leading", data.firstProvider)} baseline={base?.firstProvider ?? null} tone="orange" showBaseline={!!base} drillParam="payment" country={country} />
             </Card>
           </div>
 
@@ -801,25 +786,23 @@ export function InsightsView({
 
           {platform !== "woocommerce" && (<>
           {/* Cross-platform distributions — meaningful on the combined "all" view too. */}
-          <DistroCard title="Categories" subtitle={`Of ${data.categoriesKnown.toLocaleString()} categorised stores`} data={data.categories} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].categories : undefined} adoptWord={pw} />
+          <DistroCard title="Categories" subtitle={distroSub(`Of ${data.categoriesKnown.toLocaleString()} categorised stores`)} data={distro("categories", data.categories)} baseline={base?.categories ?? null} tone="cyan" drillParam="category" country={country} reportHref={`/insights/categories?country=${country}${pfx}`} />
           {/* Themes + apps are SHOPIFY-specific (Shopify has no cross-platform equivalent), so they
               only appear when the Shopify platform is selected — not on the combined "all" view. */}
           {platform === "shopify" && (<>
-          <DistroCard title="Theme market share" subtitle={`Of ${data.themesKnown.toLocaleString()} stores with a known theme`} data={data.themes} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].themes : undefined} adoptWord={pw} />
-          <DistroCard title="Top apps installed" subtitle={`Of ${data.appsKnown.toLocaleString()} stores with app data`} data={data.apps} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].apps : undefined} adoptWord={pw} />
+          <DistroCard title="Theme market share" subtitle={distroSub(`Of ${data.themesKnown.toLocaleString()} stores with a known theme`)} data={distro("themes", data.themes)} baseline={base?.themes ?? null} tone="mint" drillParam="theme" country={country} reportHref={`/insights/themes?country=${country}${pfx}`} />
+          <DistroCard title="Top apps installed" subtitle={distroSub(`Of ${data.appsKnown.toLocaleString()} stores with app data`)} data={distro("apps", data.apps)} baseline={base?.apps ?? null} tone="lilac" reportHref={`/insights/apps?country=${country}${pfx}`} />
           </>)}
-          <DistroCard title="Cities" subtitle={`Of ${data.citiesKnown.toLocaleString()} stores with a location`} data={data.cities} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}${pfx}`} adopt={tfTouched ? data.launchedDistro[pk].cities : undefined} adoptWord={pw} />
+          <DistroCard title="Cities" subtitle={distroSub(`Of ${data.citiesKnown.toLocaleString()} stores with a location`)} data={distro("cities", data.cities)} baseline={base?.cities ?? null} tone="orange" drillParam="city" country={country} reportHref={`/insights/cities?country=${country}${pfx}`} />
           <DistroCard
             title="Shipping providers"
-            subtitle={`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`}
-            data={data.shippingByProvider}
+            subtitle={distroSub(`Checkout-verified on ${data.shippingKnown.toLocaleString()} stores · ${data.shippingKnown ? Math.round((100 * data.freeShippingStores) / data.shippingKnown) : 0}% offer free shipping`)}
+            data={distro("shipping", data.shippingByProvider)}
             baseline={base?.shippingByProvider ?? null}
             tone="cyan"
             drillParam="shipping"
             country={country}
             reportHref={`/insights/shipping?country=${country}${pfx}`}
-            adopt={tfTouched ? data.launchedDistro[pk].shipping : undefined}
-            adoptWord={pw}
           />
           </>)}
         </div>
