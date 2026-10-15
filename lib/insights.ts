@@ -515,8 +515,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int AS cov_pay_neverprobed
     FROM (
       SELECT *,
-        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = ${country} ${inTag} ${platClause}) AS za,
+        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store') AS live,
+        (published AND country = ${country} ${inTag} ${platClause} AND activity_tier IS DISTINCT FROM 'not_a_store') AS za,
         -- "new this week" = stores that genuinely LAUNCHED in the window. Keyed off the launch
         -- date (not discovered_at / created_at), so a bulk import or a payment backfill of
         -- historically-launched stores spreads across their real launch periods instead of
@@ -784,10 +784,12 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       migrated: Number(t.cov_migrated),
       neverChecked: Number(t.cov_never_checked),
       checked30d: Number(t.cov_checked_30d),
-      // REACHABLE payment coverage (matches /ops): verified ÷ (verified + never-probed). Excludes
-      // stores probed-and-found-no-gateway (no completable checkout) from the denominator.
-      paymentReachable: verified + Number(t.cov_pay_neverprobed),
-      paymentPct: pct(verified, verified + Number(t.cov_pay_neverprobed)),
+      // Payment coverage over the FULL live base (Option A): the denominator is every live store
+      // we track, so "stores at checkout" == "live stores tracked" (merchant growth) — the UI's two
+      // numbers now share one base. This is the honest market %: a probed-no-gateway store counts
+      // against coverage instead of being dropped as "not reachable" (which inflated it to ~82%).
+      paymentReachable: storesTotal,
+      paymentPct: pct(verified, storesTotal),
       launchPct: pct(Number(t.cov_has_launch), Number(t.churn_total)),
     },
     plusTotal: Number(t.plus_total),

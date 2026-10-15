@@ -104,8 +104,12 @@ function buildWhere(f: BrowseFilters) {
     if (f.checkedDays) conds.push(sql`live_checked_at >= CURRENT_DATE - ${f.checkedDays}::int`);
   } else {
     conds.push(sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`);
-    // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
-    conds.push(sql`activity_tier IS DISTINCT FROM 'not_a_store'`);
+    // Brochure/parked installs (any CMS) stay in the DB, tagged, and are browsable via the
+    // "not_a_store" activity facet — but hidden from the default lead list (they aren't leads)
+    // and never counted in Insights as live stores. Ticking the facet surfaces them.
+    if (!f.activity?.includes("not_a_store")) {
+      conds.push(sql`activity_tier IS DISTINCT FROM 'not_a_store'`);
+    }
   }
   if (f.domains?.length) conds.push(sql`domain = ANY(${f.domains})`);
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
