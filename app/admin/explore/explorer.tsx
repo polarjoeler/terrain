@@ -168,7 +168,7 @@ export type ExploreInitial = {
   launched?: LaunchKey;   // seed "launched this week" etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
   // The rest let a Saved list restore the whole view (not just a single-facet deep link).
-  platform?: string[]; apps?: string[]; hosting?: string[];
+  platform?: string[]; apps?: string[]; plugins?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
   status?: "migrated" | "dead"; checkedDays?: number;
@@ -194,6 +194,7 @@ export function Explorer({ initialData, initial, showStats }: {
   const [payment, setPayment] = useState<Set<string>>(new Set(initial?.payment));
   const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
   const [app, setApp] = useState<Set<string>>(new Set(initial?.apps));
+  const [plugin, setPlugin] = useState<Set<string>>(new Set(initial?.plugins));
   const [platform, setPlatform] = useState<Set<string>>(new Set(initial?.platform));
   const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
   const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
@@ -230,6 +231,7 @@ export function Explorer({ initialData, initial, showStats }: {
     payment: payment.size ? [...payment] : undefined,
     shipping: shipping.size ? [...shipping] : undefined,
     app: app.size ? [...app] : undefined,
+    plugin: plugin.size ? [...plugin] : undefined,
     activity: activity.size ? [...activity] : undefined,
     hosting: hosting.size ? [...hosting] : undefined,
     plus: plusOnly || undefined,
@@ -273,6 +275,7 @@ export function Explorer({ initialData, initial, showStats }: {
     payment: fv(data.facets.payment),
     shipping: fv(data.facets.shipping),
     apps: fv(data.facets.apps),
+    plugins: fv(data.facets.plugins),
   };
 
   // Launch dates only populate once a snapshot carries them; hide the Launched control until then.
@@ -338,7 +341,7 @@ export function Explorer({ initialData, initial, showStats }: {
     return {
       q: q || undefined, country: arr(country), category: arr(category), band: arr(band),
       theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
-      activity: arr(activity), platform: arr(platform), apps: arr(app), hosting: arr(hosting),
+      activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), hosting: arr(hosting),
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
       sort: sort !== "new" ? sort : undefined,
@@ -448,6 +451,7 @@ export function Explorer({ initialData, initial, showStats }: {
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} defaultOpen={false} />
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
         {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
+        {facets.plugins.length > 0 && <Facet title="Plugins" values={facets.plugins} selected={plugin} onToggle={toggle(setPlugin)} defaultOpen={false} />}
         {country.size > 0 && <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} defaultOpen={false} />}
       </aside>
 

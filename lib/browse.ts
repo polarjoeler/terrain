@@ -32,7 +32,7 @@ export type BrowseFilters = {
   q?: string;
   country?: string[]; platform?: string[]; category?: string[];
   band?: string[]; theme?: string[]; city?: string[];
-  payment?: string[]; shipping?: string[]; app?: string[];
+  payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[];
   activity?: string[]; hosting?: string[];
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
   tier?: "top100" | "top500";
@@ -79,7 +79,7 @@ export type BrowseResult = {
     country: Facet; platform: Facet; band: Facet;
     category: Facet; city: Facet; theme: Facet;
     activity: Facet; hosting: Facet;
-    payment: Facet; shipping: Facet; apps: Facet;   // multi-token (a store has several)
+    payment: Facet; shipping: Facet; apps: Facet; plugins: Facet;   // multi-token (a store has several)
   };
   recency: {
     launched: Record<number, number>;
@@ -104,8 +104,12 @@ function buildWhere(f: BrowseFilters) {
     if (f.checkedDays) conds.push(sql`live_checked_at >= CURRENT_DATE - ${f.checkedDays}::int`);
   } else {
     conds.push(sql`(live_status IS NULL OR live_status NOT IN ('dead','migrated'))`);
-    // Brochure/parked installs (any CMS) are captured elsewhere but aren't leads.
-    conds.push(sql`activity_tier IS DISTINCT FROM 'not_a_store'`);
+    // Brochure/parked installs (any CMS) stay in the DB, tagged, and are browsable via the
+    // "not_a_store" activity facet — but hidden from the default lead list (they aren't leads)
+    // and never counted in Insights as live stores. Ticking the facet surfaces them.
+    if (!f.activity?.includes("not_a_store")) {
+      conds.push(sql`activity_tier IS DISTINCT FROM 'not_a_store'`);
+    }
   }
   if (f.domains?.length) conds.push(sql`domain = ANY(${f.domains})`);
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
@@ -118,6 +122,7 @@ function buildWhere(f: BrowseFilters) {
   if (f.payment?.length) conds.push(sql`payments ILIKE ANY(${f.payment.map((p) => `%${p}%`)})`);
   if (f.shipping?.length) conds.push(sql`shipping_providers ILIKE ANY(${f.shipping.map((s) => `%${s}%`)})`);
   if (f.app?.length) conds.push(sql`apps ILIKE ANY(${f.app.map((a) => `%${a}%`)})`);
+  if (f.plugin?.length) conds.push(sql`plugins ILIKE ANY(${f.plugin.map((a) => `%${a}%`)})`);
   if (f.activity?.length) conds.push(sql`activity_tier = ANY(${f.activity})`);
   if (f.hosting?.length) conds.push(sql`hosting_provider = ANY(${f.hosting})`);
   if (f.plus) conds.push(sql`plus`);
@@ -252,7 +257,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     WITH f AS MATERIALIZED (
       SELECT country, platform, city, category, btrim(theme) AS theme,
              ${band} AS band, activity_tier, hosting_provider,
-             payments, shipping_providers, apps, plus,
+             payments, shipping_providers, apps, plugins, plus,
              (email IS NOT NULL AND email <> '') AS has_email,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on,
              discovered_at
@@ -272,6 +277,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            ${sql.unsafe(multiFacet("payments"))}         AS f_payment,
            ${sql.unsafe(multiFacet("shipping_providers"))} AS f_shipping,
            ${sql.unsafe(wantApps ? appsFacet : "'[]'::jsonb")}                   AS f_apps,
+           ${sql.unsafe(multiFacet("plugins"))} AS f_plugins,
            (SELECT jsonb_build_object(
               '7',   count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 30),
@@ -289,7 +295,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         band: toFacet(agg.f_band), category: toFacet(agg.f_category),
         city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
         activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
-        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps),
+        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins),
       },
       recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
     };
@@ -393,18 +399,25 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
     SELECT domain, name, category, country, city, platform, activity_tier, activity_score,
            hosting_provider, platform_version, btrim(theme) AS theme, product_count, avg_product_price,
            currency, ${usd}::int AS usd, ${band} AS band, plus, email, payments, shipping_providers,
-           apps, instagram, facebook, tiktok
+           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok
     FROM imported_stores WHERE ${where}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
     LIMIT ${EXPORT_CAP}`;
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "instagram", "facebook", "tiktok"];
+  // Shopify add-ons live in `apps` (apps.shopify.com slugs); every other CMS exposes them as `plugins`
+  // (wp-content/plugins, /modules/…) + cross-platform third-party `technologies` (Klaviyo, Gorgias, …).
+  // Normalise `apps` to bare slugs so the column reads the same across platforms.
+  const appSlugs = (s: unknown) => String(s ?? "").match(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)?.map((u) => u.split("/").pop()).join("; ") || null;
+  // `shipping_providers` is the Shopify checkout read; `logistics_apps` is the cross-platform homepage
+  // carrier fingerprint (Bob Go, Pargo, TUNL…). Merge them so non-Shopify stores show shipping too.
+  const shipMerged = (a: unknown, b: unknown) => [...new Set(`${a ?? ""};${b ?? ""}`.split(";").map((x) => x.trim()).filter(Boolean))].join("; ") || null;
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "facebook", "tiktok"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
     return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
       r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
-      sales, revenueBand(sales), r.plus, r.email, r.payments, r.shipping_providers, r.apps,
-      r.instagram, r.facebook, r.tiktok] as ExportCell[];
+      sales, revenueBand(sales), r.plus, r.email, r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
+      r.plugins, r.technologies, r.instagram, r.facebook, r.tiktok] as ExportCell[];
   });
   return { header, rows };
 }

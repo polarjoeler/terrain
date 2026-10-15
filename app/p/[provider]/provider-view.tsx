@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel } from "@/lib/markets";
@@ -20,9 +20,12 @@ type Range = "Day" | "Week" | "Month" | "Quarter" | "Year" | "All";
 const RANGES: Range[] = ["Day", "Week", "Month", "Quarter", "Year", "All"];
 const RANGE_DAYS: Record<Range, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365, All: Infinity };
 
-/** Holistic market-share view — share % over time, filterable by range. */
+/** Holistic market-share view — share % over time, filterable by range. The `scope` label reflects
+ *  the active country/platform filters (the series itself is re-scoped server-side on filter change),
+ *  and hovering the line reveals a tooltip with that point's exact share and store counts. */
 function MarketShareChart({ history, currentShare, provider, scope }: { history: ProviderTrendPoint[]; currentShare: number; provider: string; scope: string }) {
   const [range, setRange] = useState<Range>("All");
+  const [hover, setHover] = useState<number | null>(null);
   const pts = (() => {
     const days = RANGE_DAYS[range];
     if (days === Infinity) return history;
@@ -34,13 +37,18 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
   const maxY = Math.max(1, ...pts.map((p) => p.share)) * 1.15;
   const x = (i: number) => padL + (pts.length <= 1 ? 0 : (i / (pts.length - 1)) * (w - padL - 8));
   const y = (v: number) => padT + (1 - v / maxY) * (h - padT - padB);
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = Math.round((((e.clientX - r.left) / r.width) * w - padL) / ((w - padL - 8) / Math.max(1, pts.length - 1)));
+    setHover(i >= 0 && i < pts.length ? i : null);
+  };
 
   return (
     <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
-          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider} · {scope}</p>
+          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider} · <span className="text-cream/70">{scope}</span></p>
           <div className="mt-3 flex items-baseline gap-2">
             <CountUp value={Math.round(currentShare)} className="font-display text-5xl leading-none text-cream" />
             <span className="font-display text-2xl text-cream/60">%</span>
@@ -58,19 +66,34 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
       </div>
 
       {pts.length >= 2 ? (
-        <svg viewBox={`0 0 ${w} ${h}`} className="mt-5 w-full">
-          {[0, 0.5, 1].map((f) => (
-            <g key={f}>
-              <line x1={padL} x2={w} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--color-cream)" strokeOpacity="0.08" />
-              <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
-            </g>
-          ))}
-          <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
-          <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
-          {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r="3" fill="var(--color-cyan)"><title>{`${p.date}: ${p.share}% (${p.total} of ${p.verifiedBase})`}</title></circle>)}
-          <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
-          <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
-        </svg>
+        <div className="relative mt-5" onMouseLeave={() => setHover(null)}>
+          <svg viewBox={`0 0 ${w} ${h}`} className="w-full" onMouseMove={onMove}>
+            {[0, 0.5, 1].map((f) => (
+              <g key={f}>
+                <line x1={padL} x2={w} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--color-cream)" strokeOpacity="0.08" />
+                <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
+              </g>
+            ))}
+            <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
+            <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
+            {hover != null && <line x1={x(hover)} x2={x(hover)} y1={padT} y2={h - padB} stroke="var(--color-cream)" strokeOpacity="0.25" />}
+            {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 3} fill="var(--color-cyan)" opacity={hover == null || hover === i ? 1 : 0.5} />)}
+            <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
+            <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
+          </svg>
+          {hover != null && pts[hover] && (
+            <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
+              style={{ left: `${Math.min(86, Math.max(14, (x(hover) / w) * 100))}%`, top: 0 }}>
+              <div className="font-semibold text-cream">{pts[hover].date}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-cream/75">
+                <span className="inline-block h-2 w-2 rounded-sm bg-cyan" />
+                <span>{provider}</span>
+                <span className="ml-auto pl-3 font-medium text-cream tabular-nums">{pts[hover].share}%</span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].total.toLocaleString()} of {pts[hover].verifiedBase.toLocaleString()} verified stores</div>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="mt-5 grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-center text-sm text-cream/45">
           Trend line builds as daily snapshots accrue — the first point is recorded.<br />Come back over the next few weeks to watch it move.
@@ -221,6 +244,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 
 export function ProviderView({
   data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
+  providers = [], chromeless = false,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -233,6 +257,12 @@ export function ProviderView({
   subReport?: ProviderSubReport | null;
   switches?: PaymentShift[];
   platform?: string;
+  // The other providers a user can jump to (authed viewers only — a share token is scoped to one
+  // provider, so token viewers get an empty list and no switcher).
+  providers?: { slug: string; name: string }[];
+  // When rendered inside the app shell (logged-in users) the shell supplies the full-screen frame,
+  // so we drop our own min-h-screen padding wrapper. Token viewers render standalone (chromeless=false).
+  chromeless?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   // The active CMS (carried from the insights drill-in) scopes the whole page; keep it in every
@@ -249,6 +279,16 @@ export function ProviderView({
     navigator.clipboard?.writeText(`${window.location.origin}${linkFor(country)}`)
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
+  // Jump to another provider, preserving the active market + CMS scope (and share token).
+  const providerLink = (slug: string) => {
+    const qs = new URLSearchParams();
+    if (shareToken) qs.set("t", shareToken);
+    if (country) qs.set("country", country);
+    if (platform && platform !== "all") qs.set("platform", platform);
+    const s = qs.toString();
+    return `/p/${slug}${s ? `?${s}` : ""}`;
+  };
+  const activeSlug = providerSlug(d.provider);
 
   const tiles = [
     { n: d.total, label: "stores at checkout", sub: `of ${d.verifiedBase.toLocaleString()} verified` },
@@ -257,8 +297,7 @@ export function ProviderView({
     { n: d.newLast7, label: "new stores this week", sub: `${d.shareOfNew7}% of ${d.newStores7} new chose you` },
   ];
 
-  return (
-    <div className="min-h-screen px-4 py-8 md:px-8">
+  const body = (
       <div className="mx-auto max-w-6xl">
         <nav className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -274,12 +313,25 @@ export function ProviderView({
             )}
             <span className="text-sm text-cream/45">market insights</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {providers.length > 1 && (
+              <label className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Provider</span>
+                <select
+                  value={activeSlug}
+                  onChange={(e) => { window.location.href = providerLink(e.target.value); }}
+                  className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
+                  title="Switch to another payment provider"
+                >
+                  {providers.map((p) => <option key={p.slug} value={p.slug} className="text-ink">{p.name}</option>)}
+                </select>
+              </label>
+            )}
             {countries.length > 0 && (
               <select
                 value={country}
                 onChange={(e) => { window.location.href = linkFor(e.target.value); }}
-                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
               >
                 <option value="" className="text-ink">All markets</option>
                 {countries.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
@@ -514,19 +566,26 @@ export function ProviderView({
 
         {/* breakdowns */}
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <Card title="Market share by market" subtitle={`Of each market's checkout-verified stores, the % using ${d.provider}`}>
+          <Card title="Market share by market" subtitle={country ? `Click a market to scope the whole page to it${country ? " — currently " + marketLabel(country) : ""}` : `Of each market's checkout-verified stores, the % using ${d.provider} — click one to drill in`}>
             {d.byCountry.length ? (
-              <div className="space-y-2.5">
-                {d.byCountry.map((c) => (
-                  <div key={c.label} className="flex items-center gap-3">
-                    <div className="w-28 shrink-0 truncate text-sm text-cream/75">{marketLabel(c.label)}</div>
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
-                      <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
-                    </div>
-                    <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
-                    <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
-                  </div>
-                ))}
+              <div className="space-y-1">
+                {d.byCountry.map((c) => {
+                  const active = country && c.label.toUpperCase() === country.toUpperCase();
+                  return (
+                    <Link key={c.label} href={linkFor(c.label)} title={`Scope this page to ${marketLabel(c.label)}`}
+                      className={`flex items-center gap-3 rounded-lg px-2 py-1.5 transition ${active ? "bg-mint/10 ring-1 ring-mint/25" : "hover:bg-cream/[0.04]"}`}>
+                      <div className={`w-28 shrink-0 truncate text-sm ${active ? "font-semibold text-cream" : "text-cream/75"}`}>{marketLabel(c.label)}</div>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                        <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
+                      </div>
+                      <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
+                      <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
+                    </Link>
+                  );
+                })}
+                {country && (
+                  <Link href={linkFor("")} className="mt-1 inline-block px-2 text-xs font-medium text-cyan hover:underline">← Back to all markets</Link>
+                )}
               </div>
             ) : <p className="text-sm text-cream/40">No market data.</p>}
           </Card>
@@ -541,8 +600,10 @@ export function ProviderView({
 
         <p className="mt-8 text-center text-xs text-cream/40">Live Terrain data · {d.total.toLocaleString()} checkout-verified stores · {new Date().toISOString().slice(0, 10)}</p>
       </div>
-    </div>
   );
+  // Logged-in users get the full Terrain shell (sidebar nav) around the report; external share-token
+  // viewers get it standalone with its own full-screen padding.
+  return chromeless ? body : <div className="min-h-screen px-4 py-8 md:px-8">{body}</div>;
 }
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
