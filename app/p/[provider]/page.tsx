@@ -2,7 +2,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { notFound } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { getSubscriber, hasAccess } from "@/lib/subscriptions";
+import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
+import { getAccount } from "@/lib/account";
+import { AppShell, type ShellUser } from "@/app/components/app-shell";
 import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, providerSwitches, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
 import { cachedAgg } from "@/lib/agg-cache";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
@@ -49,8 +51,12 @@ export default async function ProviderPage({
   // THIS provider (so a report can still be shared with a PSP who isn't a subscriber).
   const email = await currentUser();
   const admin = isAdmin(email);
-  const paid = email ? hasAccess(await getSubscriber(email).catch(() => null)) : false;
+  const subscriber = email ? await getSubscriber(email).catch(() => null) : null;
+  const paid = hasAccess(subscriber);
   if (!admin && !paid && !verifyProviderToken(canonical, t)) notFound();
+  // Signed-in users (not external token viewers) see the report inside the full Terrain shell so they
+  // can navigate the rest of the product, and get a provider switcher.
+  const authed = admin || paid;
 
   // Country filter (from the dropdown). Validate against the countries we actually have.
   const countries = await providerCountries(canonical).catch((): string[] => []);
@@ -89,6 +95,25 @@ export default async function ProviderPage({
   // Slug is [a-z0-9-] only, so it's safe to build a path from.
   const logo = providerLogo(providerSlug(canonical));
 
-  return <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
-    countries={countries} country={country ?? ""} logo={logo} subReport={subReport} switches={switches} platform={platform} />;
+  // Provider switcher list (authed users only — a share token is scoped to one provider). The
+  // meaningful gateways by prevalence, with the current one always included.
+  const providerList = authed
+    ? providers.filter((x) => x.stores >= 10 || x.provider === canonical).map((x) => ({ slug: providerSlug(x.provider), name: x.provider }))
+    : [];
+
+  const view = (
+    <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
+      countries={countries} country={country ?? ""} logo={logo} subReport={subReport} switches={switches} platform={platform}
+      providers={providerList} chromeless={authed} />
+  );
+  if (!authed || !email) return view; // external share-token viewer → standalone, no app chrome
+
+  // Wrap signed-in users in the same shell the rest of the app uses (sidebar + nav).
+  const acct = await getAccount(email).catch(() => null);
+  const shellUser: ShellUser = acct
+    ? { name: acct.name, email: acct.email, workspace: acct.workspace, role: acct.isOwner ? "Owner" : "Member", initials: acct.initials }
+    : { name: email.split("@")[0] || email, email, workspace: email, role: "Member", initials: (email[0] || "?").toUpperCase() };
+  const billing = { trialDays: trialDaysLeft(subscriber), pastDue: subscriber?.status === "past_due" };
+
+  return <AppShell user={shellUser} billing={billing} pageTitle="Intelligence">{view}</AppShell>;
 }
