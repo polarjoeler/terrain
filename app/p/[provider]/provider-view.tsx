@@ -3,7 +3,7 @@
 import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
-import { marketLabel } from "@/lib/markets";
+import { marketLabel, groupCodesByRegion } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
 import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
@@ -331,10 +331,14 @@ export function ProviderView({
               <select
                 value={country}
                 onChange={(e) => { window.location.href = linkFor(e.target.value); }}
-                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
+                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep"
               >
                 <option value="" className="text-ink">All markets</option>
-                {countries.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+                {groupCodesByRegion(countries).map(({ region, codes }) => (
+                  <optgroup key={region} label={region}>
+                    {codes.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+                  </optgroup>
+                ))}
               </select>
             )}
             <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">Live data</span>
