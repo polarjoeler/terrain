@@ -38,6 +38,53 @@ import { GrowthChart } from "@/app/components/growth-chart";
 import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 import { InsightsNav } from "./insights-nav";
 
+/** Donut of the platform mix — hover a slice (or legend) for that CMS's store count + share; the
+ *  centre reflects the hovered slice, and clicking scopes the whole report to it. */
+function PlatformDonut({ slices, totalLive, onPick }: {
+  slices: { key: string; label: string; live: number; color: string; pickable: boolean }[];
+  totalLive: number;
+  onPick: (key: string) => void;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const R = 72, r = 46, c = 82;
+  const pt = (ang: number, rad: number): [number, number] =>
+    [c + rad * Math.cos(ang * 2 * Math.PI - Math.PI / 2), c + rad * Math.sin(ang * 2 * Math.PI - Math.PI / 2)];
+  let acc = 0;
+  const arcs = slices.map((s) => { const start = acc; acc += s.live / (totalLive || 1); return { ...s, start, end: acc }; });
+  const path = (start: number, end: number) => {
+    const [x0o, y0o] = pt(start, R), [x1o, y1o] = pt(end, R), [x1i, y1i] = pt(end, r), [x0i, y0i] = pt(start, r);
+    const large = end - start > 0.5 ? 1 : 0;
+    return `M${x0o.toFixed(1)},${y0o.toFixed(1)} A${R},${R} 0 ${large} 1 ${x1o.toFixed(1)},${y1o.toFixed(1)} L${x1i.toFixed(1)},${y1i.toFixed(1)} A${r},${r} 0 ${large} 0 ${x0i.toFixed(1)},${y0i.toFixed(1)} Z`;
+  };
+  const pct = (live: number) => (totalLive ? Math.round((live / totalLive) * 100) : 0);
+  const h = hover != null ? arcs[hover] : null;
+  return (
+    <div className="flex flex-wrap items-center gap-5">
+      <svg viewBox="0 0 164 164" className="h-40 w-40 shrink-0" onMouseLeave={() => setHover(null)}>
+        {arcs.map((a, i) => (
+          <path key={a.key} d={path(a.start, a.end)} fill={a.color}
+            opacity={hover == null || hover === i ? 1 : 0.3}
+            className={`transition-opacity ${a.pickable ? "cursor-pointer" : ""}`}
+            onMouseEnter={() => setHover(i)} onClick={() => a.pickable && onPick(a.key)} />
+        ))}
+        <text x={c} y={c - 3} textAnchor="middle" className="fill-cream font-display" fontSize="22">{(h ? h.live : totalLive).toLocaleString()}</text>
+        <text x={c} y={c + 14} textAnchor="middle" className="fill-cream/55" fontSize="9">{h ? `${h.label} · ${pct(h.live)}%` : "live stores"}</text>
+      </svg>
+      <div className="flex flex-wrap content-center gap-x-4 gap-y-1.5">
+        {arcs.map((a, i) => (
+          <button key={a.key} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onClick={() => a.pickable && onPick(a.key)}
+            title={`${a.label} · ${a.live.toLocaleString()} (${pct(a.live)}%)${a.pickable ? " — scope the report" : ""}`}
+            className={`group flex items-center gap-1.5 text-xs ${a.pickable ? "" : "cursor-default"}`}>
+            <span className="h-2 w-2 rounded-sm" style={{ background: a.color }} />
+            <span className={`${hover === i ? "text-cream" : "text-cream/80"} ${a.pickable ? "group-hover:text-cream" : ""}`}>{a.label}</span>
+            <span className="tabular-nums text-cream/40">{pct(a.live)}%</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const PERIODS = ["Day", "Week", "Month", "Quarter", "Year"] as const;
 type Period = (typeof PERIODS)[number];
 const PERIOD_DAYS: Record<Period, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365 };
@@ -605,30 +652,20 @@ export function InsightsView({
           const lp = data.launchedByPeriod;
           const launchRows = [["Week", "7 days", lp.week], ["Month", "30 days", lp.month], ["Quarter", "90 days", lp.quarter], ["Year", "12 months", lp.year]] as const;
           const relMax = Math.max(...launchRows.map((r) => r[2]), 1);
+          const donutSlices = [
+            ...top.map((p) => ({ key: p.platform, label: platformLabel(p.platform), live: p.live, color: platformDot(p.platform), pickable: true })),
+            ...(restLive > 0 ? [{ key: "__other", label: "Other", live: restLive, color: "#5b6b70", pickable: false }] : []),
+          ];
           return (
             <div className="mt-8 grid gap-5 md:grid-cols-2">
-              {/* Platform mix — one compact stacked bar + legend (click a CMS to scope the report) */}
+              {/* Platform mix — donut; hover a slice/legend for store count + share, click to scope */}
               <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
                 <div className="flex items-baseline justify-between gap-2">
                   <h3 className="font-semibold text-cream">Platform mix</h3>
                   <span className="text-xs text-cream/40">{totalLive.toLocaleString()} live · {marketLabel(country)}</span>
                 </div>
-                <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full bg-cream/[0.06]">
-                  {top.map(({ platform: key, live }) => (
-                    <button key={key} onClick={() => go({ platform: key })} title={`${platformLabel(key)} · ${live.toLocaleString()} — scope the report`}
-                      className="h-full transition hover:brightness-110" style={{ width: `${(live / totalLive) * 100}%`, background: platformDot(key) }} />
-                  ))}
-                  {restLive > 0 && <div className="h-full bg-cream/15" style={{ width: `${(restLive / totalLive) * 100}%` }} title={`Other CMSs · ${restLive.toLocaleString()}`} />}
-                </div>
-                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5">
-                  {top.map(({ platform: key, live }) => (
-                    <button key={key} onClick={() => go({ platform: key })} className="group flex items-center gap-1.5 text-xs" title={`Scope the report to ${platformLabel(key)}`}>
-                      <span className="h-2 w-2 rounded-sm" style={{ background: platformDot(key) }} />
-                      <span className="text-cream/80 group-hover:text-cream">{platformLabel(key)}</span>
-                      <span className="tabular-nums text-cream/40">{Math.round((live / totalLive) * 100)}%</span>
-                    </button>
-                  ))}
-                  {restLive > 0 && <span className="flex items-center gap-1.5 text-xs"><span className="h-2 w-2 rounded-sm bg-cream/15" /><span className="text-cream/50">Other</span><span className="tabular-nums text-cream/40">{Math.round((restLive / totalLive) * 100)}%</span></span>}
+                <div className="mt-4">
+                  <PlatformDonut slices={donutSlices} totalLive={totalLive} onPick={(k) => go({ platform: k })} />
                 </div>
               </div>
               {/* New launches — growth of newly-launched stores by window; the active View is highlighted */}
@@ -815,8 +852,8 @@ export function InsightsView({
         </div>
 
         {/* Platform migrations — net movement between CMSs (live_platform vs where we first found the
-            store). A compact, drill-free read of who's gaining and losing merchants in this market. */}
-        {data.migrations.length > 0 && (() => {
+            store). HIDDEN for now (doesn't look right yet); data + section kept, flip to re-enable. */}
+        {false && data.migrations.length > 0 && (() => {
           const maxAbs = Math.max(...data.migrations.map((m) => Math.abs(m.net)), 1);
           const totalMoved = data.migrations.reduce((s, m) => s + m.gained, 0);
           return (
