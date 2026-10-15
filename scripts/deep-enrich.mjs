@@ -43,7 +43,19 @@ async function getHtml(domain, ms = 12000) {
 /* ---- extractors (regex over raw HTML) ------------------------------------- */
 // WordPress/Woo theme + plugins live in asset paths. Works for any WP-based store.
 const wpTheme = (h) => { const m = h.match(/wp-content\/themes\/([a-z0-9_-]+)/i); return m ? m[1].toLowerCase() : null; };
-const wpPlugins = (h) => [...new Set([...h.matchAll(/wp-content\/plugins\/([a-z0-9_-]+)/gi)].map((m) => m[1].toLowerCase()))];
+// Add-on/module slugs — NOT WordPress-only. WP/Woo expose plugins under wp-content/plugins; PrestaShop
+// and Drupal expose modules under /modules/<slug>/ (read only for those platforms — the path is too
+// generic to trust blind). Third-party apps (Klaviyo, Gorgias, …) are caught cross-platform by TECH_FP
+// into `technologies`, so every CMS gets its marketing/reviews/support stack regardless.
+function cmsPlugins(h, platform) {
+  const out = new Set();
+  for (const m of h.matchAll(/wp-content\/plugins\/([a-z0-9_-]+)/gi)) out.add(m[1].toLowerCase());
+  const p = (platform || "").toLowerCase();
+  if (p.includes("presta") || p.includes("drupal")) {
+    for (const m of h.matchAll(/\/modules\/([a-z][a-z0-9_-]{2,40})\//gi)) out.add(m[1].toLowerCase());
+  }
+  return [...out];
+}
 
 // Generic third-party tech/app fingerprints (script hosts + vendor strings) — platform-agnostic.
 const TECH_FP = [
@@ -133,7 +145,7 @@ async function main() {
         if (!h) { unreachable++; if (!DRY) await sql`UPDATE imported_stores SET deep_enriched_at = now() WHERE domain = ${clean(r.domain)}`.catch(() => {}); continue; }
         ok++;
         const theme = wpTheme(h);
-        const plugins = wpPlugins(h);
+        const plugins = cmsPlugins(h, r.platform);
         const tech = techFingerprints(h);
         const st = subTools(h);
         if (st.length) subs++;

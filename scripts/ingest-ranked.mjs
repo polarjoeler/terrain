@@ -49,6 +49,20 @@ const PLATFORMS = [
   { name: "Ecwid",          kind: "native", sig: ["ecwid", "app.ecwid.com", "ecwid_script"] },
   { name: "Big Cartel",     kind: "native", sig: ["bigcartel.com", "data-bc-"] },
   { name: "ShopStar",       kind: "native", sig: ["shopstar.co.za", "_tillyoudrop_session"] },
+  // Enterprise/other ecommerce platforms found by examine-custom in the 'custom' bucket — these run
+  // much of the retail head (Makro, Clicks, Superbalist, Bash, Cotton On, Puma) that we were missing.
+  { name: "Salesforce Commerce Cloud", kind: "native", sig: ["demandware", "dwstatic", "/on/demandware", "dwcdn.net"] },
+  { name: "SAP Hybris",     kind: "native", sig: ["yacceleratorstorefront", "/_ui/responsive", "hybris"] },
+  { name: "VTEX",           kind: "native", sig: ["vtexassets.com", "vteximg.com", "vtex.render-server", "vtexcommercestable"] },
+  { name: "Spree",          kind: "native", sig: ["data-spree", "/spree/", "spree_"] },
+  { name: "X-Cart",         kind: "native", sig: ["x-cart", "xcart"] },
+  { name: "GoDaddy",        kind: "mixed",  sig: ["img1.wsimg.com", "websites.godaddy", "/ds/web/"] },
+  // More platforms the custom-bucket reclassify surfaced — Shoplazza (cross-border dropshipping, big
+  // in Africa) + nopCommerce, and the African creator-commerce tools Selar & Bumpa.
+  { name: "Shoplazza",      kind: "native", sig: ["shoplazza", "myshoplaza"] },
+  { name: "nopCommerce",    kind: "native", sig: ["nopcommerce"] },
+  { name: "Selar",          kind: "native", sig: ["selar.co"] },
+  { name: "Bumpa",          kind: "native", sig: ["getbumpa", "bumpa.shop"] },
   { name: "Wix",            kind: "mixed",  sig: ["wixstatic.com", "x-wix-", "wix-warmup", "wixcode"] },
   { name: "Squarespace",    kind: "mixed",  sig: ["squarespace.com", "static1.squarespace", "squarespace-cdn"] },
   { name: "Webflow",        kind: "mixed",  sig: ["webflow.io", "assets.website-files.com", "data-wf-"] },

@@ -153,6 +153,7 @@ const cohortFilter = (tag?: string) =>
 const LIVE = (country: string, tag?: string, platform: PlatformSel = "shopify") =>
   db()`published AND country = ${country}
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+       AND activity_tier IS DISTINCT FROM 'not_a_store'
        ${cohortFilter(tag)} ${platformClause(db(), platform)}`;
 
 // The 54 African ISO2 codes — the map + overview are Africa-only (our DB also holds many global
@@ -194,7 +195,7 @@ export async function africaOverview(
       COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 30)::int AS launched30d
     FROM (
       SELECT country,
-        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${platformClause(sql, platform)}) AS live,
+        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store' ${platformClause(sql, platform)}) AS live,
         COALESCE(
           (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
           launched_at
@@ -234,6 +235,7 @@ export async function availableCountries(): Promise<{ country: string; stores: n
           SELECT country, COUNT(*)::int n FROM imported_stores
           WHERE published AND country = ANY(${[...FOCUS_MARKETS]})
             AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+            AND activity_tier IS DISTINCT FROM 'not_a_store'
           GROUP BY country HAVING COUNT(*) >= ${COUNTRY_PICKER_FLOOR} ORDER BY n DESC`;
       });
       return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
@@ -332,6 +334,7 @@ export async function availablePlatforms(country?: string, minLive = 10): Promis
   const rows = await sql<{ p: string | null; n: number }[]>`
     SELECT lower(platform) p, COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store'
       ${country ? sql`AND country = ${country}` : sql``}
     GROUP BY 1`;
   // Fold platform NULL (unclassified CT discoveries) into Shopify, matching platformClause.
@@ -514,8 +517,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int AS cov_pay_neverprobed
     FROM (
       SELECT *,
-        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = ${country} ${inTag} ${platClause}) AS za,
+        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store') AS live,
+        (published AND country = ${country} ${inTag} ${platClause} AND activity_tier IS DISTINCT FROM 'not_a_store') AS za,
         -- "new this week" = stores that genuinely LAUNCHED in the window. Keyed off the launch
         -- date (not discovered_at / created_at), so a bulk import or a payment backfill of
         -- historically-launched stores spreads across their real launch periods instead of
@@ -783,10 +786,12 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       migrated: Number(t.cov_migrated),
       neverChecked: Number(t.cov_never_checked),
       checked30d: Number(t.cov_checked_30d),
-      // REACHABLE payment coverage (matches /ops): verified ÷ (verified + never-probed). Excludes
-      // stores probed-and-found-no-gateway (no completable checkout) from the denominator.
-      paymentReachable: verified + Number(t.cov_pay_neverprobed),
-      paymentPct: pct(verified, verified + Number(t.cov_pay_neverprobed)),
+      // Payment coverage over the FULL live base (Option A): the denominator is every live store
+      // we track, so "stores at checkout" == "live stores tracked" (merchant growth) — the UI's two
+      // numbers now share one base. This is the honest market %: a probed-no-gateway store counts
+      // against coverage instead of being dropped as "not reachable" (which inflated it to ~82%).
+      paymentReachable: storesTotal,
+      paymentPct: pct(verified, storesTotal),
       launchPct: pct(Number(t.cov_has_launch), Number(t.churn_total)),
     },
     plusTotal: Number(t.plus_total),
