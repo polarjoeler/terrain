@@ -38,10 +38,12 @@ export default async function Insights({
   ]);
   const country =
     sp.country && countries.some((c) => c.country === sp.country) ? sp.country : "ZA";
-  // Dynamic "Brand New Stores" cohort (recently discovered in this market),
-  // shown first, then the curated tag cohorts.
+  // Dynamic "Brand New Stores" cohort (recently discovered in this market), shown first, then just
+  // the two curated size cohorts. Deliberately simplified to Brand-new / Top 100 / Top 500 — other
+  // operational tags (partner-managed, …) aren't market cohorts and only cluttered the picker.
   const newCount = await cohortCount(country, "new").catch(() => 0);
-  const cohorts = [{ tag: "new", count: newCount }, ...tags];
+  const COHORT_TAGS = ["top-100", "top-500"];
+  const cohorts = [{ tag: "new", count: newCount }, ...tags.filter((t) => COHORT_TAGS.includes(t.tag))];
   // Only accept a cohort that actually has stores.
   const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
   // Which CMSs actually have a live presence in this market — the data-driven platform picker.

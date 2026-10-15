@@ -235,6 +235,7 @@ export async function availableCountries(): Promise<{ country: string; stores: n
           SELECT country, COUNT(*)::int n FROM imported_stores
           WHERE published AND country = ANY(${[...FOCUS_MARKETS]})
             AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+            AND activity_tier IS DISTINCT FROM 'not_a_store'
           GROUP BY country HAVING COUNT(*) >= ${COUNTRY_PICKER_FLOOR} ORDER BY n DESC`;
       });
       return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
@@ -333,6 +334,7 @@ export async function availablePlatforms(country?: string, minLive = 10): Promis
   const rows = await sql<{ p: string | null; n: number }[]>`
     SELECT lower(platform) p, COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store'
       ${country ? sql`AND country = ${country}` : sql``}
     GROUP BY 1`;
   // Fold platform NULL (unclassified CT discoveries) into Shopify, matching platformClause.

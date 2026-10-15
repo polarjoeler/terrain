@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { classify, PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import type { ProviderMomentum, PaymentShift } from "@/lib/provider-insights";
-import { marketLabel, marketAdjective } from "@/lib/markets";
+import { marketLabel, marketAdjective, groupByRegion } from "@/lib/markets";
 import { tagLabel } from "@/lib/tag-defs";
 import type { InsightsData, InsightItem, PlatformSel } from "@/lib/insights";
 
@@ -499,12 +499,16 @@ export function InsightsView({
               <select
                 value={country}
                 onChange={(e) => go({ country: e.target.value })}
-                className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+                className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep"
               >
-                {countries.map((c) => (
-                  <option key={c.country} value={c.country} className="text-ink">
-                    {marketLabel(c.country)} ({c.stores.toLocaleString()})
-                  </option>
+                {groupByRegion(countries).map(({ region, items }) => (
+                  <optgroup key={region} label={region}>
+                    {items.map((c) => (
+                      <option key={c.country} value={c.country} className="text-ink">
+                        {marketLabel(c.country)} ({c.stores.toLocaleString()})
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>
@@ -526,17 +530,23 @@ export function InsightsView({
               </select>
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Platform</span>
-            {/* Data-driven: "All" + every CMS with a live presence in this market (availablePlatforms).
-                Shopify always leads; the long tail (Wix, BASE, cafe24, …) appears where it exists. */}
-            {[{ platform: "all", live: 0 }, ...platforms].map(({ platform: key, live }) => (
-              <button key={key} onClick={() => go({ platform: key })}
-                title={key === "all" ? "Every CMS combined" : `${live.toLocaleString()} live ${platformLabel(key)} stores in ${marketLabel(country)}`}
-                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition ${platform === key ? "bg-cream text-ink" : "border border-cream/15 text-cream/60 hover:text-cream"}`}>
-                <span className="h-2 w-2 rounded-full" style={{ background: platformDot(key) }} /> {platformLabel(key)}
-              </button>
-            ))}
+            {/* Data-driven dropdown: "All" + every CMS with a live presence in this market
+                (availablePlatforms). Selecting one re-scopes the ENTIRE report to that platform
+                (go() sets ?platform= and the server recomputes every distribution for it). */}
+            <select
+              value={platform}
+              onChange={(e) => go({ platform: e.target.value })}
+              className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
+            >
+              <option value="all" className="text-ink">All platforms</option>
+              {platforms.map(({ platform: key, live }) => (
+                <option key={key} value={key} className="text-ink">
+                  {platformLabel(key)} ({live.toLocaleString()})
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Timeframe</span>
@@ -615,6 +625,44 @@ export function InsightsView({
 
         {/* The old "Market movement" tiles were removed — redundant with the Launches & churn chart
             below, which shows the same launch/churn on the market's clock, over time. */}
+
+        {/* PLATFORM MIX — every CMS we track live in this market, by store count. Answers "show all the
+            CMSs" directly (the growth chart below can only plot a trajectory where stores are
+            launch-dated). Each row re-scopes the whole report to that platform, like the dropdown. */}
+        {platform === "all" && platforms.length > 0 && (() => {
+          const totalLive = platforms.reduce((s, p) => s + p.live, 0) || 1;
+          const max = platforms[0]?.live || 1;
+          return (
+            <div className="mt-8 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-lg font-semibold">Platform mix — all CMSs</h3>
+                <span className="text-xs text-cream/40">{totalLive.toLocaleString()} live stores in {marketLabel(country)} · click a platform to scope the whole report</span>
+              </div>
+              <div className="mt-5 space-y-2.5">
+                {platforms.map(({ platform: key, live }) => {
+                  const share = (live / totalLive) * 100;
+                  return (
+                    <button key={key} onClick={() => go({ platform: key })} title={`Scope the entire report to ${platformLabel(key)}`}
+                      className="group flex w-full items-center gap-3 text-left">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: platformDot(key) }} />
+                      <span className="w-28 shrink-0 text-sm text-cream/80 group-hover:text-cream">{platformLabel(key)}</span>
+                      <span className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-cream/[0.06]">
+                        <span className="absolute inset-y-0 left-0 rounded-full transition-[width] group-hover:brightness-110"
+                          style={{ width: `${Math.max(1.5, (live / max) * 100)}%`, background: platformDot(key) }} />
+                      </span>
+                      <span className="w-24 shrink-0 text-right text-sm tabular-nums text-cream/70">
+                        {live.toLocaleString()} <span className="text-cream/35">· {share < 1 ? "<1" : share.toFixed(0)}%</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-4 text-xs leading-relaxed text-cream/35">
+                Every CMS we track live here. Shopify folds in not-yet-classified discoveries. The growth chart below plots a trajectory only for platforms with enough launch-dated stores (Shopify, WooCommerce); the rest are counted here but can&rsquo;t yet be dated into launch cohorts.
+              </p>
+            </div>
+          );
+        })()}
 
         <div className="mt-8 grid gap-5 md:grid-cols-2">
           {/* New launches vs churn per period (diverging bars). On the combined "all" view this is
