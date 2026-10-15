@@ -244,6 +244,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 
 export function ProviderView({
   data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
+  providers = [], chromeless = false,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
@@ -256,6 +257,12 @@ export function ProviderView({
   subReport?: ProviderSubReport | null;
   switches?: PaymentShift[];
   platform?: string;
+  // The other providers a user can jump to (authed viewers only — a share token is scoped to one
+  // provider, so token viewers get an empty list and no switcher).
+  providers?: { slug: string; name: string }[];
+  // When rendered inside the app shell (logged-in users) the shell supplies the full-screen frame,
+  // so we drop our own min-h-screen padding wrapper. Token viewers render standalone (chromeless=false).
+  chromeless?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   // The active CMS (carried from the insights drill-in) scopes the whole page; keep it in every
@@ -272,6 +279,16 @@ export function ProviderView({
     navigator.clipboard?.writeText(`${window.location.origin}${linkFor(country)}`)
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
+  // Jump to another provider, preserving the active market + CMS scope (and share token).
+  const providerLink = (slug: string) => {
+    const qs = new URLSearchParams();
+    if (shareToken) qs.set("t", shareToken);
+    if (country) qs.set("country", country);
+    if (platform && platform !== "all") qs.set("platform", platform);
+    const s = qs.toString();
+    return `/p/${slug}${s ? `?${s}` : ""}`;
+  };
+  const activeSlug = providerSlug(d.provider);
 
   const tiles = [
     { n: d.total, label: "stores at checkout", sub: `of ${d.verifiedBase.toLocaleString()} verified` },
@@ -280,8 +297,7 @@ export function ProviderView({
     { n: d.newLast7, label: "new stores this week", sub: `${d.shareOfNew7}% of ${d.newStores7} new chose you` },
   ];
 
-  return (
-    <div className="min-h-screen px-4 py-8 md:px-8">
+  const body = (
       <div className="mx-auto max-w-6xl">
         <nav className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -297,12 +313,25 @@ export function ProviderView({
             )}
             <span className="text-sm text-cream/45">market insights</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {providers.length > 1 && (
+              <label className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Provider</span>
+                <select
+                  value={activeSlug}
+                  onChange={(e) => { window.location.href = providerLink(e.target.value); }}
+                  className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
+                  title="Switch to another payment provider"
+                >
+                  {providers.map((p) => <option key={p.slug} value={p.slug} className="text-ink">{p.name}</option>)}
+                </select>
+              </label>
+            )}
             {countries.length > 0 && (
               <select
                 value={country}
                 onChange={(e) => { window.location.href = linkFor(e.target.value); }}
-                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
               >
                 <option value="" className="text-ink">All markets</option>
                 {countries.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
@@ -571,8 +600,10 @@ export function ProviderView({
 
         <p className="mt-8 text-center text-xs text-cream/40">Live Terrain data · {d.total.toLocaleString()} checkout-verified stores · {new Date().toISOString().slice(0, 10)}</p>
       </div>
-    </div>
   );
+  // Logged-in users get the full Terrain shell (sidebar nav) around the report; external share-token
+  // viewers get it standalone with its own full-screen padding.
+  return chromeless ? body : <div className="min-h-screen px-4 py-8 md:px-8">{body}</div>;
 }
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
