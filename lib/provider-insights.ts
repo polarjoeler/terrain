@@ -178,6 +178,24 @@ export async function providerInsights(provider: string, country?: string, platf
     const c = (r.country || "??").toUpperCase();
     verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
   }
+  // The "Market share by market" breakdown must stay a COMPLETE, clickable country switcher even
+  // when the page is scoped to one market (the rows above were narrowed to it). So when a country
+  // filter is active, re-derive byCountry + its denominators across ALL markets with a lean pass —
+  // same JS canonicalisation as `mine`, so the counts stay consistent with the scoped totals.
+  if (country) {
+    const allRows = await sql<{ country: string | null; payments: string }[]>`
+      SELECT country, payments FROM imported_stores
+      WHERE ${LIVE} ${AND_P} AND payments IS NOT NULL AND payments <> ''
+        AND payments_source IS DISTINCT FROM 'storecensus' AND ${realPaymentsClause(sql)}`;
+    byCountry.clear(); verifiedByCountry.clear();
+    for (const r of allRows) {
+      const c = (r.country || "??").toUpperCase();
+      verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
+      if (cleanPayments(String(r.payments).split(";")).some((g) => norm(g) === p)) {
+        byCountry.set(c, (byCountry.get(c) ?? 0) + 1);
+      }
+    }
+  }
   // Competitors grouped by payment type (PSP / BNPL / APM).
   const coOccurrenceByType: Record<PayType, InsightItem[]> = { PSP: [], BNPL: [], APM: [] };
   for (const [label, count] of coOcc.entries())
