@@ -148,8 +148,10 @@ const platformParam = (platform?: string) => (platform && platform !== "all" ? p
 function drillHref(param: string, label: string, country?: string, platform?: string): string {
   const pf = platformParam(platform);
   if (param === "payment") {
+    // Land on the ALL-MARKETS provider view (every country where the provider is used), then let the
+    // user drill into a specific market from the page's country breakdown / dropdown. Deliberately
+    // dropping the current country so a click always opens the full cross-market picture first.
     const q = new URLSearchParams();
-    if (country) q.set("country", country);
     if (pf) q.set("platform", pf);
     const s = q.toString();
     return `/p/${encodeURIComponent(label)}${s ? `?${s}` : ""}`;
