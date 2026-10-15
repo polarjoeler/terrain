@@ -43,7 +43,6 @@ type Period = (typeof PERIODS)[number];
 const PERIOD_DAYS: Record<Period, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365 };
 const PERIOD_KEY: Record<Period, "day" | "week" | "month" | "quarter" | "year"> =
   { Day: "day", Week: "week", Month: "month", Quarter: "quarter", Year: "year" };
-const COMPARISON: Record<Period, string> = { Day: "DoD", Week: "WoW", Month: "MoM", Quarter: "QoQ", Year: "YoY" };
 const PERIOD_PREV: Record<Period, string> = { Day: "yesterday", Week: "last week", Month: "last month", Quarter: "last quarter", Year: "last year" };
 const PERIOD_WORD: Record<Period, string> = { Day: "today", Week: "this week", Month: "this month", Quarter: "this quarter", Year: "this year" };
 const TYPE_LABEL: Record<PayType, string> = { PSP: "Payment service providers", BNPL: "Buy now, pay later", APM: "Wallets & alternative methods" };
@@ -450,15 +449,6 @@ export function InsightsView({
   const provByType = groupByType(distro("payments", data.paymentsByProvider));
   const baseProvByType = base ? groupByType(base.paymentsByProvider) : null;
 
-  // Store survival "going forward" — measured against the earliest snapshot
-  // (the baseline), so the one-time import's dead/migrated stores don't count;
-  // we only show what churns from that point on.
-  const baseline = effHistory.length >= 2 ? effHistory[0] : null;
-  const fwdMigrated = baseline ? Math.max(0, data.churn.migrated - baseline.churn.migrated) : 0;
-  const fwdDead = baseline ? Math.max(0, data.churn.dead - baseline.churn.dead) : 0;
-  const trackedBase = data.churn.active + fwdMigrated + fwdDead;
-  const fwdSurvival = trackedBase > 0 ? Math.round((100 * data.churn.active) / trackedBase) : null;
-
   // Provider momentum follows the timeframe selector: newly-launched stores this period vs the
   // previous period of the same length.
   const momentum = momentumByPeriod?.[pk] ?? [];
@@ -562,26 +552,17 @@ export function InsightsView({
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">View</span>
-            {/* ONE lens, replacing the old split Timeframe-buttons + custom-range controls (which only
-                annotated part of the report): the live market, OR a launch window that re-scopes EVERY
-                breakdown below to the stores that launched in it — the newest-store cohort. */}
-            <select
-              value={lens}
-              onChange={(e) => setLens(e.target.value as "current" | Period)}
-              className="rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep [&>optgroup]:bg-ink-deep"
-            >
-              <option value="current" className="text-ink">Current market · all live stores</option>
-              <optgroup label="New-store cohort — launched in the last…">
-                <option value="Week" className="text-ink">7 days</option>
-                <option value="Month" className="text-ink">30 days</option>
-                <option value="Quarter" className="text-ink">90 days</option>
-                <option value="Year" className="text-ink">12 months</option>
-              </optgroup>
-            </select>
-            <span className="ml-1 text-xs text-cream/40">
-              {windowed
-                ? `every breakdown below = the ${cohortN.toLocaleString()} stores launched ${pw}`
-                : "the full live market — pick a window to see the newest-store cohort"}
+            {/* ONE lens as small buttons (default Current): the live market, OR a launch window that
+                re-scopes EVERY breakdown below to the stores that launched in it — the newest cohort. */}
+            {([["current", "Current"], ["Week", "7d"], ["Month", "30d"], ["Quarter", "90d"], ["Year", "12mo"]] as const).map(([val, lbl]) => (
+              <button key={val} onClick={() => setLens(val)}
+                title={val === "current" ? "The full live market" : `Stores that launched in the last ${lbl}`}
+                className={`rounded-full px-3 py-1 text-xs transition ${lens === val ? "bg-orange text-cream" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
+                {lbl}
+              </button>
+            ))}
+            <span className="ml-1 hidden text-xs text-cream/40 lg:inline">
+              {windowed ? `the ${cohortN.toLocaleString()} newest stores` : "the full live market"}
             </span>
           </div>
         </div>
@@ -618,35 +599,61 @@ export function InsightsView({
             launch-dated). Each row re-scopes the whole report to that platform, like the dropdown. */}
         {platform === "all" && platforms.length > 0 && (() => {
           const totalLive = platforms.reduce((s, p) => s + p.live, 0) || 1;
-          const max = platforms[0]?.live || 1;
+          const TOP = 6;
+          const top = platforms.slice(0, TOP);
+          const restLive = platforms.slice(TOP).reduce((s, p) => s + p.live, 0);
+          const lp = data.launchedByPeriod;
+          const launchRows = [["Week", "7 days", lp.week], ["Month", "30 days", lp.month], ["Quarter", "90 days", lp.quarter], ["Year", "12 months", lp.year]] as const;
+          const relMax = Math.max(...launchRows.map((r) => r[2]), 1);
           return (
-            <div className="mt-8 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-lg font-semibold">Platform mix — all CMSs</h3>
-                <span className="text-xs text-cream/40">{totalLive.toLocaleString()} live stores in {marketLabel(country)} · click a platform to scope the whole report</span>
-              </div>
-              <div className="mt-5 space-y-2.5">
-                {platforms.map(({ platform: key, live }) => {
-                  const share = (live / totalLive) * 100;
-                  return (
-                    <button key={key} onClick={() => go({ platform: key })} title={`Scope the entire report to ${platformLabel(key)}`}
-                      className="group flex w-full items-center gap-3 text-left">
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: platformDot(key) }} />
-                      <span className="w-28 shrink-0 text-sm text-cream/80 group-hover:text-cream">{platformLabel(key)}</span>
-                      <span className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-cream/[0.06]">
-                        <span className="absolute inset-y-0 left-0 rounded-full transition-[width] group-hover:brightness-110"
-                          style={{ width: `${Math.max(1.5, (live / max) * 100)}%`, background: platformDot(key) }} />
-                      </span>
-                      <span className="w-24 shrink-0 text-right text-sm tabular-nums text-cream/70">
-                        {live.toLocaleString()} <span className="text-cream/35">· {share < 1 ? "<1" : share.toFixed(0)}%</span>
-                      </span>
+            <div className="mt-8 grid gap-5 md:grid-cols-2">
+              {/* Platform mix — one compact stacked bar + legend (click a CMS to scope the report) */}
+              <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h3 className="font-semibold text-cream">Platform mix</h3>
+                  <span className="text-xs text-cream/40">{totalLive.toLocaleString()} live · {marketLabel(country)}</span>
+                </div>
+                <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full bg-cream/[0.06]">
+                  {top.map(({ platform: key, live }) => (
+                    <button key={key} onClick={() => go({ platform: key })} title={`${platformLabel(key)} · ${live.toLocaleString()} — scope the report`}
+                      className="h-full transition hover:brightness-110" style={{ width: `${(live / totalLive) * 100}%`, background: platformDot(key) }} />
+                  ))}
+                  {restLive > 0 && <div className="h-full bg-cream/15" style={{ width: `${(restLive / totalLive) * 100}%` }} title={`Other CMSs · ${restLive.toLocaleString()}`} />}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5">
+                  {top.map(({ platform: key, live }) => (
+                    <button key={key} onClick={() => go({ platform: key })} className="group flex items-center gap-1.5 text-xs" title={`Scope the report to ${platformLabel(key)}`}>
+                      <span className="h-2 w-2 rounded-sm" style={{ background: platformDot(key) }} />
+                      <span className="text-cream/80 group-hover:text-cream">{platformLabel(key)}</span>
+                      <span className="tabular-nums text-cream/40">{Math.round((live / totalLive) * 100)}%</span>
                     </button>
-                  );
-                })}
+                  ))}
+                  {restLive > 0 && <span className="flex items-center gap-1.5 text-xs"><span className="h-2 w-2 rounded-sm bg-cream/15" /><span className="text-cream/50">Other</span><span className="tabular-nums text-cream/40">{Math.round((restLive / totalLive) * 100)}%</span></span>}
+                </div>
               </div>
-              <p className="mt-4 text-xs leading-relaxed text-cream/35">
-                Every CMS we track live here. Shopify folds in not-yet-classified discoveries. The growth chart below plots a trajectory only for platforms with enough launch-dated stores (Shopify, WooCommerce); the rest are counted here but can&rsquo;t yet be dated into launch cohorts.
-              </p>
+              {/* New launches — growth of newly-launched stores by window; the active View is highlighted */}
+              <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h3 className="font-semibold text-cream">New launches</h3>
+                  <span className="text-xs text-cream/40">stores launched, by window</span>
+                </div>
+                <div className="mt-4 space-y-1">
+                  {launchRows.map(([val, lbl, n]) => {
+                    const active = lens === val;
+                    return (
+                      <button key={val} onClick={() => setLens(val)} title={`Scope the report to stores launched in the last ${lbl}`}
+                        className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition ${active ? "bg-orange/10 ring-1 ring-orange/25" : "hover:bg-cream/[0.04]"}`}>
+                        <span className={`w-16 shrink-0 text-xs ${active ? "font-semibold text-cream" : "text-cream/70"}`}>{lbl}</span>
+                        <span className="relative h-2 flex-1 overflow-hidden rounded-full bg-cream/[0.06]">
+                          <span className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, (n / relMax) * 100)}%` }} />
+                        </span>
+                        <span className="w-16 shrink-0 text-right text-sm tabular-nums text-cream">{n.toLocaleString()}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11px] text-cream/35">Click a window to re-scope every breakdown to that new-store cohort.</p>
+              </div>
             </div>
           );
         })()}
@@ -807,53 +814,43 @@ export function InsightsView({
           </>)}
         </div>
 
-        {/* Store survival & churn — measured GOING FORWARD from our baseline, so
-            the one-time bulk import's already-dead/migrated stores don't skew it. */}
-        <section className="mt-10">
-          <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/50">Store survival &amp; churn</h2>
-            <span className="text-xs text-cream/35">
-              {baseline ? `tracked since ${baseline.date}` : "tracking from today — forward churn accrues daily"}
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {[
-              { n: fwdSurvival != null ? `${fwdSurvival}%` : "—", label: "still live", tone: "mint" },
-              { n: data.churn.active.toLocaleString(), label: "actively tracked", tone: "outline" },
-              { n: fwdMigrated.toLocaleString(), label: "migrated off · since baseline", tone: "outline" },
-              { n: fwdDead.toLocaleString(), label: "closed · since baseline", tone: "outline" },
-            ].map((c) => (
-              <div key={c.label} className={`rounded-3xl px-5 py-6 ${c.tone === "mint" ? "bg-mint text-ink" : "border border-cream/12 text-cream"}`}>
-                <div className="font-display text-4xl leading-none tracking-tight md:text-5xl">{c.n}</div>
-                <div className={`mt-2 text-xs font-medium uppercase tracking-wide ${c.tone === "mint" ? "opacity-70" : "text-cream/45"}`}>{c.label}</div>
+        {/* Platform migrations — net movement between CMSs (live_platform vs where we first found the
+            store). A compact, drill-free read of who's gaining and losing merchants in this market. */}
+        {data.migrations.length > 0 && (() => {
+          const maxAbs = Math.max(...data.migrations.map((m) => Math.abs(m.net)), 1);
+          const totalMoved = data.migrations.reduce((s, m) => s + m.gained, 0);
+          return (
+            <section className="mt-10">
+              <div className="mb-3 flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-cream/50">Platform migrations</h2>
+                <span className="text-xs text-cream/35">{totalMoved.toLocaleString()} {marketLabel(country)} stores changed platform · net gained vs lost</span>
               </div>
-            ))}
-          </div>
-          <p className="mt-3 text-xs text-cream/40">
-            Forward-looking: we only count stores that migrate off Shopify or close <em>after</em> we
-            started tracking them — the one-time bulk import is excluded so this reflects real ongoing churn.
-          </p>
-
-          {/* Where the migrating stores went — the platform-switch intel. */}
-          {(data.churn.migratedTo?.length ?? 0) > 0 && (
-            <div className="mt-4 rounded-3xl border border-cream/12 px-5 py-4">
-              <div className="mb-2 flex items-baseline justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-cream/50">Migrated to</h3>
-                <span className="text-xs text-cream/35">
-                  {data.churn.migratedTo!.reduce((s, m) => s + m.n, 0).toLocaleString()} stores now on another platform
-                </span>
+              <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
+                <div className="space-y-1.5">
+                  {data.migrations.map((m) => {
+                    const pos = m.net >= 0;
+                    return (
+                      <div key={m.platform} className="flex items-center gap-3">
+                        <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: platformDot(m.platform) }} />
+                        <span className="w-28 shrink-0 truncate text-sm text-cream/80">{platformLabel(m.platform)}</span>
+                        <div className="relative h-2 flex-1">
+                          <div className="absolute inset-y-0 left-1/2 w-px bg-cream/15" />
+                          <div className={`absolute inset-y-0 rounded-full ${pos ? "bg-mint" : "bg-orange"}`}
+                            style={pos ? { left: "50%", width: `${(m.net / maxAbs) * 50}%` } : { right: "50%", width: `${(-m.net / maxAbs) * 50}%` }} />
+                        </div>
+                        <span className={`w-16 shrink-0 text-right text-sm tabular-nums ${pos ? "text-mint" : "text-orange"}`}>{pos ? "+" : "−"}{Math.abs(m.net).toLocaleString()}</span>
+                        <span className="hidden w-24 shrink-0 text-right text-[11px] tabular-nums text-cream/35 sm:inline">+{m.gained.toLocaleString()} / −{m.lost.toLocaleString()}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-4 text-[11px] leading-relaxed text-cream/35">
+                  A store counts as migrated when its live platform differs from where we first found it. Net = stores gained minus lost; the +/− column is the raw inflow/outflow. (WordPress ≈ self-hosted WooCommerce.)
+                </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {data.churn.migratedTo!.map((m) => (
-                  <span key={m.platform} className="flex items-center gap-1.5 rounded-full border border-cream/12 px-3 py-1 text-xs text-cream/80">
-                    <span className="font-medium text-cream">{m.platform}</span>
-                    <span className="text-cream/40 tabular-nums">{m.n.toLocaleString()}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
+            </section>
+          );
+        })()}
 
         <p className="mt-8 text-center text-xs text-cream/40">
           Live Terrain data · {data.date} · {data.storesTotal.toLocaleString()} live South African stores

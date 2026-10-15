@@ -168,7 +168,9 @@ export function GrowthChart({ country, provider, platform, period: periodProp, f
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-cream/50">
-        {!rangeControlled && (<>
+        {/* Standalone (provider pages) keeps its own date range; embedded in the insights report
+            (parent controls the period) it drops the range picker — the report's View lens owns scope. */}
+        {!rangeControlled && !controlled && (<>
           <span>Range:</span>
           <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded border border-cream/15 bg-transparent px-2 py-1 text-cream" />
           <span>→</span>
