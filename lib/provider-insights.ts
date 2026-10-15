@@ -96,7 +96,7 @@ const salesBand = (n: number | null): string =>
 export async function providerInsights(provider: string, country?: string, platform: string = "all"): Promise<ProviderInsights> {
   const sql = db();
   const p = norm(canonicalProvider(provider) || provider);
-  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const AND_P = platformClause(sql, platform);
 
@@ -735,7 +735,7 @@ export async function platformGrowthSeries(country?: string, provider?: string):
   const prov = variants
     ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
     : sql``;
-  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
   // "shopify" absorbs unclassified CT discoveries (platform NULL); every other CMS groups by its slug.
   const BUCKET = sql`CASE WHEN lower(platform) = 'shopify' OR platform IS NULL THEN 'shopify' ELSE lower(platform) END`;

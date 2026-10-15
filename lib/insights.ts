@@ -85,6 +85,9 @@ export type InsightsData = {
     survival: number | null;
     migratedTo: { platform: string; n: number }[];   // Shopify → WooCommerce / Wix / … switch intel
   };
+  // Net platform migration for the market (cross-platform; ignores the platform filter): for each
+  // CMS, stores that moved TO it (gained) vs OFF it (lost), by the live_platform-vs-original signal.
+  migrations: { platform: string; gained: number; lost: number; net: number }[];
   // Present only when the WooCommerce platform is selected — the WordPress/Woo-native view
   // (store status, hosting, versions, plugins) instead of the Shopify-shaped sections.
   woo?: {
@@ -402,7 +405,7 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
   const parse = (d: InsightsData | string): InsightsData => (typeof d === "string" ? JSON.parse(d) : d);
   // A cached row from an OLDER schema (before a new field was added) must not be served — reading
   // the missing field crashes the page. Treat it as stale so it recomputes with the current shape.
-  const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro;
+  const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro && Array.isArray(d.migrations);
   // A row is "usable" only if it parses AND matches the current schema (an older-schema row would
   // crash the page reading a missing field, so it's treated as cold).
   const usable = row && currentSchema(parse(row.data)) ? parse(row.data) : null;
@@ -711,6 +714,27 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     GROUP BY 1 ORDER BY n DESC`;
   const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
 
+  // NET platform migration for the market (cross-platform — ignores the platform filter): a store
+  // whose live_platform differs from its original platform has MOVED. Per CMS: gained (moved TO it)
+  // vs lost (moved OFF it). Normalised to a lower-case slug so 'shopify' and 'Shopify' net out.
+  const migRows = await sql<{ platform: string; gained: number; lost: number }[]>`
+    SELECT p AS platform,
+      COUNT(*) FILTER (WHERE dir = 'to')::int   AS gained,
+      COUNT(*) FILTER (WHERE dir = 'from')::int AS lost
+    FROM (
+      SELECT lower(live_platform) p, 'to' dir FROM imported_stores
+        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
+          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+      UNION ALL
+      SELECT lower(COALESCE(platform, 'shopify')) p, 'from' dir FROM imported_stores
+        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
+          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+    ) t GROUP BY 1`;
+  const migrations = migRows
+    .map((r) => ({ platform: r.platform, gained: Number(r.gained), lost: Number(r.lost), net: Number(r.gained) - Number(r.lost) }))
+    .filter((m) => m.gained + m.lost > 0)
+    .sort((a, b) => b.net - a.net);
+
   // WooCommerce-native distributions — only when the Woo platform is selected. WP/Woo world data
   // (store status, hosting, versions, plugins) that has no Shopify equivalent. LIVE() already
   // scopes to lower(platform) = 'woocommerce' here, so denominators + rows share the same filter.
@@ -820,6 +844,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       survival: Number(t.churn_checked) ? pct(Number(t.churn_active), Number(t.churn_checked)) : null,
       migratedTo,
     },
+    migrations,
     woo,
     magento,
   };
