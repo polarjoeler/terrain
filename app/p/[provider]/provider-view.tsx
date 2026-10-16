@@ -6,7 +6,7 @@ import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
 import { marketLabel, groupCodesByRegion } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
-import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, ProviderLaunchShare, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
 import { GrowthChart } from "@/app/components/growth-chart";
 import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 
@@ -16,27 +16,28 @@ const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
 
-type Range = "Day" | "Week" | "Month" | "Quarter" | "Year" | "All";
-const RANGES: Range[] = ["Day", "Week", "Month", "Quarter", "Year", "All"];
-const RANGE_DAYS: Record<Range, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365, All: Infinity };
+type Win = "1Y" | "3Y" | "All";
+const WINS: Win[] = ["1Y", "3Y", "All"];
+const WIN_MONTHS: Record<Win, number> = { "1Y": 12, "3Y": 36, All: Infinity };
+const fmtMon = (iso: string) => {
+  const dt = new Date(iso + "T00:00:00Z");
+  return `${dt.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })} ’${String(dt.getUTCFullYear()).slice(2)}`;
+};
 
-/** Holistic market-share view — share % over time, filterable by range. The `scope` label reflects
- *  the active country/platform filters (the series itself is re-scoped server-side on filter change),
- *  and hovering the line reveals a tooltip with that point's exact share and store counts. */
-function MarketShareChart({ history, currentShare, provider, scope }: { history: ProviderTrendPoint[]; currentShare: number; provider: string; scope: string }) {
-  const [range, setRange] = useState<Range>("All");
+/** Market share over time, by LAUNCH COHORT — the catch-up-proof view. Monthly cumulative share of
+ *  checkout-verified stores on this provider (a newly-found old store credits to its launch month, so
+ *  catching up on discovery doesn't spike today's number). Windowable to the last 1Y / 3Y / all. */
+function MarketShareChart({ launchShare, provider, scope }: { launchShare: ProviderLaunchShare; provider: string; scope: string }) {
+  const [win, setWin] = useState<Win>("3Y");
   const [hover, setHover] = useState<number | null>(null);
-  const pts = (() => {
-    const days = RANGE_DAYS[range];
-    if (days === Infinity) return history;
-    const cut = Date.now() - days * 864e5;
-    return history.filter((h) => new Date(h.date + "T00:00:00Z").getTime() >= cut);
-  })();
+  const all = launchShare.months.map((m, i) => ({ m, share: launchShare.share[i] ?? 0, mine: launchShare.providerCum[i] ?? 0, base: launchShare.baseCum[i] ?? 0 }));
+  const pts = WIN_MONTHS[win] === Infinity ? all : all.slice(Math.max(0, all.length - WIN_MONTHS[win]));
 
   const w = 720, h = 200, padL = 34, padB = 22, padT = 12;
   const maxY = Math.max(1, ...pts.map((p) => p.share)) * 1.15;
   const x = (i: number) => padL + (pts.length <= 1 ? 0 : (i / (pts.length - 1)) * (w - padL - 8));
   const y = (v: number) => padT + (1 - v / maxY) * (h - padT - padB);
+  const labelEvery = Math.max(1, Math.ceil(pts.length / 6));
   const onMove = (e: MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const i = Math.round((((e.clientX - r.left) / r.width) * w - padL) / ((w - padL - 8) / Math.max(1, pts.length - 1)));
@@ -48,18 +49,18 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
-          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider} · <span className="text-cream/70">{scope}</span></p>
+          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider}, by launch cohort · <span className="text-cream/70">{scope}</span></p>
           <div className="mt-3 flex items-baseline gap-2">
-            <CountUp value={Math.round(currentShare)} className="font-display text-5xl leading-none text-cream" />
+            <CountUp value={Math.round(launchShare.currentShare)} className="font-display text-5xl leading-none text-cream" />
             <span className="font-display text-2xl text-cream/60">%</span>
             <span className="ml-1 text-xs text-cream/40">today</span>
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {RANGES.map((r) => (
-            <button key={r} onClick={() => setRange(r)}
-              className={`rounded-full px-3 py-1 text-xs transition ${range === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
-              {r === "All" ? "All time" : r}
+          {WINS.map((r) => (
+            <button key={r} onClick={() => setWin(r)}
+              className={`rounded-full px-3 py-1 text-xs transition ${win === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
+              {r === "All" ? "All time" : `Last ${r}`}
             </button>
           ))}
         </div>
@@ -77,26 +78,27 @@ function MarketShareChart({ history, currentShare, provider, scope }: { history:
             <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
             <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
             {hover != null && <line x1={x(hover)} x2={x(hover)} y1={padT} y2={h - padB} stroke="var(--color-cream)" strokeOpacity="0.25" />}
-            {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 3} fill="var(--color-cyan)" opacity={hover == null || hover === i ? 1 : 0.5} />)}
-            <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
-            <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
+            {pts.map((p, i) => (i % labelEvery === 0 || i === pts.length - 1) ? <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 2.5} fill="var(--color-cyan)" opacity={hover == null || hover === i ? 1 : 0.5} /> : null)}
+            {pts.map((p, i) => (i % labelEvery === 0 ? (
+              <text key={`l${i}`} x={x(i)} y={h - 6} textAnchor="middle" className="fill-cream/40" fontSize="9">{fmtMon(p.m)}</text>
+            ) : null))}
           </svg>
           {hover != null && pts[hover] && (
             <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
               style={{ left: `${Math.min(86, Math.max(14, (x(hover) / w) * 100))}%`, top: 0 }}>
-              <div className="font-semibold text-cream">{pts[hover].date}</div>
+              <div className="font-semibold text-cream">{fmtMon(pts[hover].m)}</div>
               <div className="mt-0.5 flex items-center gap-1.5 text-cream/75">
                 <span className="inline-block h-2 w-2 rounded-sm bg-cyan" />
                 <span>{provider}</span>
                 <span className="ml-auto pl-3 font-medium text-cream tabular-nums">{pts[hover].share}%</span>
               </div>
-              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].total.toLocaleString()} of {pts[hover].verifiedBase.toLocaleString()} verified stores</div>
+              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].mine.toLocaleString()} of {pts[hover].base.toLocaleString()} verified · launched by then</div>
             </div>
           )}
         </div>
       ) : (
         <div className="mt-5 grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-center text-sm text-cream/45">
-          Trend line builds as daily snapshots accrue — the first point is recorded.<br />Come back over the next few weeks to watch it move.
+          Not enough launch-dated, checkout-verified stores to chart yet — it fills in as dating + checkout coverage grow.
         </div>
       )}
     </div>
@@ -243,11 +245,12 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
+  data: d, launchShare, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
   providers = [], chromeless = false,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
+  launchShare: ProviderLaunchShare;
   newShare: Record<NewSharePeriod, NewShareBucket[]>;
   shareToken: string;
   isAdmin: boolean;
@@ -371,7 +374,7 @@ export function ProviderView({
 
         {/* market share over time — the holistic view */}
         <div className="mt-6">
-          <MarketShareChart history={history} currentShare={d.verifiedBase ? Math.round((10000 * d.total) / d.verifiedBase) / 100 : 0} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
+          <MarketShareChart launchShare={launchShare} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
         </div>
 
         {/* share of NEW stores over time — the acquisition curve, D/W/M/Q/Y */}
