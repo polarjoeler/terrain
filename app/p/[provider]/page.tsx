@@ -5,7 +5,7 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { getAccount } from "@/lib/account";
 import { AppShell, type ShellUser } from "@/app/components/app-shell";
-import { providerInsights, providerHistory, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, providerSwitches, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
+import { providerInsights, providerHistory, providerLaunchShare, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, providerSwitches, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
 import { cachedAgg } from "@/lib/agg-cache";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { matchesProviderSlug, providerSlug, slugToTitle } from "@/lib/provider-slug";
@@ -73,19 +73,20 @@ export default async function ProviderPage({
   const periods: NewSharePeriod[] = ["day", "week", "month", "quarter", "year"];
   // Whole provider bundle (all ~9 aggregate queries) cached per provider×country — one row read
   // instead of recomputing on every view. Returns are JSON-safe (dates are pre-stringified).
-  const { data, history, subReport, switches, newShare } = await cachedAgg(
+  const { data, history, launchShare, subReport, switches, newShare } = await cachedAgg(
     `provider:${canonical}:${country ?? "ALL"}:${platform}`,
     10 * 60 * 1000,
     async () => {
-      const [data, history, subReport, switches] = await Promise.all([
+      const [data, history, launchShare, subReport, switches] = await Promise.all([
         providerInsights(canonical, country, platform),
         providerHistory(canonical, country ?? "ALL", platform),
+        providerLaunchShare(canonical, country, platform),
         providerSubReport(canonical, country, platform),
         providerSwitches(canonical, country, 12, platform),
       ]);
       const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country, platform).catch(() => [])));
       const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
-      return { data, history, subReport, switches, newShare };
+      return { data, history, launchShare, subReport, switches, newShare };
     },
   );
 
@@ -102,7 +103,7 @@ export default async function ProviderPage({
     : [];
 
   const view = (
-    <ProviderView data={data} history={history} newShare={newShare} shareToken={shareToken} isAdmin={admin}
+    <ProviderView data={data} history={history} launchShare={launchShare} newShare={newShare} shareToken={shareToken} isAdmin={admin}
       countries={countries} country={country ?? ""} logo={logo} subReport={subReport} switches={switches} platform={platform}
       providers={providerList} chromeless={authed} />
   );

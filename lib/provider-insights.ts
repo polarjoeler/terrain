@@ -327,6 +327,41 @@ export async function providerNewShareSeries(
 
 export type ProviderTrendPoint = { date: string; total: number; verifiedBase: number; share: number; topSpot: number; exclusive: number; newLast7: number };
 
+export type ProviderLaunchShare = { months: string[]; share: number[]; providerCum: number[]; baseCum: number[]; currentShare: number };
+
+/** Market share over time by LAUNCH COHORT — the catch-up-proof alternative to the daily snapshot.
+ *  For each month, of all currently-live, checkout-verified stores LAUNCHED by that month, the % that
+ *  carry this provider (cumulative). Because a store is credited to its real launch month, a batch of
+ *  newly-discovered old stores spreads across history instead of spiking today's share — so the curve
+ *  reflects real adoption, not when we happened to probe. Survivorship-adjusted (live stores only) and
+ *  always fresh (no snapshot dependency). Monthly granularity. */
+export async function providerLaunchShare(provider: string, country?: string, platform: string = "all"): Promise<ProviderLaunchShare> {
+  const sql = db();
+  const ctry = country && country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  const plat = platformClause(sql, platform);
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const VERIFIED = sql`payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus' AND ${realPaymentsClause(sql)}`;
+  const variants = providerVariants(provider);
+  const HASPROV = sql`EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`;
+  const SINCE = "2015-01-01"; // launch-dating + checkout verification are too thin before this to chart
+  const rows = await sql<{ b: string; base: number; mine: number }[]>`
+    SELECT to_char(date_trunc('month', ${LAUNCH}), 'YYYY-MM-DD') b,
+      count(*)::int base,
+      count(*) FILTER (WHERE ${HASPROV})::int mine
+    FROM imported_stores
+    WHERE ${LIVE} AND ${VERIFIED} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry} ${plat}
+    GROUP BY 1 ORDER BY 1`.catch(() => []);
+  const months: string[] = [], share: number[] = [], providerCum: number[] = [], baseCum: number[] = [];
+  let cb = 0, cm = 0;
+  for (const r of rows) {
+    cb += Number(r.base); cm += Number(r.mine);
+    months.push(r.b); baseCum.push(cb); providerCum.push(cm);
+    share.push(cb ? Math.round((10000 * cm) / cb) / 100 : 0);
+  }
+  return { months, share, providerCum, baseCum, currentShare: share.length ? share[share.length - 1] : 0 };
+}
+
 /** Snapshot the current metrics for every provider — run weekly so the trend lines
  *  on the provider dashboards accrue. Idempotent per (provider, date). */
 export async function snapshotProviders(min = 5): Promise<number> {
