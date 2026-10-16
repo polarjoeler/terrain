@@ -93,11 +93,24 @@ const [sw] = await sql`SELECT
 const migs = await sql`SELECT domain, live_platform, upper(country) c FROM imported_stores
   WHERE live_checked_at > now()-interval '24 hours' AND live_status='migrated' ORDER BY live_checked_at DESC LIMIT 6`.catch(() => []);
 
+// ── 4. BACKLOG — stores we've FOUND but haven't surfaced as live yet (the enrichment gap) ─────
+// This is the section that would have caught the ~1k checkout-verified-but-unpublished pool on day
+// one: "verified-hidden" should sit near zero (reconcile-probed auto-publishes them) — a rising
+// number means the promote step isn't running or a new gap opened.
+const back = await sql`SELECT upper(country) c,
+    count(*) FILTER (WHERE NOT published AND payments_source IN ('woo_checkout','woo_plugin') AND payments IS NOT NULL AND payments <> '' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store')::int verified_hidden,
+    count(*) FILTER (WHERE NOT published AND lower(platform)='woocommerce' AND woo_checkout_at IS NULL AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')))::int woo_queue,
+    count(*) FILTER (WHERE NOT published AND payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int never_probed
+  FROM imported_stores WHERE upper(country) = ANY(${FOCUS_MARKETS})
+  GROUP BY 1 HAVING count(*) FILTER (WHERE NOT published) > 0 ORDER BY verified_hidden DESC`.catch(() => []);
+const backTot = back.reduce((a, r) => ({ vh: a.vh + r.verified_hidden, wq: a.wq + r.woo_queue, np: a.np + r.never_probed }), { vh: 0, wq: 0, np: 0 });
+
 // ── Build the snapshot we'll store for tomorrow's deltas ─────────────────────────────────────
 const snap = {
   d24: disc.d24, d7: disc.d7, new7: disc.new7, recent7: disc.recent7, legacy7: disc.legacy7,
   sc_live: disc.sc_live, sc_pay: disc.sc_pay, sc_cat: disc.sc_cat,
   live24: pipe.live24, pay24: pipe.pay24, mig24: pipe.mig24, dead24: pipe.dead24, sw24: sw.s24,
+  vh: backTot.vh, wq: backTot.wq, np: backTot.np,
   // coverage (raw counts + base, so % deltas are exact)
   cov_pay: tot.pay, cov_pay_base: tot.live, cov_tech: tot.tech, cov_tech_base: tot.live,
   markets: Object.fromEntries(cov.map((r) => [r.c, { pay: r.pay, pay_base: r.live, tech: r.tech, tech_base: r.live }])),
@@ -148,6 +161,14 @@ L.push(`Migrations found:  ${n(pipe.mig24)} in 24h${d(pipe.mig24, Y?.mig24)}   �
 L.push(`Gone dead:         ${n(pipe.dead24)} in 24h${d(pipe.dead24, Y?.dead24)}   ·   ${n(pipe.dead7)} this week`);
 L.push(`Gateway changes:   ${n(sw.s24)} in 24h${d(sw.s24, Y?.sw24)}   ·   ${n(sw.s7)} this week`);
 if (migs.length) { L.push(`Recent migrations:`); for (const m of migs) L.push(`   ${m.domain} → ${m.live_platform ?? "elsewhere"}${m.c ? ` (${m.c})` : ""}`); }
+L.push(``);
+
+// 4 · BACKLOG
+L.push(`━━ 4 · BACKLOG — FOUND BUT NOT YET LIVE (focus markets) ━━`);
+L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   ← confirmed-live, awaiting auto-publish (should stay ~0)`);
+L.push(`Woo-checkout queue:           ${n(backTot.wq)}${d(backTot.wq, Y?.wq)}   ← Woo candidates awaiting the checkout probe`);
+L.push(`Never-probed tail:            ${n(backTot.np)}${d(backTot.np, Y?.np)}   ← unpublished, no payment/woo probe yet`);
+if (back.length > 1) { L.push(`By market  (verified-hidden · woo-queue · never-probed):`); for (const r of back) L.push(`   ${r.c.padEnd(4)} ${String(r.verified_hidden).padStart(6)} · ${String(r.woo_queue).padStart(5)} · ${String(r.never_probed).padStart(7)}`); }
 L.push(``);
 L.push(`Coverage % = share of the live store base we hold that signal for. "Legacy" finds are backfill`);
 L.push(`(old stores newly discovered), not new market activity — watch the NEW line for real momentum.`);

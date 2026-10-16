@@ -667,12 +667,13 @@ export async function growthSeries(opts: {
       ${to ? sql`AND pc.changed_at < (${to}::date + interval '1 day')` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []) : [];
 
-  // Current live store base — same definition as the "stores tracked" headline in insights
-  // (published, live, not dead/migrated), so the two figures always match. Provider filter
-  // narrows it to that PSP's live merchants.
+  // Current live store base — the SAME live definition used everywhere in insights (published, live,
+  // not dead/migrated, and NOT not_a_store), so this matches the "verified live" headline instead of
+  // showing a rogue count. Provider filter narrows it to that PSP's live merchants.
   const [gt] = await sql<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry} ${prov} ${plat}`.catch(() => [{ n: 0 }]);
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store' ${ctry} ${prov} ${plat}`.catch(() => [{ n: 0 }]);
   const currentTotal = Number(gt?.n ?? 0);
 
   const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));

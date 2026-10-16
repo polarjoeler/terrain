@@ -62,6 +62,19 @@ const REGION_OF: Record<string, string> = Object.fromEntries(
   REGIONS.flatMap((r) => r.codes.map((c) => [c, r.name])),
 );
 
+/** Group a plain list of ISO2 codes into region sections (for selectors that only have codes, not
+ *  store counts). Preserves each region's incoming order; unmapped codes fall into a trailing "Other". */
+export function groupCodesByRegion(codes: string[]): { region: string; codes: string[] }[] {
+  const buckets = new Map<string, string[]>();
+  for (const c of codes) {
+    const region = REGION_OF[c] ?? "Other";
+    if (!buckets.has(region)) buckets.set(region, []);
+    buckets.get(region)!.push(c);
+  }
+  const order = [...REGIONS.map((r) => r.name), "Other"];
+  return order.filter((name) => buckets.has(name)).map((name) => ({ region: name, codes: buckets.get(name)! }));
+}
+
 /** Group a flat country list into region sections for an optgroup selector. Keeps each region's
  *  members sorted by store count (desc), drops empty regions, and sweeps any country not mapped to
  *  a region into a trailing "Other" group so nothing silently disappears from the picker. */

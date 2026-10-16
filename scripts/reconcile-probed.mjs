@@ -34,18 +34,39 @@ async function main() {
       WHERE ${PENDING} AND COALESCE(pc.platform,'')<>'' GROUP BY 1 ORDER BY n DESC`;
     console.log("would capture:", preview.map((r) => `${r.plat}=${r.n}`).join(", ") || "(none)");
 
-    if (DRY) { console.log("[DRY] nothing written."); return; }
+    if (DRY) {
+      console.log("[DRY] pending-bucket: nothing written.");
+    } else {
+      const res = await sql`
+        UPDATE imported_stores i SET
+          platform = CASE WHEN lower(pc.platform)='woocommerce' THEN 'WooCommerce' ELSE pc.platform END,
+          published = CASE WHEN pc.platform IN ('Shopify','woocommerce','WooCommerce') THEN true ELSE i.published END
+        FROM probe_checked pc
+        WHERE pc.domain=${bare} AND ${PENDING} AND COALESCE(pc.platform,'')<>''
+        RETURNING i.domain,
+          (CASE WHEN pc.platform IN ('Shopify','woocommerce','WooCommerce') THEN 1 ELSE 0 END) AS pub`;
+      const published = res.filter((r) => r.pub === 1).length;
+      console.log(`reconciled ${res.length} rows (${published} published as Shopify/Woo, ${res.length - published} banked as other CMS).`);
+    }
 
-    const res = await sql`
-      UPDATE imported_stores i SET
-        platform = CASE WHEN lower(pc.platform)='woocommerce' THEN 'WooCommerce' ELSE pc.platform END,
-        published = CASE WHEN pc.platform IN ('Shopify','woocommerce','WooCommerce') THEN true ELSE i.published END
-      FROM probe_checked pc
-      WHERE pc.domain=${bare} AND ${PENDING} AND COALESCE(pc.platform,'')<>''
-      RETURNING i.domain,
-        (CASE WHEN pc.platform IN ('Shopify','woocommerce','WooCommerce') THEN 1 ELSE 0 END) AS pub`;
-    const published = res.filter((r) => r.pub === 1).length;
-    console.log(`reconciled ${res.length} rows (${published} published as Shopify/Woo, ${res.length - published} banked as other CMS).`);
+    // SECOND reconciliation — the checkout-verified gap. A store the woo-checkout probe COMPLETED
+    // (payments_source='woo_checkout'/'woo_plugin', a gateway read) is a confirmed live selling store,
+    // but nothing promoted it: the probe stamps the gateway and leaves published untouched, and the
+    // pending-bucket reconcile above only looks at platform-NULL rows via the CMS classifier. So every
+    // woo-checkout confirmation silently stayed hidden (≈1k ZA/KE/NG at first run). Publish them here —
+    // the gateway IS the liveness proof — excluding anything since marked dead/migrated or not_a_store.
+    const VERIFIED = sql`NOT published
+      AND payments_source IN ('woo_checkout','woo_plugin')
+      AND payments IS NOT NULL AND payments <> ''
+      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store'`;
+    const [vp] = await sql`SELECT count(*)::int n FROM imported_stores WHERE ${VERIFIED}`;
+    if (DRY) {
+      console.log(`[DRY] would publish ${vp.n} checkout-verified stores (payments_source woo_checkout/woo_plugin).`);
+    } else {
+      const vres = await sql`UPDATE imported_stores SET published = true WHERE ${VERIFIED}`;
+      console.log(`published ${vres.count} checkout-verified stores (were confirmed-live but hidden).`);
+    }
   } finally { await sql.end(); }
 }
 main().catch((e) => { console.error(e); process.exit(1); });

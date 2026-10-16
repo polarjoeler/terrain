@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { SectionReport, ReportItem } from "@/lib/insights";
 import { ProviderAdoptionChart } from "./provider-adoption-chart";
 import { InsightsNav } from "../insights-nav";
+import { marketLabel, groupCodesByRegion } from "@/lib/markets";
 
 // Which catalog category each report section belongs to (highlights the active dropdown).
 const CATEGORY_OF: Record<string, string> = {
@@ -151,8 +152,12 @@ export function ReportView({ report, country, countries, platform }: { report: S
 
             {countries.length > 1 && (
               <select value={country} onChange={(e) => setParam("country", e.target.value)}
-                className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-xs text-cream outline-none focus:border-cream/50">
-                {countries.map((c) => <option key={c} value={c} className="text-ink">{c}</option>)}
+                className="rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-xs text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep">
+                {groupCodesByRegion(countries).map(({ region, codes }) => (
+                  <optgroup key={region} label={region}>
+                    {codes.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+                  </optgroup>
+                ))}
               </select>
             )}
 
