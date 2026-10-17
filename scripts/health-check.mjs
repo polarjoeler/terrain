@@ -21,11 +21,20 @@ const add = (name, ok, detail) => checks.push({ name, ok, detail });
 const [t] = await sql`SELECT
   max(payments_checked_at) pay, max(woo_checkout_at) woo, max(live_checked_at) live,
   max(catalog_checked_at) cat, max(created_at) ins FROM imported_stores`;
+// cert-launch heartbeat (task='cert', written every run before it touches crt.sh) — so we can tell
+// "the job ran" apart from "the job produced data", which matters for the catalog/launch check below.
+const [hb] = await sql`SELECT max(last_run) cert FROM agent_heartbeat WHERE task = 'cert'`.catch(() => [{ cert: null }]);
 const rule = (name, ageMin, limitMin) => add(name, ageMin != null && ageMin <= limitMin,
   ageMin == null ? "never" : `last write ${ageMin < 60 ? ageMin + "m" : Math.round(ageMin / 60) + "h"} ago (limit ${Math.round(limitMin / 60)}h)`);
 rule("payments-probe", mins(t.pay), 150);      // hourly job → stale past ~2.5h
-rule("woo-checkout", mins(t.woo), 200);        // 2-hourly → stale past ~3.3h
-rule("catalog/launch", mins(t.cat), 60 * 26);  // slower cadence
+rule("woo-checkout", mins(t.woo), 200);        // 2-hourly → stale past ~3.3h; "runs but 0 writes"
+                                               // (broken egress) IS actionable → keep on data-writes.
+// catalog/launch: pass if the cert-launch JOB RAN (heartbeat) OR catalog data flowed. Its launch-dating
+// leans on crt.sh — a flaky external SPOF whose outages aren't actionable and used to page falsely.
+// Keyed on the fresher of {heartbeat, catalog write}, so only a genuinely STOPPED job (no heartbeat at
+// all, like an unloaded plist) trips it — a crt.sh outage no longer does.
+const catAge = [t.cat, hb?.cert].map(mins).filter((m) => m != null);
+rule("catalog/launch", catAge.length ? Math.min(...catAge) : null, 60 * 26);
 add("liveness", mins(t.live) != null && mins(t.live) <= 60 * 30, mins(t.live) == null ? "never" : `last check ${Math.round(mins(t.live) / 60)}h ago`);
 // Discovery health = are NEW rows actually landing? Use created_at, a real insert timestamp.
 // NOT discovered_at — that's a DATE (day granularity), so max(discovered_at) always reads 0-24h
