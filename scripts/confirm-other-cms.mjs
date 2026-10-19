@@ -27,7 +27,13 @@ const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MA
 // Squarespace/Webflow general site-builders, whose templates leak cart markup on non-store sites and
 // over-publish NGOs/agencies/clinics). Those general builders need rigorous catalogue verification we
 // don't do here, so they stay banked.
-const STORE_CMS = ["prestashop", "magento", "opencart", "ecwid", "bigcommerce", "shopware", "shopstar", "base"];
+const STORE_CMS = ["prestashop", "magento", "opencart", "ecwid", "bigcommerce", "shopware", "shopstar", "base",
+  // Japan's dedicated hosted store-builders — same rationale as BASE.
+  "storesjp", "colorme", "makeshop", "ec-cube", "cafe24", "futureshop"];
+// Store-ONLY hosted services: you sign up to SELL (no brochure/blog option like Wix/Squarespace), so
+// being live on the platform IS the store confirmation — publish on liveness + a name, without needing
+// the (English-centric) cart-markup match, which misses Japanese storefront markup entirely.
+const STORE_ONLY = new Set(["base", "storesjp", "colorme", "makeshop", "cafe24"]);
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
@@ -36,8 +42,17 @@ async function getHtml(domain, ms = 12000) {
   try {
     const r = await fetch(`https://${clean(domain)}/`, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.timeout(ms) });
     if (!r.ok) return null;
-    if (!/html/i.test(r.headers.get("content-type") || "")) return null;
-    return (await r.text()).slice(0, 1_200_000);
+    const ct = r.headers.get("content-type") || "";
+    if (!/html/i.test(ct)) return null;
+    // Honour the page charset — many JP storefronts are Shift_JIS / EUC-JP; decoding those as UTF-8
+    // mangles the name (mojibake). Charset from the header, else a <meta charset> in the head.
+    const buf = Buffer.from(await r.arrayBuffer());
+    let cs = (ct.match(/charset=["']?([\w-]+)/i)?.[1] || "").toLowerCase();
+    if (!cs) cs = (buf.subarray(0, 2048).toString("latin1").match(/charset=["']?([\w-]+)/i)?.[1] || "").toLowerCase();
+    const label = ({ "shift-jis": "shift_jis", "x-sjis": "shift_jis", sjis: "shift_jis", "euc_jp": "euc-jp", "windows-31j": "shift_jis" })[cs] || cs || "utf-8";
+    let text;
+    try { text = new TextDecoder(label).decode(buf); } catch { text = buf.toString("utf-8"); }
+    return text.slice(0, 1_200_000);
   } catch { return null; }
 }
 
@@ -48,6 +63,7 @@ function extractName(html) {
   let m = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i);
   let name = m?.[1] || (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? "");
   name = decode(name).replace(/\s+/g, " ").trim();
+  name = name.replace(/\s*[-–|·]?\s*powered by\s+\S.*$/i, "").trim();   // strip "… powered by BASE/Shopify"
   if (name.length > 24) name = name.split(/\s[|–—·]\s/)[0].trim();   // "Brand | tagline" → "Brand"
   return name.length >= 2 && name.length <= 80 ? name : null;
 }
@@ -64,7 +80,7 @@ function badName(name, domain) {
 // STRICT: a real storefront exposes an actual commerce action (add-to-cart button/text, a cart/checkout
 // URL, product price markup). Platform *presence* (woocommerce/wixstores strings) is NOT enough — Wix
 // injects cart JS on brochure/church/clinic sites too, which over-published non-stores.
-const ECOM = /add[-_\s]?to[-_\s]?(?:cart|bag|basket)|data-hook=["'][^"']*add-to-cart|sqs-add-to-cart-button|name=["']add-to-cart["']|[?&]add-to-cart=\d|href=["'][^"']*\/(?:checkout|cart)(?:[\/?"']|$)|og:type["'][^>]*content=["']product|itemprop=["']price["']|property=["']product:price/i;
+const ECOM = /add[-_\s]?to[-_\s]?(?:cart|bag|basket)|data-hook=["'][^"']*add-to-cart|sqs-add-to-cart-button|name=["']add-to-cart["']|[?&]add-to-cart=\d|href=["'][^"']*\/(?:checkout|cart)(?:[\/?"']|$)|og:type["'][^>]*content=["']product|itemprop=["']price["']|property=["']product:price|カート(?:に入れる|に追加|へ)|買い物かご|ショッピングカート|購入(?:する|手続き|画面|ボタン)|ご注文手続き|レジに進む|カートを見る/i;
 
 async function main() {
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
@@ -91,7 +107,7 @@ async function main() {
         const existingGood = existing && !badName(existing, r.domain);
         const extracted = existingGood ? existing : extractName(h);   // re-extract when the stored name is a domain/placeholder
         const name = extracted && !badName(extracted, r.domain) ? extracted : null;   // null ⇒ don't publish/write
-        const isStore = ECOM.test(h);
+        const isStore = STORE_ONLY.has((r.platform || "").toLowerCase()) || ECOM.test(h);
         const canPublish = isStore && !!name;
         if (canPublish) { published++; byCms[r.platform] = (byCms[r.platform] || 0) + 1; }
         else if (!isStore) noEcom++;
