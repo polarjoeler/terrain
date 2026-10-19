@@ -13,6 +13,7 @@ export const INSIGHTS_CATALOG: Category[] = [
     name: "Markets", blurb: "Where ecommerce is growing",
     reports: [
       { title: "Market overview", desc: "Launches, churn & coverage by country", href: "/insights", tier: "core" },
+      { title: "Market leaders", desc: "Top 100/500 stores & the platforms winning the head", href: "/insights/leaders", tier: "team" },
       { title: "Africa timeline", desc: "A decade of growth, replayed", href: "/insights/africa", tier: "core" },
       { title: "Country deep-dive", desc: "Slice any market on its own", href: "/insights", tier: "team" },
     ],
