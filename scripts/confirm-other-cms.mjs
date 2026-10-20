@@ -29,11 +29,16 @@ const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MA
 // don't do here, so they stay banked.
 const STORE_CMS = ["prestashop", "magento", "opencart", "ecwid", "bigcommerce", "shopware", "shopstar", "base",
   // Japan's dedicated hosted store-builders — same rationale as BASE.
-  "storesjp", "colorme", "makeshop", "ec-cube", "cafe24", "futureshop"];
+  // NB: STORES.jp (storesjp) is deliberately OMITTED — every *.stores.jp subdomain (even nonexistent
+  // ones) returns an identical "Captcha Challenge - STORES" 403, so homepage GETs can neither confirm
+  // existence/liveness nor read a name. It's a hard crawl blind spot; keeping it here only burned ~5k
+  // futile fetches per run. Its rows stay banked (published=false) until a non-HTTP source can verify
+  // them (e.g. the Common Crawl index).
+  "colorme", "makeshop", "ec-cube", "cafe24", "futureshop"];
 // Store-ONLY hosted services: you sign up to SELL (no brochure/blog option like Wix/Squarespace), so
 // being live on the platform IS the store confirmation — publish on liveness + a name, without needing
 // the (English-centric) cart-markup match, which misses Japanese storefront markup entirely.
-const STORE_ONLY = new Set(["base", "storesjp", "colorme", "makeshop", "cafe24"]);
+const STORE_ONLY = new Set(["base", "colorme", "makeshop", "cafe24"]);
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
