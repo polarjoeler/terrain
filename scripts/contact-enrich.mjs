@@ -65,6 +65,14 @@ const REVALIDATE = has("--revalidate-names");
 // --sample takes a RANDOM slice of what is left instead: a few hundred stores is enough to tell
 // us whether the tail behaves like the head, today, rather than at the end of the census.
 const SAMPLE = has("--sample");
+// Split the queue BY PLATFORM, which is the only split that actually parallelises. A Shopify
+// store's own domain is served by Shopify's edge, so every machine behind the home IP competes
+// for one rate budget — running it on two boxes just shares the same ceiling. Every other CMS is
+// fetched from the merchant's OWN server: no shared budget, no contention, so those can run on a
+// second machine at high concurrency alongside the Shopify lane rather than instead of it.
+//   --platform shopify      → the rate-limited lane (one machine only)
+//   --platform non-shopify  → the free-running lane (Rex/Lucy, high concurrency)
+const platArg = (arg("--platform", "") || "").toLowerCase() || null;
 // Egress. Counter-intuitively the Webshare fleet is the WRONG lane for this crawl: measured on two
 // disjoint 10-store ZA Shopify samples at identical settings, the fleet was rate-limited on 5/10
 // stores while the direct residential IP completed 10/10 with zero 429s. Shopify's edge throttles
@@ -735,6 +743,9 @@ async function main() {
           AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
           AND activity_tier IS DISTINCT FROM 'not_a_store'
           AND UPPER(country) = ANY(${countries.length ? countries : MARKETS})
+          ${platArg === "shopify" ? sql`AND LOWER(platform) = 'shopify'`
+            : platArg === "non-shopify" ? sql`AND (platform IS NULL OR LOWER(platform) <> 'shopify')`
+            : platArg ? sql`AND LOWER(platform) = ${platArg}` : sql``}
           AND (contact_checked_at IS NULL OR contact_checked_at < now() - (${REPROBE_DAYS} || ' days')::interval)
         -- Worst-first by value: the stores a customer is most likely to pitch, and the ones where a
         -- generic-only contact costs us the most, get a named contact earliest.
@@ -751,7 +762,7 @@ async function main() {
       process.exit(3);
     }
 
-    console.log(`contact-enrich: ${rows.length} store(s)${DRY ? " [DRY]" : ""} · ≤${MAX_FETCHES} fetches each · conc ${CONC}`
+    console.log(`contact-enrich: ${rows.length} store(s)${platArg ? ` [${platArg}]` : ""}${DRY ? " [DRY]" : ""} · ≤${MAX_FETCHES} fetches each · conc ${CONC}`
       + `${NO_LLM || !LOCAL_LLM_URL ? "" : ` · local LLM ${LOCAL_LLM_MODEL}`}`);
 
     const tally = { named: 0, role_targeted: 0, role_generic: 0, form_only: 0, none: 0 };
