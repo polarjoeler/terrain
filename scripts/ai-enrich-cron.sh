@@ -12,6 +12,9 @@ export NVM_DIR="$HOME/.nvm"
 
 cd /Users/joel/storepulse || exit 1
 
+# Route the Shopify-edge products.json fetch across the Webshare fleet (not the home IP).
+export STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt"
+
 # Scoped to a market list — NOT --all. `--all` alone swept the entire ~600k global base (~$555 in
 # Haiku) on stores in markets we don't sell. JP is the current priority (largest un-described base:
 # ~16k Shopify stores missing category/description ≈ $16). Widen FOCUS to add markets (ZA is at 88%

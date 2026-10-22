@@ -57,11 +57,30 @@ const sameOrg = (host, storeDomain) => {
   return host === sd || host.endsWith("." + sd) || sd.endsWith("." + host);
 };
 
+import { loadProxies, pickProxy, fetchText } from "./lib/proxy-fetch.mjs";
+// Shopify-edge fetches (products.json) rotate across the Webshare fleet so they don't burn the home
+// IP's rate budget (contends with payments otherwise). Empty pool → direct, unchanged. Own-domain
+// fetches (homepage) stay DIRECT — datacenter proxies get bot-blocked there.
+const PROXY_POOL = loadProxies();
+
 async function get(url, ms = 8000) {
   try {
     const r = await fetch(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(ms) });
     return r.ok ? r : null;
   } catch { return null; }
+}
+
+// products.json is Shopify-edge → via the rotator when configured, else direct. Returns the products array.
+async function fetchProductsJson(d) {
+  const url = `https://${d}/products.json?limit=250`;
+  if (PROXY_POOL.length) {
+    const r = await fetchText(url, { proxy: pickProxy(PROXY_POOL), ua: UA, timeoutMs: 8000, maxBytes: 3_000_000 }).catch(() => null);
+    if (!r || r.status < 200 || r.status >= 300 || !r.text) return [];
+    try { return JSON.parse(r.text).products || []; } catch { return []; }
+  }
+  const pj = await get(url);
+  if (!pj) return [];
+  try { return (await pj.json()).products || []; } catch { return []; }
 }
 
 const SOCIALS = {
@@ -99,17 +118,11 @@ function firstRealEmail(html, domain) {
 
 async function gather(domain) {
   const d = clean(domain);
-  const pj = await get(`https://${d}/products.json?limit=250`);
-  let types = new Set(), titles = [], nProducts = 0;
-  if (pj) {
-    try {
-      const items = (await pj.json()).products || [];
-      nProducts = items.length;
-      for (const p of items) {
-        if (p.product_type) types.add(p.product_type);
-        if (p.title && titles.length < 8) titles.push(p.title);
-      }
-    } catch { /* ignore */ }
+  const items = await fetchProductsJson(d);
+  let types = new Set(), titles = [], nProducts = items.length;
+  for (const p of items) {
+    if (p.product_type) types.add(p.product_type);
+    if (p.title && titles.length < 8) titles.push(p.title);
   }
   const home = await get(`https://${d}`);
   let title = "", metaDesc = "", socials = {}, email = null;

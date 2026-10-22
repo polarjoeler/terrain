@@ -116,6 +116,21 @@ const snap = {
   markets: Object.fromEntries(cov.map((r) => [r.c, { pay: r.pay, pay_base: r.live, tech: r.tech, tech_base: r.live }])),
 };
 
+// ── 5. PROFILE COMPLETENESS — per-store "resolved" (filled OR checked-empty): the systemic metric ──
+const HOSTED_CMS = "'shopify','wix','squarespace','bigcommerce','base','colorme','makeshop','cafe24','ec-cube','futureshop','ecwid','shopstar','shoplazza','salesforce commerce cloud'";
+const RESOLVED = [
+  "(coalesce(payments,'')<>'' OR payments_checked_at IS NOT NULL)",
+  "(coalesce(shipping_providers,'')<>'' OR payments_checked_at IS NOT NULL)",
+  "(coalesce(theme,'')<>'' OR deep_enriched_at IS NOT NULL)",
+  "((coalesce(apps,'')<>'' OR coalesce(technologies,'')<>'') OR deep_enriched_at IS NOT NULL)",
+  `(coalesce(hosting_provider,'')<>'' OR lower(platform) IN (${HOSTED_CMS}) OR hosting_checked_at IS NOT NULL)`,
+  "((coalesce(contact_email,'')<>'' OR coalesce(email,'')<>'') OR contact_checked_at IS NOT NULL)",
+  "(coalesce(description,'')<>'' OR ai_enriched_at IS NOT NULL)",
+].join(" AND ");
+const comp = await sql.unsafe(`SELECT upper(country) c, count(*)::int n, count(*) FILTER (WHERE ${RESOLVED})::int complete
+  FROM imported_stores WHERE published AND coalesce(activity_tier,'') NOT IN ('not_a_store','dormant')
+    AND upper(country) IN ('ZA','KE','NG') GROUP BY 1 ORDER BY (upper(country)='ZA') DESC, n DESC`).catch(() => []);
+
 // ── Compose ──────────────────────────────────────────────────────────────────────────────────
 const now = new Date();
 const dateStr = now.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" });
@@ -169,6 +184,12 @@ L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   
 L.push(`Woo-checkout queue:           ${n(backTot.wq)}${d(backTot.wq, Y?.wq)}   ← Woo candidates awaiting the checkout probe`);
 L.push(`Never-probed tail:            ${n(backTot.np)}${d(backTot.np, Y?.np)}   ← unpublished, no payment/woo probe yet`);
 if (back.length > 1) { L.push(`By market  (verified-hidden · woo-queue · never-probed):`); for (const r of back) L.push(`   ${r.c.padEnd(4)} ${String(r.verified_hidden).padStart(6)} · ${String(r.woo_queue).padStart(5)} · ${String(r.never_probed).padStart(7)}`); }
+L.push(``);
+// 5 · PROFILE COMPLETENESS
+L.push(`━━ 5 · PROFILE COMPLETENESS — % of stores fully profiled (ZA-first) ━━`);
+L.push(`A store is COMPLETE when every field is resolved (filled OR checked-empty): payments·shipping·theme·apps·hosting·contact·description.`);
+for (const r of comp) L.push(`   ${r.c.padEnd(4)} ${pctS(r.complete, r.n).padStart(4)} complete  (${n(r.complete)}/${n(r.n)})`);
+L.push(`Sequence: drive ZA → 100%, then roll through the rest of Africa.`);
 L.push(``);
 L.push(`Coverage % = share of the live store base we hold that signal for. "Legacy" finds are backfill`);
 L.push(`(old stores newly discovered), not new market activity — watch the NEW line for real momentum.`);

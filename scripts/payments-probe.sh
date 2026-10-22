@@ -50,7 +50,7 @@ MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG
 
 # Refresh the value-ranked queue (skips already-verified; re-surfaces >60d-stale so
 # provider switches get caught), then HTTP-probe the top batch and sync results.
-node --env-file=.env.local scripts/payment-queue.mjs --limit 8000 --country "$MARKETS" >/dev/null 2>&1 \
+node --env-file=.env.local scripts/payment-queue.mjs --limit 15000 --country "$MARKETS" >/dev/null 2>&1 \
   || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
@@ -61,7 +61,7 @@ if [ -x "$PROBE_PY" ]; then
   # hard tail + queue health are also suspects, to be diagnosed separately.) If proxies.txt is absent on
   # a box, checkout_probe.py falls back to direct automatically, so this is safe everywhere.
   ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" "$PROBE_PY" checkout_probe.py \
-      --from-file "$HOME/storepulse/feed/payment-queue.txt" --limit 2500 --concurrency 24 ) \
+      --from-file "$HOME/storepulse/feed/payment-queue.txt" --limit 5000 --concurrency 24 ) \
     || echo "!! checkout probe failed (continuing)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed (continuing)"
 else
