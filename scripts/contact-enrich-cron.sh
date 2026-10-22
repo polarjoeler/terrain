@@ -19,10 +19,36 @@ export NVM_DIR="$HOME/.nvm"
 
 cd /Users/joel/storepulse || exit 1
 
-# Markets in sell-order. ~1200 stores/night at this pace (~8s/store, 2 workers) backfills ZA in
-# about a fortnight and then only sees new discoveries. Raise LIMIT once the backlog is cleared.
+# Markets in sell-order.
 FOCUS="ZA,KE,NG"
-LIMIT=1200
+
+# LANE SPLIT — this file runs on BOTH machines and both agents fire at 01:15. Without a split they
+# select the same `contact_checked_at IS NULL` rows in the same revenue order and crawl every store
+# TWICE: no extra coverage, double the requests at each URL.
+#
+# Splitting by platform is the only split that actually parallelises. A Shopify store's own domain
+# is served from Shopify's edge, so every machine behind the home IP competes for one rate budget —
+# that lane must stay on a single box, paced. Every other CMS is fetched from the merchant's own
+# server with no shared ceiling, so it can run harder, elsewhere, at the same time.
+#
+# Self-configuring by host so the same file is correct wherever it is pulled; CONTACT_LANE
+# overrides it for a one-off.
+LANE="${CONTACT_LANE:-}"
+if [ -z "$LANE" ]; then
+  case "$(scutil --get LocalHostName 2>/dev/null)" in
+    *Studio*|*studio*) LANE="non-shopify" ;;   # Rex — own-domain, no contention
+    *)                 LANE="shopify"     ;;   # Chad (and any other host) — the paced lane
+  esac
+fi
+if [ "$LANE" = "non-shopify" ]; then
+  LIMIT="${CONTACT_LIMIT:-6000}"   # no shared budget to protect
+  CONC="${CONTACT_CONC:-6}"
+  DELAY="${CONTACT_DELAY:-400}"
+else
+  LIMIT="${CONTACT_LIMIT:-1200}"   # paced: shares the Shopify edge with every other probe
+  CONC="${CONTACT_CONC:-2}"
+  DELAY="${CONTACT_DELAY:-1200}"
+fi
 
 # This runs for ~3 hours on a LAPTOP. On 2026-10-21 the run stopped dead at 02:43 with 528 of 1200
 # stores done because the machine hit 1% battery and force-slept — caffeinate cannot hold off a
@@ -31,13 +57,13 @@ LIMIT=1200
 # explains itself.
 POWER=$(pmset -g batt 2>/dev/null | head -1)
 CHARGE=$(pmset -g batt 2>/dev/null | grep -o '[0-9]*%' | head -1)
-echo "=== contact-enrich sweep $(date '+%Y-%m-%d %H:%M:%S') (markets: $FOCUS, limit: $LIMIT) ==="
+echo "=== contact-enrich sweep $(date '+%Y-%m-%d %H:%M:%S') · lane=$LANE · markets: $FOCUS · limit: $LIMIT ==="
 echo "power: $POWER $CHARGE"
 case "$POWER" in
   *"Battery Power"*) echo "WARNING: on battery ($CHARGE). A ~3h sweep will be cut short if this runs flat — plug in." ;;
 esac
 node --env-file=.env.local scripts/contact-enrich.mjs \
-  --country "$FOCUS" --limit "$LIMIT" --concurrency 2 --delay-ms 1200
+  --platform "$LANE" --country "$FOCUS" --limit "$LIMIT" --concurrency "$CONC" --delay-ms "$DELAY"
 
 # Deliverability over whatever the crawl just landed. Pure DNS — no store is contacted and none of
 # the Shopify-edge rate budget is touched — so it runs straight after at full concurrency, and
