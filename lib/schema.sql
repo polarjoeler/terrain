@@ -98,6 +98,10 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 -- rows per query and time out under worker write-load. (Added live 2026-09; kept here to persist.)
 CREATE INDEX IF NOT EXISTS idx_is_live_universe    ON imported_stores (country, platform, live_status) WHERE published;
 CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_checked_at DESC NULLS LAST);
+-- Recent-activity reads for the /fleet live monitor (partial: only rows that have been touched),
+-- so "newest N enriched / hosting-resolved" is an index scan, not a 2.8M-row full scan.
+CREATE INDEX IF NOT EXISTS idx_is_ai_enriched      ON imported_stores (ai_enriched_at DESC) WHERE ai_enriched_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_is_hosting_checked  ON imported_stores (hosting_checked_at DESC) WHERE hosting_checked_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_is_catalog_checked  ON imported_stores (catalog_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_payments_checked ON imported_stores (payments_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_launched         ON imported_stores (launched_at DESC NULLS LAST);
