@@ -26,6 +26,19 @@ function db() {
 
 const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
 
+/** The address we would actually send to. Once contact-enrich has visited a store (stamping
+ *  contact_checked_at), contact_email is the best of every address found across its contact
+ *  surface — the imported `email` among them — so it wins. Before that pass reaches a store the
+ *  imported address is all we can trust. Mirrors bestEmail() in the lead drawer; keep them in step. */
+const bestEmailSql = "CASE WHEN contact_checked_at IS NOT NULL THEN COALESCE(contact_email, email) ELSE email END";
+/** Contact types that reach a human rather than a queue — what "has a named contact" means. */
+const REACHABLE_TYPES = ["named", "role_targeted"] as const;
+/** ...and it has to be able to receive mail. contact_mx_ok is FALSE only when the address's domain
+ *  publishes no MX record at all — a guaranteed bounce however good the local-part looks. NULL
+ *  means not yet checked or DNS wouldn't answer, which must not be treated as undeliverable, hence
+ *  IS NOT FALSE rather than = true. (scripts/contact-mx.mjs) */
+const DELIVERABLE = "contact_mx_ok IS NOT FALSE";
+
 export type SortKey = "new" | "score" | "sales" | "name" | "launched" | "discovered";
 
 export type BrowseFilters = {
@@ -35,6 +48,13 @@ export type BrowseFilters = {
   payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[];
   activity?: string[]; hosting?: string[];
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
+  /** Contact-quality facet: 'named' | 'role_targeted' | 'role_generic' | 'form_only' | 'none'. */
+  contactType?: string[];
+  /** Shorthand for the filter customers actually want: an address that reaches a person
+   *  AND can actually receive mail. */
+  reachableContact?: boolean;
+  /** Drop addresses whose domain publishes no MX — the bounce list. */
+  deliverable?: boolean;
   tier?: "top100" | "top500";
   domains?: string[];         // explicit selection (export the ticked rows), overrides the broad filter
   launchedDays?: number;      // launched within N days
@@ -57,7 +77,13 @@ export type BrowseRow = {
   plus: boolean; activityTier: string | null;
   estMonthlySales: number | null; band: RevenueBand;
   productCount: number | null; aovUsd: number | null;
+  /** `email` is the best address we hold (see bestEmailSql) — not the raw imported column. */
   email: string | null; instagram: string | null; facebook: string | null; tiktok: string | null;
+  /** Contact quality, so the table can say WHAT the address is instead of just showing it. */
+  contactType: string | null; contactName: string | null; whatsapp: string | null;
+  /** false = the address's domain has no MX and will bounce; null = not checked yet.
+   *  sharedCount > 1 = another tracked store uses this same address (agency / head office). */
+  contactMxOk: boolean | null; contactSharedCount: number | null;
   launchedAt: string | null; discoveredAt: string | null;
   top100: boolean; top500: boolean;
   /** CrUX traffic-rank bucket (1000 = top 1k, lower is bigger) and the CrUX month it came from,
@@ -74,9 +100,9 @@ export type BrowseResult = {
   total: number;              // true count for the current filters
   universe: number;           // true count with no filters at all
   // Live-stat tiles — true over the whole filtered set, not just the page.
-  stats: { plus: number; email: number };
+  stats: { plus: number; email: number; reachable: number; willBounce: number };
   facets: {
-    country: Facet; platform: Facet; band: Facet;
+    country: Facet; platform: Facet; band: Facet; contactType: Facet;
     category: Facet; city: Facet; theme: Facet;
     activity: Facet; hosting: Facet;
     payment: Facet; shipping: Facet; apps: Facet; plugins: Facet;   // multi-token (a store has several)
@@ -126,7 +152,10 @@ function buildWhere(f: BrowseFilters) {
   if (f.activity?.length) conds.push(sql`activity_tier = ANY(${f.activity})`);
   if (f.hosting?.length) conds.push(sql`hosting_provider = ANY(${f.hosting})`);
   if (f.plus) conds.push(sql`plus`);
-  if (f.hasEmail) conds.push(sql`email IS NOT NULL AND email <> ''`);
+  if (f.hasEmail) conds.push(sql`${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> ''`);
+  if (f.contactType?.length) conds.push(sql`contact_type = ANY(${f.contactType})`);
+  if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
+  if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
   if (f.tier) conds.push(sql`domain IN (SELECT domain FROM store_tags WHERE tag = ${f.tier === "top100" ? "top-100" : "top-500"})`);
   if (f.launchedDays) conds.push(sql`${launchExpr} >= CURRENT_DATE - ${f.launchedDays}::int`);
@@ -165,7 +194,7 @@ async function universeCount(): Promise<number> {
 // for facet counts); the universe count has its own cache above.
 type AggParsed = {
   total: number;
-  stats: { plus: number; email: number };
+  stats: { plus: number; email: number; reachable: number; willBounce: number };
   facets: BrowseResult["facets"];
   recency: BrowseResult["recency"];
 };
@@ -257,8 +286,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     WITH f AS MATERIALIZED (
       SELECT country, platform, city, category, btrim(theme) AS theme,
              ${band} AS band, activity_tier, hosting_provider,
-             payments, shipping_providers, apps, plugins, plus,
-             (email IS NOT NULL AND email <> '') AS has_email,
+             payments, shipping_providers, apps, plugins, plus, contact_type,
+             (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
+             (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
+             (contact_mx_ok IS FALSE) AS will_bounce,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on,
              discovered_at
       FROM imported_stores WHERE ${where}
@@ -266,6 +297,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     SELECT (SELECT count(*)::int FROM f) AS total,
            (SELECT (count(*) FILTER (WHERE plus))::int FROM f)       AS c_plus,
            (SELECT (count(*) FILTER (WHERE has_email))::int FROM f)  AS c_email,
+           (SELECT (count(*) FILTER (WHERE reachable))::int FROM f)   AS c_reachable,
+           (SELECT (count(*) FILTER (WHERE will_bounce))::int FROM f) AS c_bounce,
+           ${sql.unsafe(facetSub("contact_type"))}  AS f_contact,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
            ${sql.unsafe(facetSub("platform"))}      AS f_platform,
            ${sql.unsafe(facetSub("band"))}          AS f_band,
@@ -289,10 +323,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
     A = {
       total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0) },
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0) },
       facets: {
         country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
-        band: toFacet(agg.f_band), category: toFacet(agg.f_category),
+        band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
         city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
         activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
         payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins),
@@ -305,7 +339,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
 
   const rows = await sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
-           activity_tier, email, instagram, facebook, tiktok,
+           activity_tier, ${sql.unsafe(bestEmailSql)} AS email,
+           contact_type, contact_name, whatsapp, contact_mx_ok, contact_shared_count,
+           instagram, facebook, tiktok,
            instagram_followers, facebook_followers, product_count, avg_product_price, currency,
            ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
            crux_rank, crux_rank_month, crux_trend,
@@ -331,6 +367,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         estMonthlySales: sales, band: revenueBand(sales),
         productCount: r.product_count == null ? null : Number(r.product_count), aovUsd: aov,
         email, instagram: (r.instagram as string) ?? null, facebook: (r.facebook as string) ?? null, tiktok: (r.tiktok as string) ?? null,
+        contactType: (r.contact_type as string) ?? null, contactName: (r.contact_name as string) ?? null,
+        whatsapp: (r.whatsapp as string) ?? null,
+        contactMxOk: r.contact_mx_ok == null ? null : Boolean(r.contact_mx_ok),
+        contactSharedCount: r.contact_shared_count == null ? null : Number(r.contact_shared_count),
         launchedAt: d(r.launched_on ? String(r.launched_on) : null),
         discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
         top100: !!r.top100, top500: !!r.top500,
@@ -398,8 +438,11 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   const out = await sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, activity_tier, activity_score,
            hosting_provider, platform_version, btrim(theme) AS theme, product_count, avg_product_price,
-           currency, ${usd}::int AS usd, ${band} AS band, plus, email, payments, shipping_providers,
-           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok
+           currency, ${usd}::int AS usd, ${band} AS band, plus,
+           ${sql.unsafe(bestEmailSql)} AS email, contact_type, contact_name, contact_role,
+           whatsapp, contact_phone, contact_form_url, contact_mx_ok, contact_mx_provider,
+           contact_shared_count, contact_email_guess, contact_guess_status, payments, shipping_providers,
+           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin
     FROM imported_stores WHERE ${where}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
     LIMIT ${EXPORT_CAP}`;
@@ -410,14 +453,20 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // `shipping_providers` is the Shopify checkout read; `logistics_apps` is the cross-platform homepage
   // carrier fingerprint (Bob Go, Pargo, TUNL…). Merge them so non-Shopify stores show shipping too.
   const shipMerged = (a: unknown, b: unknown) => [...new Set(`${a ?? ""};${b ?? ""}`.split(";").map((x) => x.trim()).filter(Boolean))].join("; ") || null;
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "facebook", "tiktok"];
+  // contact_type is exported next to the address on purpose: a CSV of bare emails is exactly the
+  // artefact customers complain about, because nothing in it says which rows are worth a send.
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "facebook", "tiktok", "linkedin"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
     return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
       r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
-      sales, revenueBand(sales), r.plus, r.email, r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
-      r.plugins, r.technologies, r.instagram, r.facebook, r.tiktok] as ExportCell[];
+      sales, revenueBand(sales), r.plus, r.email, r.contact_type, r.contact_name, r.contact_role,
+      r.whatsapp, r.contact_phone, r.contact_form_url,
+      r.contact_mx_ok == null ? null : (r.contact_mx_ok ? "yes" : "no — no MX, will bounce"),
+      r.contact_mx_provider, r.contact_shared_count, r.contact_email_guess, r.contact_guess_status,
+      r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
+      r.plugins, r.technologies, r.instagram, r.facebook, r.tiktok, r.linkedin] as ExportCell[];
   });
   return { header, rows };
 }

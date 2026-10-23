@@ -51,12 +51,26 @@ async function main() {
     const hasShip = Array.isArray(ship) && ship.length;
     const hasFree = typeof rec?.free_shipping === "boolean";
     const hasPlus = rec?.plus === "strong"; // independent, still-Plus-exclusive fingerprint
-    if (hasGw || hasShip || hasFree || hasPlus) {
+    // The literal admin plan, when an embedded app config leaked it at checkout (~0.5% of
+    // pages). The ONLY exact tier we ever see — everything else is an eligibility floor.
+    const planExact = typeof rec?.plan_exact === "string" && rec.plan_exact ? rec.plan_exact : null;
+    // Shop identity from /meta.json — Shopify's own country/city/province (ground truth, vs the
+    // ccTLD+currency guess that mislabels stores) and the shop id, which is the real identity
+    // behind www/apex and generic-TLD rows that currently look like separate stores.
+    const m = rec?.meta && typeof rec.meta === "object" ? rec.meta : null;
+    const meta = m?.id ? {
+      id: Number(m.id) || null,
+      country: m.country || null, city: m.city || null, province: m.province || null,
+      currency: m.currency || null, myshopify: m.myshopify_domain || null,
+    } : null;
+    if (hasGw || hasShip || hasFree || hasPlus || planExact || meta) {
       verified.push([clean(domain), {
         payments: hasGw ? gw.join(";") : null,
         shipping: hasShip ? ship.join(";") : null,
         free: hasFree ? rec.free_shipping : null,
         plus: hasPlus,
+        planExact,
+        meta,
       }]);
     }
   }
@@ -94,6 +108,16 @@ async function main() {
     // re-probe (so provider switches get caught), instead of probe-once-forever.
     await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`);
     await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plus_signal TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plan_exact TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_id BIGINT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_country TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_city TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_province TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_currency TEXT`);
+    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS myshopify_domain TEXT`);
+    // shop_id is the dedupe key for the www/apex and generic-TLD rows; not unique by design
+    // (expansion stores aside, one shop legitimately answers on several of our domain rows).
+    await ddl(sql`CREATE INDEX IF NOT EXISTS idx_imported_shop_id ON imported_stores (shop_id)`);
     // Event log of payment-provider shifts — the raw material for monitoring stores
     // that switch/add/drop a gateway or reorder their checkout (a live sales signal).
     // Populated here by diffing each re-probe against what we last had.
@@ -185,7 +209,17 @@ async function main() {
               -- an independent, still-Plus-exclusive fingerprint (multipass / Plus badge) confirms
               -- Plus on its own — record it and set the confident flag live (never un-set).
               plus_signal = CASE WHEN ${v.plus} THEN 'strong' ELSE plus_signal END,
-              plus        = CASE WHEN ${v.plus} THEN true ELSE plus END
+              plus        = CASE WHEN ${v.plus} THEN true ELSE plus END,
+              -- exact plan never degrades: a leak is ground truth, a later page without the
+              -- leaky app must not erase it (typed cast — postgres.js throws on bare nulls).
+              plan_exact  = COALESCE(${v.planExact}::text, plan_exact),
+              -- shop identity: refreshed when present (a store CAN move country), never wiped
+              shop_id          = COALESCE(${v.meta?.id ?? null}::bigint, shop_id),
+              shop_country     = COALESCE(${v.meta?.country ?? null}::text, shop_country),
+              shop_city        = COALESCE(${v.meta?.city ?? null}::text, shop_city),
+              shop_province    = COALESCE(${v.meta?.province ?? null}::text, shop_province),
+              shop_currency    = COALESCE(${v.meta?.currency ?? null}::text, shop_currency),
+              myshopify_domain = COALESCE(${v.meta?.myshopify ?? null}::text, myshopify_domain)
             WHERE domain = ANY(${www2(domain)}) AND published`;
         updated += r.count;
       }
