@@ -49,3 +49,6 @@ vercel-env.txt
 # local tooling / runtime
 .claude/
 logs/
+
+# StoreCensus wide-pull checkpoint (runtime state, regenerable)
+.sc-wide-done
