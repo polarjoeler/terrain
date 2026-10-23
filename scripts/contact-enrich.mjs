@@ -42,6 +42,7 @@
  */
 import postgres from "postgres";
 import { pathToFileURL } from "node:url";
+import os from "node:os";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : d; };
@@ -65,6 +66,12 @@ const REVALIDATE = has("--revalidate-names");
 // --sample takes a RANDOM slice of what is left instead: a few hundred stores is enough to tell
 // us whether the tail behaves like the head, today, rather than at the end of the census.
 const SAMPLE = has("--sample");
+// Who is claiming rows. Coordination between machines CANNOT rest on two agents — or two people —
+// remembering to pass matching flags: on 2026-10-22 Rex and Chad ran the same revenue-ordered queue
+// at 01:15 and crawled the same stores twice. The queue now hands work out under a lease, so two
+// runs are disjoint by construction regardless of who starts them or how.
+const HOST = process.env.CONTACT_WORKER || os.hostname().split(".")[0];
+const CLAIM_TTL = arg("--claim-ttl", "3 hours");   // a crashed run's rows return to the pool
 // Split the queue BY PLATFORM, which is the only split that actually parallelises. A Shopify
 // store's own domain is served by Shopify's edge, so every machine behind the home IP competes
 // for one rate budget — running it on two boxes just shares the same ceiling. Every other CMS is
@@ -651,6 +658,8 @@ const DDL = [
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_text TEXT",
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_checked_at TIMESTAMPTZ",
   "RESET lock_timeout",
+  "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_claimed_by TEXT",
+  "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_claimed_at TIMESTAMPTZ",
   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_is_contact_type ON imported_stores(contact_type) WHERE published",
   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_is_contact_checked ON imported_stores(contact_checked_at DESC NULLS LAST)",
 ];
@@ -738,7 +747,13 @@ async function main() {
     const rows = DOMAINS.length
       ? await sql`SELECT domain, name, email, platform, category FROM imported_stores WHERE domain = ANY(${DOMAINS})`
       : await sql`
-        SELECT domain, name, email, platform, category FROM imported_stores
+        -- Atomic claim-and-take. FOR UPDATE SKIP LOCKED means two workers racing at the same
+        -- instant get disjoint sets instead of the same rows; the claim timestamp means a worker
+        -- that dies mid-run releases its rows after CLAIM_TTL rather than stranding them.
+        UPDATE imported_stores s
+           SET contact_claimed_by = ${HOST}, contact_claimed_at = now()
+          FROM (
+        SELECT domain FROM imported_stores
         WHERE published
           AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
           AND activity_tier IS DISTINCT FROM 'not_a_store'
@@ -747,10 +762,15 @@ async function main() {
             : platArg === "non-shopify" ? sql`AND (platform IS NULL OR LOWER(platform) <> 'shopify')`
             : platArg ? sql`AND LOWER(platform) = ${platArg}` : sql``}
           AND (contact_checked_at IS NULL OR contact_checked_at < now() - (${REPROBE_DAYS} || ' days')::interval)
+          AND (contact_claimed_at IS NULL OR contact_claimed_at < now() - ${CLAIM_TTL}::interval)
         -- Worst-first by value: the stores a customer is most likely to pitch, and the ones where a
         -- generic-only contact costs us the most, get a named contact earliest.
         ORDER BY ${SAMPLE ? sql`random()` : sql`(contact_type IS NULL) DESC, estimated_monthly_sales DESC NULLS LAST`}
-        LIMIT ${LIMIT}`;
+        LIMIT ${LIMIT}
+        FOR UPDATE SKIP LOCKED
+          ) c
+         WHERE s.domain = c.domain
+     RETURNING s.domain, s.name, s.email, s.platform, s.category`;
 
     if (!rows.length) { console.log("nothing to do — every candidate store has a fresh contact check."); return; }
 
@@ -762,7 +782,7 @@ async function main() {
       process.exit(3);
     }
 
-    console.log(`contact-enrich: ${rows.length} store(s)${platArg ? ` [${platArg}]` : ""}${DRY ? " [DRY]" : ""} · ≤${MAX_FETCHES} fetches each · conc ${CONC}`
+    console.log(`contact-enrich: ${rows.length} store(s) claimed by ${HOST}${platArg ? ` [${platArg}]` : ""}${DRY ? " [DRY]" : ""} · ≤${MAX_FETCHES} fetches each · conc ${CONC}`
       + `${NO_LLM || !LOCAL_LLM_URL ? "" : ` · local LLM ${LOCAL_LLM_MODEL}`}`);
 
     const tally = { named: 0, role_targeted: 0, role_generic: 0, form_only: 0, none: 0 };
