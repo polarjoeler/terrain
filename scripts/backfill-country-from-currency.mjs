@@ -6,10 +6,15 @@
  *  left for the storefront re-probe (scripts/reprobe-null-country.mjs).
  *
  *    node --env-file=.env.local scripts/backfill-country-from-currency.mjs [--apply]
+ *    node --env-file=.env.local scripts/backfill-country-from-currency.mjs --domains /tmp/new.txt --apply
+ *
+ *  --domains <file> restricts the pass to exactly those domains (one per line) instead of the
+ *  whole published+country-null pool, so a one-batch reconciliation never rewrites unrelated rows.
  *
  *  Dry-run by default (prints what it WOULD set); pass --apply to write.
  */
 import postgres from "postgres";
+import { readFileSync } from "fs";
 
 const CCTLD_CC = {
   za: "ZA", ke: "KE", ng: "NG", eg: "EG", ma: "MA", tn: "TN", dz: "DZ", mu: "MU",
@@ -20,14 +25,23 @@ const CCTLD_CC = {
   sl: "SL", ss: "SS", sd: "SD", tg: "TG", bi: "BI", td: "TD", km: "KM", st: "ST",
   jp: "JP", ae: "AE", sa: "SA", il: "IL", tr: "TR", qa: "QA", kw: "KW", bh: "BH",
   om: "OM", jo: "JO", lb: "LB",
+  // Asia + Oceania
+  in: "IN", cn: "CN", hk: "HK", sg: "SG", my: "MY", th: "TH", id: "ID", ph: "PH", vn: "VN",
+  tw: "TW", kr: "KR", pk: "PK", bd: "BD", lk: "LK", np: "NP", kh: "KH", mm: "MM", la: "LA",
+  bn: "BN", mv: "MV", bt: "BT", mn: "MN", mo: "MO", au: "AU", nz: "NZ", fj: "FJ", pg: "PG",
 };
 const CCY_CC = {
   ZAR: "ZA", NGN: "NG", KES: "KE", GHS: "GH", EGP: "EG", MAD: "MA", TND: "TN",
   DZD: "DZ", MZN: "MZ", TZS: "TZ", UGX: "UG", RWF: "RW", ZMW: "ZM", MUR: "MU",
   BWP: "BW", NAD: "NA", ETB: "ET", AOA: "AO", KWD: "KW", QAR: "QA", BHD: "BH",
   OMR: "OM", AED: "AE", ILS: "IL", TRY: "TR", JPY: "JP",
+  // Asia + Oceania — all single-country, so safe to pin (shared units like EUR stay out).
+  INR: "IN", CNY: "CN", HKD: "HK", SGD: "SG", MYR: "MY", THB: "TH", IDR: "ID", PHP: "PH",
+  VND: "VN", TWD: "TW", KRW: "KR", PKR: "PK", BDT: "BD", LKR: "LK", NPR: "NP", KHR: "KH",
+  MMK: "MM", LAK: "LA", BND: "BN", MVR: "MV", MNT: "MN", AUD: "AU", NZD: "NZ", FJD: "FJ",
 };
 const APPLY = process.argv.includes("--apply");
+const DOMAINS = (() => { const i = process.argv.indexOf("--domains"); return i >= 0 ? process.argv[i + 1] : null; })();
 
 function fromCctld(domain) {
   const d = (domain ?? "").toLowerCase();
@@ -37,9 +51,20 @@ function fromCctld(domain) {
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3 });
 try {
-  const rows = await sql`
-    SELECT domain, UPPER(currency) ccy FROM imported_stores
-    WHERE published AND country IS NULL`;
+  let rows;
+  if (DOMAINS) {
+    const want = readFileSync(DOMAINS, "utf8").split("\n").map((d) => d.trim().toLowerCase()).filter(Boolean);
+    rows = [];
+    for (let i = 0; i < want.length; i += 5000) {
+      rows.push(...await sql`SELECT domain, UPPER(currency) ccy FROM imported_stores
+        WHERE lower(domain) = ANY(${want.slice(i, i + 5000)}) AND country IS NULL`);
+    }
+    console.log(`scope: ${want.length} listed domains → ${rows.length} still country-null`);
+  } else {
+    rows = await sql`
+      SELECT domain, UPPER(currency) ccy FROM imported_stores
+      WHERE published AND country IS NULL`;
+  }
   const plan = rows
     .map((r) => {
       const cc = fromCctld(r.domain) ?? CCY_CC[r.ccy] ?? null;
@@ -59,7 +84,9 @@ try {
   else {
     let n = 0;
     for (const p of plan) {
-      await sql`UPDATE imported_stores SET country = ${p.cc} WHERE domain = ${p.domain} AND country IS NULL`;
+      await sql`UPDATE imported_stores
+        SET country = ${p.cc}, country_source = COALESCE(country_source, ${p.via})
+        WHERE domain = ${p.domain} AND country IS NULL`;
       n++;
     }
     console.log(`\n✓ Applied: set country on ${n} stores.`);
