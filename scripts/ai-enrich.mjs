@@ -36,7 +36,7 @@ const LIMIT = ALL ? null : limArg > -1 ? Number(process.argv[limArg + 1]) : 200;
 // sales, so a plain --limit run never reaches them). Comma-separated, case-insensitive.
 const cIdx = process.argv.indexOf("--country");
 const COUNTRIES = cIdx > -1 && process.argv[cIdx + 1] ? process.argv[cIdx + 1].toUpperCase().split(",") : null;
-const CONCURRENCY = 5;
+const CONCURRENCY = Number(process.env.AI_ENRICH_CONC || 5);  // env-tunable; Rex runs higher (idle compute)
 
 const TAXONOMY = [
   "Apparel", "Home & Garden", "Beauty & Fitness", "Food & Drink", "Sports",
