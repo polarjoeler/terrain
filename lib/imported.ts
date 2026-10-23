@@ -133,9 +133,11 @@ export async function outreachLeads(opts: { country?: string; tag?: string } = {
   await ensure();
   const { country, tag } = opts;
   const rows = await db()<{ email: string; company: string | null; website: string }[]>`
-    SELECT email, name AS company, domain AS website FROM imported_stores
+    SELECT CASE WHEN contact_checked_at IS NOT NULL THEN COALESCE(contact_email, email) ELSE email END AS email,
+           name AS company, domain AS website FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
-      AND email IS NOT NULL AND email <> ''
+      AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) IS NOT NULL
+      AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) <> ''
       ${country ? db()`AND country = ${country}` : db()``}
       ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}
     ORDER BY estimated_monthly_sales DESC NULLS LAST`;
@@ -306,7 +308,12 @@ export async function publishedLeads(country?: string, platform?: string): Promi
   // Explicit columns only — never SELECT * here: the `raw` jsonb is large and
   // this runs on every dashboard/homepage load.
   const rows = await db()`
-    SELECT domain, name, product_count, price_min, price_max, email,
+    SELECT domain, name, product_count, price_min, price_max,
+           -- Best address, not the raw import: once contact-enrich has visited a store,
+           -- contact_email is the top of the ranked set it found, the imported address
+           -- included. Mirrors bestEmailSql in lib/browse.ts and bestEmail() in the drawer.
+           CASE WHEN contact_checked_at IS NOT NULL THEN COALESCE(contact_email, email) ELSE email END AS email,
+           contact_type, contact_name, contact_role, whatsapp, contact_form_url,
            first_product_at, plus, first_seen, discovered_at, created_at, country, currency, payments, theme,
            category, estimated_monthly_sales, products_sold, city, plan,
            description, technologies, instagram, facebook, tiktok,
@@ -327,6 +334,11 @@ export async function publishedLeads(country?: string, platform?: string): Promi
     priceMin: r.price_min != null ? Number(r.price_min) : null,
     priceMax: r.price_max != null ? Number(r.price_max) : null,
     email: (r.email as string) ?? null,
+    contactType: str(r.contact_type),
+    contactName: str(r.contact_name),
+    contactRole: str(r.contact_role),
+    whatsapp: str(r.whatsapp),
+    contactFormUrl: str(r.contact_form_url),
     firstProductAt: (r.first_product_at as string) ?? null,
     plus: Boolean(r.plus),
     firstSeen: (r.first_seen as string) ?? "",

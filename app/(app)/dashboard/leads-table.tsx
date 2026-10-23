@@ -12,14 +12,29 @@ import {
   type SortKey,
 } from "@/lib/prioritize";
 
-type Quality = "all" | "email" | "plus" | "social";
+type Quality = "all" | "email" | "reachable" | "plus" | "social";
 
-const qualityFilters: { key: Quality; label: string }[] = [
+const qualityFilters: { key: Quality; label: string; hint?: string }[] = [
   { key: "all", label: "All" },
-  { key: "email", label: "With email" },
+  { key: "email", label: "With email", hint: "Any address, generic inboxes included" },
+  { key: "reachable", label: "Reaches a person", hint: "A named person's address or a decision-maker's role mailbox — not the info@ queue" },
   { key: "plus", label: "Plus only" },
   { key: "social", label: "Has social" },
 ];
+
+// Contact quality, as set by scripts/contact-enrich.mjs. Shown on the row so a subscriber knows
+// what they're about to send to: the complaint about competitor lead data is that every row looks
+// equally good until you've wasted the email.
+const CONTACT_META: Record<string, { label: string; tone: string; hint: string }> = {
+  named: { label: "Named", tone: "bg-mint/25 text-ink", hint: "Reaches an identifiable person" },
+  role_targeted: { label: "Decision-maker", tone: "bg-cyan/25 text-ink", hint: "owner@ / accounts@ / press@ — read by someone senior" },
+  role_generic: { label: "Generic", tone: "bg-orange/20 text-ink/70", hint: "info@ / hello@ / support@ — goes to a queue" },
+  form_only: { label: "Form only", tone: "bg-ink/10 text-ink/50", hint: "No address published, but there is a contact form" },
+  none: { label: "None", tone: "bg-ink/10 text-ink/40", hint: "No contact published that we could reach" },
+};
+/** The contact types worth an outreach email. */
+const REACHABLE = new Set(["named", "role_targeted"]);
+const waLink = (n: string) => `https://wa.me/${n.replace(/[^\d]/g, "")}`;
 
 // Payment-provider filters for payment-company subscribers (fact #3). These only
 // mean something where we have a verified gateway list, so every option except
@@ -63,7 +78,7 @@ const segments: Segment[] = [
   { key: "fresh", label: "🌱 Fresh launches", hint: "Found this week, newest first", window: "week", quality: "all", sort: "newest" },
   { key: "enterprise", label: "🏢 Enterprise", hint: "Shopify Plus, biggest first", window: "all", quality: "plus", sort: "size" },
   { key: "reach", label: "📣 High reach", hint: "Biggest social audiences", window: "all", quality: "social", sort: "social" },
-  { key: "contact", label: "✉️ Ready to contact", hint: "Has email, best prospects first", window: "all", quality: "email", sort: "priority" },
+  { key: "contact", label: "✉️ Ready to contact", hint: "Contact reaches a person, best prospects first", window: "all", quality: "reachable", sort: "priority" },
   { key: "biggest", label: "💰 Biggest", hint: "Top by estimated monthly sales", window: "all", quality: "all", sort: "size" },
   { key: "bnpl", label: "💳 BNPL targets", hint: "Takes payments but no BNPL, biggest first", window: "all", quality: "all", sort: "size", pay: "noBnpl" },
 ];
@@ -109,6 +124,7 @@ export function LeadsTable({
     const winDays = windows.find((w) => w.key === window)?.days ?? null;
     const filtered = leads.filter((l) => {
       if (quality === "email" && !l.email) return false;
+      if (quality === "reachable" && !REACHABLE.has(l.contactType ?? "")) return false;
       if (quality === "plus" && !l.plus) return false;
       if (quality === "social" && socialReach(l) <= 0) return false;
       if (pay === "hasGw" && !hasGateway(l)) return false;
@@ -165,6 +181,8 @@ export function LeadsTable({
     if (l.priceMin != null) out.push(["Price range", money(l)]);
     if (l.firstProductAt) out.push(["First product", l.firstProductAt]);
     if (l.city) out.push(["City", l.city]);
+    if (l.contactName) out.push(["Contact", `${l.contactName}${l.contactRole ? ` · ${l.contactRole}` : ""}`]);
+    if (l.whatsapp) out.push(["WhatsApp", l.whatsapp]);
     if (l.plan) out.push(["Plan", l.plan]);
     if (l.productsSold != null) out.push(["Products sold", l.productsSold.toLocaleString()]);
     if (l.instagram)
@@ -374,6 +392,7 @@ export function LeadsTable({
         {qualityFilters.map((f) => (
           <button
             key={f.key}
+            title={f.hint}
             onClick={() => {
               setQuality(f.key);
               reset();
@@ -536,8 +555,31 @@ export function LeadsTable({
                 </td>
                 <td className="py-4 pr-4">
                   {l.email ? (
-                    <a href={`mailto:${l.email}`} className="text-orange">
-                      {l.email}
+                    <span className="flex flex-col gap-0.5">
+                      <a href={`mailto:${l.email}`} className="text-orange">
+                        {l.email}
+                      </a>
+                      {l.contactType && CONTACT_META[l.contactType] && (
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            title={CONTACT_META[l.contactType].hint}
+                            className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${CONTACT_META[l.contactType].tone}`}
+                          >
+                            {CONTACT_META[l.contactType].label}
+                          </span>
+                          {l.contactName && <span className="text-[10px] text-ink/45">{l.contactName}</span>}
+                        </span>
+                      )}
+                    </span>
+                  ) : l.whatsapp ? (
+                    /* No usable address but a WhatsApp number — in SA that's the better channel
+                       anyway, so show it rather than an em-dash that reads as "no contact". */
+                    <a href={waLink(l.whatsapp)} target="_blank" rel="noopener noreferrer" className="text-mint">
+                      WhatsApp {l.whatsapp}
+                    </a>
+                  ) : l.contactFormUrl ? (
+                    <a href={l.contactFormUrl} target="_blank" rel="noopener noreferrer" className="text-ink/55">
+                      Contact form
                     </a>
                   ) : (
                     <span className="text-ink/30">—</span>
