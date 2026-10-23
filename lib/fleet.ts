@@ -75,14 +75,14 @@ export async function fleetActivity(limit = 40): Promise<FleetEvent[]> {
 
   // Each read hits that lane's own index (ai_enriched_at / hosting_checked_at / discovered_at /
   // live_checked_at / text_mined_at), bounded to the recent window + LIMIT — all cheap.
-  // Each read hits that lane's own index and is ~150ms. (text-mine / Chad is omitted until
-  // text_mined_at is indexed — unindexed it full-scans 2.8M rows; re-add with the index when
-  // Chad's lane goes live.)
-  const [enrich, host, found, live] = await Promise.all([
+  // Each read hits that lane's own index and is ~150ms (ai_enriched_at / hosting_checked_at /
+  // discovered_at / live_checked_at / text_mined_at are all indexed — partial where relevant).
+  const [enrich, host, found, live, mine] = await Promise.all([
     sql.unsafe(`SELECT domain, category AS d1, ai_enriched_at AS ts FROM imported_stores WHERE ai_enriched_at > ${W} ORDER BY ai_enriched_at DESC LIMIT 16`).catch(() => []) as Promise<Row[]>,
     sql.unsafe(`SELECT domain, hosting_provider AS d1, hosting_checked_at AS ts FROM imported_stores WHERE hosting_checked_at > ${W} ORDER BY hosting_checked_at DESC LIMIT 16`).catch(() => []) as Promise<Row[]>,
     sql.unsafe(`SELECT domain, platform AS d1, discovered_at AS ts FROM imported_stores WHERE discovered_at > ${W} ORDER BY discovered_at DESC LIMIT 10`).catch(() => []) as Promise<Row[]>,
     sql.unsafe(`SELECT domain, live_status AS d1, live_checked_at AS ts FROM imported_stores WHERE live_checked_at > ${W} ORDER BY live_checked_at DESC LIMIT 8`).catch(() => []) as Promise<Row[]>,
+    sql.unsafe(`SELECT domain, biz_model AS d1, text_mined_at AS ts FROM imported_stores WHERE text_mined_at > ${W} ORDER BY text_mined_at DESC LIMIT 10`).catch(() => []) as Promise<Row[]>,
   ]);
 
   const now = Date.now();
@@ -97,6 +97,7 @@ export async function fleetActivity(limit = 40): Promise<FleetEvent[]> {
     ...ev(host, "lucy", "host", (r) => cleanHost(r.d1)),
     ...ev(found, "rex", "found", (r) => r.d1 || "new store"),
     ...ev(live, "rex", "live", (r) => r.d1 || "checked"),
+    ...ev(mine, "chad", "mine", (r) => r.d1 || "mined"),
   ].sort((a, b) => b.ts.localeCompare(a.ts));
 
   _cache = { at: Date.now(), data: all };

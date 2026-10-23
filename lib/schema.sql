@@ -102,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_chec
 -- so "newest N enriched / hosting-resolved" is an index scan, not a 2.8M-row full scan.
 CREATE INDEX IF NOT EXISTS idx_is_ai_enriched      ON imported_stores (ai_enriched_at DESC) WHERE ai_enriched_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_is_hosting_checked  ON imported_stores (hosting_checked_at DESC) WHERE hosting_checked_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_is_text_mined       ON imported_stores (text_mined_at DESC) WHERE text_mined_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_is_catalog_checked  ON imported_stores (catalog_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_payments_checked ON imported_stores (payments_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_launched         ON imported_stores (launched_at DESC NULLS LAST);
