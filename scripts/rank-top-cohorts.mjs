@@ -12,6 +12,7 @@ import postgres from "postgres";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const DRY = process.argv.includes("--dry-run");
+const ALL = process.argv.includes("--all") || process.argv.includes("--global"); // every country with stores
 const ONE = (arg("--market", "") || "").toUpperCase();
 const CURATED = new Set((arg("--curated", "ZA") || "").toUpperCase().split(",").filter(Boolean));
 const FOCUS = ["ZA", "KE", "NG", "EG", "MA", "GH", "TZ", "UG", "DZ", "TN", "CI", "SN", "MU", "MZ",
@@ -20,7 +21,14 @@ const TARGETS = [["top-100", 100], ["top-500", 500]];
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
 try {
-  const markets = ONE ? [ONE] : FOCUS;
+  const markets = ONE ? [ONE]
+    : ALL ? (await sql`SELECT DISTINCT upper(country) c FROM imported_stores
+        WHERE published AND country IS NOT NULL AND country <> ''
+          AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+          AND activity_tier IS DISTINCT FROM 'not_a_store' AND estimated_monthly_sales IS NOT NULL
+        ORDER BY 1`).map((r) => r.c)
+    : FOCUS;
+  console.log(`ranking ${markets.length} market(s)${ALL ? " (global)" : ""}${DRY ? " [DRY]" : ""} · curated: ${[...CURATED].join(",") || "none"}\n`);
   for (const mkt of markets) {
     // Live stores in this market that have a revenue estimate, best first.
     const ranked = await sql`
