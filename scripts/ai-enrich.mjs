@@ -239,7 +239,13 @@ async function main() {
   if (!DRY) console.log(LOCAL_LLM_URL ? `backend: LOCAL ${LOCAL_LLM_MODEL} @ ${LOCAL_LLM_URL}` : `backend: PAID Anthropic ${MODEL}`);
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONCURRENCY + 1 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ`;
+    // ADD COLUMN IF NOT EXISTS still takes a brief ACCESS EXCLUSIVE lock on the hot table even as a
+    // no-op. Harmless once per run, but a tight batch loop (the continuous cron) would acquire it every
+    // couple of minutes and can queue behind/ahead of long discovery reads — so the cron runs this once
+    // up front and sets SKIP_SCHEMA_ENSURE for the per-batch invocations.
+    if (!process.env.SKIP_SCHEMA_ENSURE) {
+      await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ`;
+    }
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE published

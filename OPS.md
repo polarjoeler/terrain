@@ -247,6 +247,23 @@ TODO: finish Lucy focus-liveness build (after npm) · wire Rex local-LLM descrip
 **✅ SCHEDULED 2026-10-22: `com.tembo.completeness` on Rex** (`completeness-cron.sh` → `completeness.mjs --auto --limit 4000`, every 4h, RunAtLoad). `--auto` = ZA-first auto-advance: works the first focus market below 97% COMPLETE (ZA→KE→NG→rest of Africa by store count→JP), running its own-domain lanes. **The coordinator now OWNS deep-enrich/hosting-enrich/contact-enrich for focus markets — standalone `com.tembo.deep-enrich` was booted out on Rex to avoid double-running** (global/non-focus deep-enrich pauses = Tier-C deferral, intended). COMPLETE% is surfaced in the morning digest §5.
 TODO: commit completeness.mjs + today's Rex-local edits (ai-enrich rotator, tuning) — currently Chad+Rex only, disk-loss exposed.
 
+## 5n. ai-enrich 3b + continuous drain · data-ownership · Supabase (2026-10-23)
+
+**ai-enrich throughput — the real levers (measured on Rex, not guessed):**
+- Raising concurrency did nothing (16→24 left ollama at ~104% either way). **One GPU runs one model → concurrent requests serialise.** Measured concurrent throughput: **7b ~3,100 stores/hr, 3b ~5,500/hr (~1.8×)**. Raw generation is only ~0.28s/store (86 tok/s) — the rest is per-request overhead the GPU serialises.
+- The **binding** constraint was the SCHEDULE, not the model: `--limit 6000` every 4h = 36k/day cap, and a run finished in ~2h so Rex idled ~2 of every 4h.
+- **DONE: ai-enrich → `qwen2.5:3b`** (scoped to this job via `export LOCAL_LLM_MODEL` in the cron; deep-enrich/completeness keep 7b for richer extraction). A/B on real stores: 3b on par for a one-category + one-line task.
+- **DONE: continuous drain** — `ai-enrich-cron.sh` now loops batch-after-batch (focus→global) for ~3h50m per fire with a lockfile guard, instead of one capped batch + idle. Live write-rate **~4,560/hr ≈ ~109k/day (~3× the old daily throughput)**. Focus (113k) drains in ~1 day; global (1.6M) in ~15 days.
+- **DONE: schema-check hardened** — `ai-enrich.mjs:242` `ADD COLUMN IF NOT EXISTS` (brief ACCESS EXCLUSIVE lock; see postgres-schema-check-lock) now gated behind `SKIP_SCHEMA_ENSURE`; the cron runs it once per fire, not once per batch (the tight loop would otherwise re-acquire it every ~2 min on the hot table).
+- **Known quality caveat (NOT a model issue):** a chunk of stores log `low-info→skipped` — the fetch returned too little text to classify. Same root cause as "Unknown" categories (thin input + free-form category, no controlled taxonomy). Follow-up if we want higher category quality: controlled category enum + deeper homepage fetch for the thin ones.
+
+**Data-ownership decision (Joel 2026-10-23):** we sell leads WE discovered; bought data is a BENCHMARK/background, not resold.
+- **StoreLeads = benchmark, not a source.** Measure our recall against it; don't import+surface+sell it. Reverses the earlier "pull StoreLeads full market-by-market" plan.
+- **Deferred, revisit in a few weeks.** Where we have a self-sourced headstart (Africa) it's a non-issue; elsewhere, let the `.com` firehose build our own headstart first. **No StoreLeads action now.**
+- **StoreCensus (2.04M / 72% of base, already imported):** treat the bought global as background/benchmark (`published=false`), surface global as OUR OWN discovery catches up. Focus markets are already mostly self-sourced (ZA 8% SC / KE 4% / NG 4%); SC dominates only non-core (US 97%, GB 93%, EG 86%, AE 85%). SC completeness is thin anyway (category 95% but description 2%, payments 31%).
+
+**Supabase capacity (2026-10-23):** storage is NOT the constraint (~4.3 GB of 8 GB Pro; disk beyond ~$0.125/GB). Compute (queries over large tables) is the ceiling. **Already on Pro + Medium compute add-on.** Next lever if load tightens = Large (~$110/mo), NOT the Team plan ($599, a seats/features jump — wrong lever). The data-ownership stance keeps us off Large: bought/background global stays `published=false` behind partial indexes (`WHERE published`) so the hot product never scans it — it's just cheap storage. Keep heavy analytical scans (refresh-browse / completeness / insights) scoped to focus markets.
+
 ## 6. Open decisions (need Joel)
 
 - [ ] **Cutover go/no-go** — flip the 24 jobs Adam→Rex?
