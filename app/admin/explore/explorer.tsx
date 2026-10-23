@@ -110,6 +110,13 @@ function ScoreRing({ score }: { score: number }) {
   );
 }
 
+// Contact-quality facet: best contact first, so the rail reads as a quality ladder.
+const CONTACT_LABEL: Record<string, string> = {
+  named: "Named person", role_targeted: "Decision-maker role", role_generic: "Generic inbox",
+  form_only: "Form only", none: "No contact found",
+};
+const CONTACT_ORDER: Record<string, number> = { named: 0, role_targeted: 1, role_generic: 2, form_only: 3, none: 4 };
+
 function Facet({ title, values, selected, onToggle, label, defaultOpen = true }: { title: string; values: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; label?: (v: string) => string; defaultOpen?: boolean }) {
   // Collapsed by default for secondary facets to keep the rail compact — but auto-open if it already
   // holds a selection, so active filters are never hidden.
@@ -170,6 +177,7 @@ export type ExploreInitial = {
   // The rest let a Saved list restore the whole view (not just a single-facet deep link).
   platform?: string[]; apps?: string[]; plugins?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
+  reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
   status?: "migrated" | "dead"; checkedDays?: number;
 };
@@ -200,6 +208,10 @@ export function Explorer({ initialData, initial, showStats }: {
   const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
   const [plusOnly, setPlusOnly] = useState(initial?.plus ?? false);
   const [emailOnly, setEmailOnly] = useState(initial?.email ?? false);
+  // "Reaches a person" — a named address or a decision-maker's role mailbox. The filter the
+  // generic-mailbox complaint is really asking for.
+  const [reachableOnly, setReachableOnly] = useState(initial?.reachable ?? false);
+  const [contactType, setContactType] = useState<Set<string>>(new Set(initial?.contactType));
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
@@ -236,13 +248,15 @@ export function Explorer({ initialData, initial, showStats }: {
     hosting: hosting.size ? [...hosting] : undefined,
     plus: plusOnly || undefined,
     hasEmail: emailOnly || undefined,
+    reachableContact: reachableOnly || undefined,
+    contactType: contactType.size ? [...contactType] : undefined,
     noPayment: noPaymentOnly || undefined,
     tier: tier || undefined,
     launchedDays: launched ? LAUNCH_OPTS.find((o) => o.key === launched)?.days : undefined,
     discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, activity, hosting, plusOnly, emailOnly, noPaymentOnly, tier, launched, recency, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, launched, recency, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
@@ -276,6 +290,7 @@ export function Explorer({ initialData, initial, showStats }: {
     shipping: fv(data.facets.shipping),
     apps: fv(data.facets.apps),
     plugins: fv(data.facets.plugins),
+    contactType: fv(data.facets.contactType).sort((a, b) => (CONTACT_ORDER[a[0]] ?? 9) - (CONTACT_ORDER[b[0]] ?? 9)),
   };
 
   // Launch dates only populate once a snapshot carries them; hide the Launched control until then.
@@ -289,10 +304,12 @@ export function Explorer({ initialData, initial, showStats }: {
     fresh: hasLaunchData ? (data.recency.launched[7] ?? 0) : (data.recency.discovered[7] ?? 0),
     plus: data.stats.plus,
     email: data.stats.email,
+    reachable: data.stats.reachable,
+    willBounce: data.stats.willBounce,
   };
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); setLimit(PAGE); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); setLimit(PAGE); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
@@ -343,6 +360,7 @@ export function Explorer({ initialData, initial, showStats }: {
       theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
       activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), hosting: arr(hosting),
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
+      reachable: reachableOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
       sort: sort !== "new" ? sort : undefined,
     };
@@ -390,6 +408,9 @@ export function Explorer({ initialData, initial, showStats }: {
           )}
           <button onClick={() => setEmailOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${emailOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${emailOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Has email
+          </button>
+          <button onClick={() => setReachableOnly((p) => !p)} title="A named person's address, or a decision-maker's role mailbox — not the info@ queue" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${reachableOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${reachableOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Reaches a person
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet
@@ -448,6 +469,7 @@ export function Explorer({ initialData, initial, showStats }: {
         <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} defaultOpen={false} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} defaultOpen={false} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} defaultOpen={false} />
+        {facets.contactType.length > 0 && <Facet title="Contact quality" values={facets.contactType} selected={contactType} onToggle={toggle(setContactType)} label={(v) => CONTACT_LABEL[v] ?? v} defaultOpen={false} />}
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} defaultOpen={false} />
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
         {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
@@ -467,9 +489,16 @@ export function Explorer({ initialData, initial, showStats }: {
               <div className="font-display text-4xl tabular-nums">{liveStats.plus.toLocaleString()}</div>
               <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">Shopify Plus</div>
             </div>
+            {/* "Has an email" was never the useful number — a generic inbox counts toward it. This
+                tile counts the stores whose contact actually reaches a person, with the email
+                total kept underneath for context. */}
             <div className="rounded-3xl border border-cream/15 p-5">
-              <div className="font-display text-4xl tabular-nums">{liveStats.email.toLocaleString()}</div>
-              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">With direct email</div>
+              <div className="font-display text-4xl tabular-nums">{liveStats.reachable.toLocaleString()}</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">Reaches a person</div>
+              <div className="mt-0.5 text-[11px] text-cream/35">
+                {liveStats.email.toLocaleString()} with any email
+                {liveStats.willBounce > 0 && <> · <span className="text-orange/70">{liveStats.willBounce.toLocaleString()} will bounce</span></>}
+              </div>
             </div>
             <div className="rounded-3xl border border-cream/15 p-5">
               <div className="font-display text-4xl tabular-nums">{liveStats.shown.toLocaleString()}</div>

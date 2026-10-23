@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.contact-enrich</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/contact-enrich-cron.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+
+    <!-- 01:15 — deliberately clear of the 04:30 retag sweep and the payment-probe windows. This
+         crawl shares ONE residential IP's Shopify-edge rate budget with every other probe on this
+         machine, so overlapping them is what makes everything 429. No RunAtLoad for the same
+         reason: loading the agent should not immediately start a crawl. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>1</integer>
+        <key>Minute</key><integer>15</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/contact-enrich.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/contact-enrich.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
