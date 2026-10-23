@@ -13,10 +13,12 @@ const fmtLaunch = (v: string | null, source: string | null) =>
   source === "storeleads_created" ? fmtMonth(v) : fmtDate(v);
 const chips = (v: string | null) => (v ? v.split(";").map((x) => x.trim()).filter(Boolean) : []);
 
-// Choose which email to display. `email` comes from the per-domain data import and is authoritative
-// for this store — even when it's a personal gmail/hotmail (a legitimate owner contact) — so it
-// wins. `contact_email` is scraped from the homepage and can be a third-party / agency / redirect-
-// target address, so it's only trusted as a fallback when its own domain matches the store's.
+// Choose which email to display. Once contact-enrich has run, `contact_email` IS the considered
+// answer: it is the best of every address found across the store's contact surface, each one
+// domain-checked and classified, with the imported `email` thrown into the same ranking. So it
+// wins where it exists. Before that pass reaches a store we fall back to the old rule — the
+// imported `email` is authoritative for the store (a personal gmail there is a real owner
+// contact), and a homepage-scraped address is only trusted when its own domain matches.
 const emailDomain = (e: string | null): string | null => {
   const m = /@([a-z0-9.-]+\.[a-z]{2,})/i.exec(e ?? "");
   return m ? m[1].toLowerCase() : null;
@@ -27,10 +29,33 @@ const sameOrg = (emailDom: string | null, storeDomain: string | null): boolean =
   return emailDom === sd || emailDom.endsWith("." + sd) || sd.endsWith("." + emailDom);
 };
 const bestEmail = (d: LeadDetail): string | null => {
+  if (d.contact_checked_at && d.contact_email) return d.contact_email;
   if (d.email) return d.email;
   if (d.contact_email && sameOrg(emailDomain(d.contact_email), d.domain)) return d.contact_email;
   return null;
 };
+
+// What kind of contact this is — the whole point of the contact pass. Ranked best to worst, and
+// deliberately blunt about the bad end: a buyer should see "generic inbox" before they spend a
+// send on it, not after.
+const CONTACT_META: Record<string, { label: string; tone: string; hint: string }> = {
+  named: { label: "Named person", tone: "bg-mint/20 text-mint", hint: "The address reaches an identifiable person" },
+  role_targeted: { label: "Decision-maker role", tone: "bg-cyan/20 text-cyan", hint: "owner@ / accounts@ / press@ — a mailbox someone senior reads" },
+  role_generic: { label: "Generic inbox", tone: "bg-orange/20 text-orange", hint: "info@ / hello@ / support@ — goes to a queue" },
+  form_only: { label: "Form only", tone: "bg-cream/10 text-cream/55", hint: "No address published; there is a contact form" },
+  none: { label: "No contact found", tone: "bg-cream/10 text-cream/45", hint: "Nothing published on the site we could reach" },
+};
+const NAME_SOURCE_LABEL: Record<string, string> = {
+  copy: "from the site's own copy", jsonld: "from the site's structured data",
+  atom: "from the blog feed author", llm: "inferred by the local model",
+};
+
+function ContactBadge({ type }: { type: string }) {
+  const m = CONTACT_META[type] ?? { label: type, tone: "bg-cream/10 text-cream/60", hint: "" };
+  return <span title={m.hint} className={`rounded-full px-2 py-0.5 text-xs font-semibold ${m.tone}`}>{m.label}</span>;
+}
+
+const waLink = (n: string) => `https://wa.me/${n.replace(/[^\d]/g, "")}`;
 
 // Apps are stored as raw Shopify app-store URLs (often concatenated). Show the
 // clean public-app names — dropping custom/private apps, which have no store URL.
@@ -212,14 +237,70 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             </Section>
 
             <Section title="Contact">
-              <Row label="Email" value={bestEmail(data)} />
+              <Row label="Quality" value={data.contact_type ? <ContactBadge type={data.contact_type} /> : null} />
+              <Row label="Email" value={bestEmail(data)
+                ? <a href={`mailto:${bestEmail(data)}`} className="text-orange">{bestEmail(data)}</a>
+                : null} />
+              <Row label="Person" value={data.contact_name
+                ? <span className="flex flex-col items-end">
+                    <span>{data.contact_name}{data.contact_role ? ` · ${data.contact_role}` : ""}</span>
+                    {data.contact_name_source
+                      ? <span className="text-[11px] text-cream/35">{NAME_SOURCE_LABEL[data.contact_name_source] ?? data.contact_name_source}</span>
+                      : null}
+                  </span>
+                : null} />
+              {/* The rest of the ranked set — a generic best address often sits above a usable
+                  second one, and throwing those away was the original mistake. */}
+              <Row label="Also found" value={(data.contacts ?? [])
+                .filter((c) => c.email !== bestEmail(data))
+                .map((c) => (
+                  <span key={c.email} className="block">
+                    <a href={`mailto:${c.email}`} className="text-cream/70 hover:text-orange">{c.email}</a>
+                    <span className="ml-1 text-[11px] text-cream/30">{CONTACT_META[c.kind]?.label ?? c.kind} · {c.source}</span>
+                  </span>
+                ))} />
+              {/* WhatsApp first: in SA it gets answered when email doesn't. */}
+              <Row label="WhatsApp" value={data.whatsapp
+                ? <a href={waLink(data.whatsapp)} target="_blank" rel="noreferrer" className="text-mint">{data.whatsapp}</a>
+                : null} />
               <Row label="Phone" value={data.contact_phone} />
+              <Row label="Contact form" value={data.contact_form_url
+                ? <a href={data.contact_form_url} target="_blank" rel="noreferrer" className="text-orange">open</a>
+                : null} />
+              {/* Deliverability: an address that cannot receive mail is a bounce whatever its
+                  local-part looks like, which is half of what a high-volume sender is asking for. */}
+              <Row label="Deliverable" value={data.contact_mx_ok == null ? null : (
+                data.contact_mx_ok
+                  ? <span className="text-mint">yes{data.contact_mx_provider ? ` · ${data.contact_mx_provider}` : ""}</span>
+                  : <span className="text-orange" title="The address's domain publishes no MX record — mail to it will bounce">no — will bounce</span>
+              )} />
+              {/* The other flavour of bad email: it works, but it is not this merchant's. */}
+              <Row label="Shared mailbox" value={(data.contact_shared_count ?? 1) > 1
+                ? <span className="text-orange/80" title="Another tracked store uses this same address — an agency, head office or aggregator">
+                    also used by {(data.contact_shared_count ?? 1) - 1} other store{(data.contact_shared_count ?? 1) - 1 === 1 ? "" : "s"}
+                  </span>
+                : null} />
+              {/* Deliberately its own row, visually weaker, and never merged into "Email": this
+                  address was INFERRED from the person's name, not published by the merchant. The
+                  typed verdict above is only worth something if a guess can't be mistaken for it. */}
+              <Row label="Likely personal" value={data.contact_email_guess
+                ? <span className="flex flex-col items-end">
+                    <a href={`mailto:${data.contact_email_guess}`} className="text-cream/60 italic">{data.contact_email_guess}</a>
+                    <span className="text-[11px] text-cream/35">
+                      {data.contact_guess_status === "verified" ? "pattern inferred · verified deliverable"
+                        : data.contact_guess_status === "catch_all" ? "pattern inferred · domain accepts all mail, unprovable"
+                        : "pattern inferred · UNVERIFIED, may not exist"}
+                    </span>
+                  </span>
+                : null} />
+              <Row label="Checked" value={fmtDate(data.contact_checked_at)} />
             </Section>
 
             <Section title="Social">
               <Row label="Instagram" value={social(data.instagram, `https://instagram.com/${data.instagram}`, data.instagram_followers)} />
               <Row label="Facebook" value={social(data.facebook, `https://facebook.com/${data.facebook}`, data.facebook_followers)} />
               <Row label="TikTok" value={social(data.tiktok, `https://tiktok.com/@${data.tiktok}`, null)} />
+              <Row label="LinkedIn" value={social(data.linkedin, `https://linkedin.com/company/${data.linkedin}`, null)} />
             </Section>
 
             {cleanApps(data.apps).length > 0 && (
@@ -234,11 +315,32 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="Discovered" value={fmtDate(data.discovered_at)} />
               <Row label="First seen" value={fmtDate(data.first_seen)} />
             </Section>
+
+            {((data.migrations?.length ?? 0) > 0 || (data.payment_history?.length ?? 0) > 0) && (
+              <Section title="Change history">
+                {data.migrations?.map((m, i) => (
+                  <Row key={`mig${i}`} label={fmtDate(m.changed_at) ?? "—"} value={`Migrated → ${m.migrated_to ?? "elsewhere"}`} />
+                ))}
+                {data.payment_history?.map((c, i) => (
+                  <Row key={`pay${i}`} label={fmtDate(c.changed_at) ?? "—"} value={payChange(c)} />
+                ))}
+              </Section>
+            )}
           </div>
         )}
       </aside>
     </div>
   );
+}
+
+/** Render one payment_changes row as a readable line for the drawer's Change history. */
+function payChange(c: { old_primary: string | null; new_primary: string | null; added: string | null; removed: string | null; reordered: boolean | null }): string {
+  const bits: string[] = [];
+  if (c.old_primary && c.new_primary && c.old_primary !== c.new_primary) bits.push(`primary ${c.old_primary} → ${c.new_primary}`);
+  if (c.added) bits.push(`+${c.added}`);
+  if (c.removed) bits.push(`−${c.removed}`);
+  if (!bits.length && c.reordered) bits.push("re-ranked providers");
+  return bits.join(" · ") || "payment change";
 }
 
 /** CrUX ranks are log10 BUCKETS, not exact positions — label them "top N". */
