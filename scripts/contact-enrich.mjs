@@ -538,6 +538,17 @@ async function crawlStore(store, nextProxy) {
   const home = await grab("/");
   if (!home) return { domain: d, unreachable: true };
   if (throttled(home)) return { domain: d, throttled: true, fetches };
+  // Record the storefront's HTTP status on every crawl. It costs nothing — we have already made
+  // the request — and 402 in particular is Shopify's FROZEN-STORE code: the merchant has stopped
+  // paying. Measured at ~3% of live-tagged ZA Shopify stores, so it is a real churn signal the
+  // liveness lane isn't collecting. Deliberately NOT written to live_status/died_at: churn
+  // accounting has historic-vs-forward rules that belong to that lane, so this just banks the
+  // observation for it to act on.
+  const storefrontHttp = home.status;
+  // A frozen, locked or blocked storefront has no contact to find — it isn't "no contact
+  // published", it's "not open". Recording it as a contact verdict would understate coverage.
+  const CLOSED = new Set([401, 402, 403, 423, 451]);
+  if (CLOSED.has(home.status)) return { domain: d, closed: true, storefrontHttp, fetches };
   if (home.status >= 200 && home.status < 400 && /html/i.test(home.contentType)) {
     reachable = true;
     absorb(home.text, "/", false);
@@ -581,7 +592,7 @@ async function crawlStore(store, nextProxy) {
 
   return {
     domain: d, reachable, fetches, contacts, name, nameSource, role, phone, wa, form, socials, text,
-    brands, localParts: localParts(), proseName,
+    brands, localParts: localParts(), proseName, storefrontHttp,
     best: contacts[0] ?? null,
     // Partial crawl: record nothing, re-queue. A verdict from a throttled crawl is a false negative.
     throttled: rateLimited && !contacts.length,
@@ -658,6 +669,8 @@ const DDL = [
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_text TEXT",
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_checked_at TIMESTAMPTZ",
   "RESET lock_timeout",
+  "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS storefront_http INTEGER",
+  "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS storefront_checked_at TIMESTAMPTZ",
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_claimed_by TEXT",
   "ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_claimed_at TIMESTAMPTZ",
   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_is_contact_type ON imported_stores(contact_type) WHERE published",
@@ -679,6 +692,7 @@ async function main() {
       const r = await crawlStore({ domain, platform: arg("--platform", "shopify") }, () => pickProxy(pool));
       if (r.unreachable) { console.log(`✗ ${domain}  unreachable`); continue; }
       if (r.throttled) { console.log(`~ ${domain}  rate-limited (429) — no verdict recorded`); continue; }
+      if (r.closed) { console.log(`⊘ ${domain}  storefront closed (HTTP ${r.storefrontHttp}) — 402 means the merchant stopped paying`); continue; }
       console.log(`● ${r.domain}  [${r.fetches} fetches]  type=${contactType(r)}`);
       for (const c of r.contacts) console.log(`    ${c.kind.padEnd(14)} ${c.email}   (${c.source})`);
       console.log(`    name=${r.name ?? "-"}  role=${r.role ?? "-"}  wa=${r.wa ?? "-"}  phone=${r.phone ?? "-"}  form=${r.form ? "y" : "-"}  text=${r.text.length}ch`);
@@ -786,7 +800,7 @@ async function main() {
       + `${NO_LLM || !LOCAL_LLM_URL ? "" : ` · local LLM ${LOCAL_LLM_MODEL}`}`);
 
     const tally = { named: 0, role_targeted: 0, role_generic: 0, form_only: 0, none: 0 };
-    let done = 0, unreachable = 0, named = 0, llmCalls = 0, rateLimitHits = 0;
+    let done = 0, unreachable = 0, named = 0, llmCalls = 0, rateLimitHits = 0, closed = 0;
 
     let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
@@ -796,6 +810,16 @@ async function main() {
         try { r = await crawlStore(store, () => pickProxy(pool)); }
         catch (e) { console.log(`  ! ${store.domain}: ${e.message}`); done++; continue; }
 
+        if (r.closed) {
+          closed++; done++;
+          if (!DRY) {
+            await sql`UPDATE imported_stores SET storefront_http = ${r.storefrontHttp},
+              storefront_checked_at = now(), contact_checked_at = now()
+              WHERE domain = ${store.domain}`.catch(() => {});
+          }
+          if (VERBOSE) console.log(`  ⊘ ${store.domain}: storefront closed (HTTP ${r.storefrontHttp})`);
+          continue;
+        }
         if (r.throttled) {
           rateLimitHits++; done++;
           if (VERBOSE || rateLimitHits === 1) console.log(`  ~ ${store.domain}: rate-limited (429) — left in the queue`);
@@ -857,6 +881,8 @@ async function main() {
               tiktok            = COALESCE(tiktok, ${r.socials.tiktok ?? null}),
               contact_form_url  = COALESCE(${r.form ?? null}, contact_form_url),
               contact_text      = COALESCE(${r.text || null}, contact_text),
+              storefront_http   = ${r.storefrontHttp ?? null},
+              storefront_checked_at = now(),
               contact_checked_at = now()
             WHERE domain = ${r.domain}`.catch((e) => console.log(`  ! write ${r.domain}: ${e.message}`));
           console.log(`✓ ${r.domain}  →  ${t}${r.best ? `  ${r.best.email}` : ""}${r.name ? `  (${r.name})` : ""}`);
@@ -866,7 +892,7 @@ async function main() {
     }));
 
     const pct = (n) => (done ? `${Math.round((n / done) * 100)}%` : "0%");
-    console.log(`\nDone. ${done} store(s), ${unreachable} unreachable, ${rateLimitHits} rate-limited (re-queued), ${llmCalls} local-LLM calls.`);
+    console.log(`\nDone. ${done} store(s), ${unreachable} unreachable, ${closed} closed storefronts (402/403/423), ${rateLimitHits} rate-limited (re-queued), ${llmCalls} local-LLM calls.`);
     if (rateLimitHits > done * 0.1) console.log("  ⚠ >10% rate-limited — raise --delay-ms, lower --concurrency, or check the proxy fleet.");
     console.log(`  named          ${String(tally.named).padStart(6)}  ${pct(tally.named)}   ← reaches a person`);
     console.log(`  role_targeted  ${String(tally.role_targeted).padStart(6)}  ${pct(tally.role_targeted)}   ← owner@/accounts@/press@`);
