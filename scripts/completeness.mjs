@@ -89,10 +89,13 @@ async function main() {
   // hosting-enrich moved to Lucy's dedicated DNS lane (com.tembo.hosting-enrich) — it's rate-exempt
   // there and no longer overlaps here, freeing this coordinator for the edge-bound own-domain lanes.
   // hosting still counts toward completeness; Lucy's lane fills it, we just don't run it from here.
-  // contact-enrich likewise runs ONLY from the standalone paced job (com.tembo.contact-enrich: daily,
-  // 1,200 stores @ conc 2 / 1200ms delay — the rate proven ~1% throttled). Running it here too, unpaced
-  // at --limit 4000 every 4h (~24k/day), double-hammered the shared home IP and drove the lane to ~89%
-  // rate-limited while Shopify clamped the IP progressively. contact still counts toward completeness.
+  // contact-enrich runs ONLY from the standalone agents, never here: com.tembo.contact-enrich (Rex's
+  // hostname rule routes a *Studio* host to the NON-Shopify lane — merchants' own servers, no shared
+  // ceiling, 6000 @ conc 6) and com.tembo.contact-enrich-shopify (CONTACT_LANE=shopify, paced 1,200 @
+  // conc 2 / 1200ms — the ONE lane on the shared home IP's Shopify-edge budget). Running contact from
+  // this coordinator, unpaced at --limit 4000 every 4h (~24k/day), was the sole Shopify-edge hammer
+  // that drove the lane to ~89% rate-limited while Shopify clamped the IP progressively; removing it
+  // without a Shopify agent left that lane with no owner. contact still counts toward completeness.
   for (const [lane, script] of [["deep-enrich", "deep-enrich.mjs"]]) {
     console.log(`\n▶ ${lane} --country ${cc} --limit ${LIMIT}`);
     await new Promise((res) => spawn("node", ["--env-file=.env.local", `scripts/${script}`, "--country", cc, "--limit", String(LIMIT)], { stdio: "inherit" }).on("close", res));
