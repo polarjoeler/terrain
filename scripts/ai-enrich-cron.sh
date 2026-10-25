@@ -51,7 +51,7 @@ remaining() {
   local scope="$1"
   FOCUS="$FOCUS" SCOPE="$scope" node --env-file=.env.local -e "
     import('postgres').then(({default:p})=>{const s=p(process.env.DATABASE_URL,{prepare:false,max:1});
-    const base=\"from imported_stores where published and coalesce(activity_tier,'') not in ('not_a_store','dormant') and (coalesce(category,'')='' or coalesce(description,'')='')\";
+    const base=\"from imported_stores where published and ai_enriched_at is null and (live_status is null or live_status not in ('dead','migrated')) and (coalesce(category,'')='' or coalesce(description,'')='')\";
     const q = process.env.SCOPE==='focus'
       ? s.unsafe('select count(*)::int n '+base+' and upper(country)=any(string_to_array(\$1,\\',\\'))',[process.env.FOCUS])
       : s.unsafe('select count(*)::int n '+base);
