@@ -20,7 +20,11 @@ fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 # Africa-first: ZA/NG/KE lead, then the rest of the African ccTLD commercial suffixes.
-SUFFIXES="co.za com.ng co.ke com.gh co.tz co.ug co.zw co.zm com.na co.bw"
+# 2026-10: added the next tier of African markets we already track for completeness but weren't
+# crawling here — Morocco/Egypt/Tunisia/Algeria/Côte d'Ivoire/Senegal/Mauritius/Rwanda — using each
+# market's dominant commercial form (bare .ma/.dz/.ci/.sn/.mu/.rw, com. for EG/TN). Each is one more
+# SURT-prefix pass; still free + DNS-exempt. CC's value here is the non-Shopify tail CT can't see.
+SUFFIXES="co.za com.ng co.ke com.gh co.tz co.ug co.zw co.zm com.na co.bw ma com.eg com.tn dz ci sn mu rw"
 
 cd "$PULSE" && node --env-file=.env.local scripts/heartbeat.mjs common-crawl "starting (Africa)" >/dev/null 2>&1 || true
 echo "===== common-crawl $(date '+%F %T') ====="

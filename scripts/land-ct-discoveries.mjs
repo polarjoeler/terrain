@@ -73,8 +73,11 @@ async function main() {
       // TLS cert issuance date (ISO YYYY-MM-DD) captured by the CT tailer; may be absent/null.
       // NOT a launch date — a cert renewal has a fresh notBefore, so it never touches launched_at.
       const certNotBefore = r.cert_not_before ? String(r.cert_not_before).slice(0, 10) : null;
+      // Preserve the feeder's discovery source (bulk_classify --source, e.g. common_crawl) so each
+      // source's yield is measurable; the CT tailer's own finds carry none → default ct_tail.
+      const source = (r.source && String(r.source).trim()) || "ct_tail";
       const prev = seen.get(d);
-      if (!prev || at < prev.at) seen.set(d, { at, country, certNotBefore });
+      if (!prev || at < prev.at) seen.set(d, { at, country, certNotBefore, source });
     } catch {
       /* skip malformed line */
     }
@@ -129,13 +132,13 @@ async function main() {
     }
     const fresh = [...seen.keys()].filter((d) => !existing.has(d));
 
-    const records = [...seen.entries()].map(([domain, { at, country, certNotBefore }]) => ({
+    const records = [...seen.entries()].map(([domain, { at, country, certNotBefore, source }]) => ({
       domain,
       name: domain,
       country,
       discovered_at: at,
       published: true,
-      source: "ct_tail",
+      source,
       // ct_tail only surfaces Shopify (it tails Shopify CT certs), so the platform is known at
       // landing. Stamping it here means fresh leads are classified the instant they land — no
       // waiting on a probe — so insights counts + the "new this week" tile are honest immediately.
