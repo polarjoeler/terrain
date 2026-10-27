@@ -93,9 +93,9 @@ async function get(url, opts = {}) {
 /** Store API path: read payment_methods, enriching by adding one in-stock product to a cart. */
 async function storeApiProbe(base) {
   let r;
-  try { r = await get(`${base}/wp-json/wc/store/v1/cart`); } catch { return { net: true }; }
+  try { r = await get(`${base}/wp-json/wc/store/v1/cart`); } catch { return { net: true, code: 0 }; }
   if (r.status === 404) return null;                    // Store API absent → try HTML
-  if (!r.ok) return { net: r.status >= 500 };
+  if (!r.ok) return { net: r.status >= 500, code: r.status };
   let cart;
   try { cart = await r.json(); } catch { return null; }
   if (!cart || !Array.isArray(cart.payment_methods)) return null;
@@ -148,7 +148,7 @@ async function htmlProbe(base) {
 async function probe(domain) {
   const base = `https://${domain}`;
   const s = await storeApiProbe(base);
-  if (s?.net) return { net: true };
+  if (s?.net) return { net: true, code: s.code ?? 0 };
   let res = s && s.ids ? s : null;
   if (!res) { const h = await htmlProbe(base); if (h) res = h; }
   if (!res) return { checked: true, gateways: [] };     // reachable, nothing found → mark, don't retry
@@ -170,7 +170,7 @@ async function main() {
     // set and statement-times-out on the throttled DB (same bug fixed in ai-enrich/deep-enrich);
     // discovered_at DESC uses idx_imported_discovered (index scan, no sort), so it stays fast.
     const rows = await sql`
-      SELECT domain FROM imported_stores
+      SELECT domain, discovered_at FROM imported_stores
       WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND woo_checkout_at IS NULL
         AND (payments IS NULL OR payments = '' OR payments_source = 'woo_plugin')
@@ -178,14 +178,30 @@ async function main() {
       LIMIT ${LIMIT}`;
     console.log(`woo-checkout-probe: ${rows.length} stores (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
 
-    let i = 0, dated = 0, none = 0, net = 0, done = 0;
+    let i = 0, dated = 0, none = 0, net = 0, gaveup = 0, done = 0;
     const tally = new Map();
     async function worker() {
       while (i < rows.length) {
-        const { domain } = rows[i++];
+        const { domain, discovered_at } = rows[i++];
         const res = await probe(domain);
         done++;
-        if (res.net) { net++; }                          // leave woo_checkout_at null → retry later
+        if (res.net) {
+          net++;
+          // Zombie-queue guard ([[probe-queue-zombies]]): a net-fail normally leaves
+          // woo_checkout_at null so it retries. But a store whose origin is permanently
+          // dead (Cloudflare 52x) or that has net-failed across days of 2-hourly retries is
+          // exhausted — it recycled the same ~460 rows at the head of discovered_at DESC
+          // every run, so the probe never advanced. Stamp it (checked, no gateways) so it
+          // drops out of the pool. A separate re-check lane can clear old stamps if a store
+          // comes back. Transient failures on recently-discovered stores still retry.
+          const permanent = res.code >= 520 && res.code <= 530;
+          const ageMs = discovered_at ? Date.now() - new Date(discovered_at).getTime() : 0;
+          const exhausted = ageMs > 3 * 24 * 3600 * 1000;   // ~36 retries at 2h cadence
+          if ((permanent || exhausted) && !DRY) {
+            await sql`UPDATE imported_stores SET woo_checkout_at = now() WHERE domain = ${domain}`.catch(() => {});
+            gaveup++;
+          }
+        }
         else if (res.gateways.length) {
           dated++;
           for (const g of res.gateways) tally.set(g, (tally.get(g) ?? 0) + 1);
@@ -199,7 +215,7 @@ async function main() {
       }
     }
     await Promise.all(Array.from({ length: CONC }, worker));
-    console.log(`\ndone. ${dated} stores got gateways, ${none} reachable-but-none, ${net} network-failed (retry).`);
+    console.log(`\ndone. ${dated} stores got gateways, ${none} reachable-but-none, ${net} network-failed (${gaveup} exhausted→stamped, ${net - gaveup} retry).`);
     console.log("by gateway:");
     for (const [g, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${g}`);
   } finally { await sql.end(); }
