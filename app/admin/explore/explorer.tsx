@@ -175,7 +175,7 @@ export type ExploreInitial = {
   launched?: LaunchKey;   // seed "launched this week" etc. from a deep link
   noPayment?: boolean;    // seed "no payment gateway detected yet" — prospect list
   // The rest let a Saved list restore the whole view (not just a single-facet deep link).
-  platform?: string[]; apps?: string[]; plugins?: string[]; hosting?: string[];
+  platform?: string[]; apps?: string[]; plugins?: string[]; tech?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
@@ -203,6 +203,7 @@ export function Explorer({ initialData, initial, showStats }: {
   const [shipping, setShipping] = useState<Set<string>>(new Set(initial?.shipping));
   const [app, setApp] = useState<Set<string>>(new Set(initial?.apps));
   const [plugin, setPlugin] = useState<Set<string>>(new Set(initial?.plugins));
+  const [tech, setTech] = useState<Set<string>>(new Set(initial?.tech));   // cross-platform vendor fingerprints (technologies)
   const [platform, setPlatform] = useState<Set<string>>(new Set(initial?.platform));
   const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
   const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
@@ -244,6 +245,7 @@ export function Explorer({ initialData, initial, showStats }: {
     shipping: shipping.size ? [...shipping] : undefined,
     app: app.size ? [...app] : undefined,
     plugin: plugin.size ? [...plugin] : undefined,
+    tech: tech.size ? [...tech] : undefined,
     activity: activity.size ? [...activity] : undefined,
     hosting: hosting.size ? [...hosting] : undefined,
     plus: plusOnly || undefined,
@@ -256,7 +258,7 @@ export function Explorer({ initialData, initial, showStats }: {
     discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, launched, recency, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, launched, recency, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
@@ -290,6 +292,7 @@ export function Explorer({ initialData, initial, showStats }: {
     shipping: fv(data.facets.shipping),
     apps: fv(data.facets.apps),
     plugins: fv(data.facets.plugins),
+    tech: fv(data.facets.tech),
     contactType: fv(data.facets.contactType).sort((a, b) => (CONTACT_ORDER[a[0]] ?? 9) - (CONTACT_ORDER[b[0]] ?? 9)),
   };
 
@@ -358,7 +361,7 @@ export function Explorer({ initialData, initial, showStats }: {
     return {
       q: q || undefined, country: arr(country), category: arr(category), band: arr(band),
       theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
-      activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), hosting: arr(hosting),
+      activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), tech: arr(tech), hosting: arr(hosting),
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
       reachable: reachableOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
@@ -474,6 +477,7 @@ export function Explorer({ initialData, initial, showStats }: {
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
         {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
         {facets.plugins.length > 0 && <Facet title="Plugins" values={facets.plugins} selected={plugin} onToggle={toggle(setPlugin)} defaultOpen={false} />}
+        {facets.tech.length > 0 && <Facet title="Technologies" values={facets.tech} selected={tech} onToggle={toggle(setTech)} defaultOpen={false} />}
         {country.size > 0 && <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} defaultOpen={false} />}
       </aside>
 

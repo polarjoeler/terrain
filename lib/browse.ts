@@ -45,7 +45,7 @@ export type BrowseFilters = {
   q?: string;
   country?: string[]; platform?: string[]; category?: string[];
   band?: string[]; theme?: string[]; city?: string[];
-  payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[];
+  payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[]; tech?: string[];
   activity?: string[]; hosting?: string[];
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
   /** Contact-quality facet: 'named' | 'role_targeted' | 'role_generic' | 'form_only' | 'none'. */
@@ -105,7 +105,7 @@ export type BrowseResult = {
     country: Facet; platform: Facet; band: Facet; contactType: Facet;
     category: Facet; city: Facet; theme: Facet;
     activity: Facet; hosting: Facet;
-    payment: Facet; shipping: Facet; apps: Facet; plugins: Facet;   // multi-token (a store has several)
+    payment: Facet; shipping: Facet; apps: Facet; plugins: Facet; tech: Facet;   // multi-token (a store has several)
   };
   recency: {
     launched: Record<number, number>;
@@ -149,6 +149,10 @@ function buildWhere(f: BrowseFilters) {
   if (f.shipping?.length) conds.push(sql`shipping_providers ILIKE ANY(${f.shipping.map((s) => `%${s}%`)})`);
   if (f.app?.length) conds.push(sql`apps ILIKE ANY(${f.app.map((a) => `%${a}%`)})`);
   if (f.plugin?.length) conds.push(sql`plugins ILIKE ANY(${f.plugin.map((a) => `%${a}%`)})`);
+  // Cross-platform tech facet — `technologies` carries clean vendor names for every CMS (Klaviyo,
+  // Gorgias, PayFast…), unlike apps (Shopify-only) / plugins (Woo-only). This is the filter that
+  // reaches a vendor's whole footprint across platforms.
+  if (f.tech?.length) conds.push(sql`technologies ILIKE ANY(${f.tech.map((a) => `%${a}%`)})`);
   if (f.activity?.length) conds.push(sql`activity_tier = ANY(${f.activity})`);
   if (f.hosting?.length) conds.push(sql`hosting_provider = ANY(${f.hosting})`);
   if (f.plus) conds.push(sql`plus`);
@@ -286,7 +290,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     WITH f AS MATERIALIZED (
       SELECT country, platform, city, category, btrim(theme) AS theme,
              ${band} AS band, activity_tier, hosting_provider,
-             payments, shipping_providers, apps, plugins, plus, contact_type,
+             payments, shipping_providers, apps, plugins, technologies, plus, contact_type,
              (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
@@ -312,6 +316,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            ${sql.unsafe(multiFacet("shipping_providers"))} AS f_shipping,
            ${sql.unsafe(wantApps ? appsFacet : "'[]'::jsonb")}                   AS f_apps,
            ${sql.unsafe(multiFacet("plugins"))} AS f_plugins,
+           ${sql.unsafe(multiFacet("technologies"))} AS f_tech,
            (SELECT jsonb_build_object(
               '7',   count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 30),
@@ -329,7 +334,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
         city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
         activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
-        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins),
+        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins), tech: toFacet(agg.f_tech),
       },
       recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
     };
@@ -380,7 +385,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         score: Number(r.fit_score) || 0,
       };
     }),
-    facets: A.facets,
+    facets: { ...A.facets, tech: A.facets.tech ?? [] },   // default: aggregates cached before the tech facet shipped
     recency: A.recency,
   };
 }
