@@ -73,7 +73,15 @@ node --env-file=.env.local scripts/payment-queue.mjs \
 
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then
-  ( cd "$HOME/shopify-radar" && "$PROBE_PY" checkout_probe.py \
+  # Rotate the Webshare pool, matching payments-probe.sh — this was the one checkout
+  # probe that never set it. Same hedge, same caveat as there: not proven to be the
+  # main cause of the fresh-store payment gap, and checkout_probe.py falls back to
+  # direct automatically when proxies.txt is absent, so it is safe on every box.
+  # NB this is deliberately NOT the lane choice contact-enrich.mjs makes — that crawl
+  # measured Webshare as strictly worse (5/10 throttled vs 10/10 clean direct) and so
+  # runs direct. The two lanes hit different endpoints; don't unify them on vibes.
+  ( cd "$HOME/shopify-radar" && STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
+      "$PROBE_PY" checkout_probe.py \
       --from-file "$HOME/storepulse/$OUT" --limit 4000 --concurrency 10 ) \
     || echo "!! checkout probe failed (continuing to sync partial)"
   node --env-file=.env.local scripts/sync-checkout-payments.mjs || echo "!! sync failed"
