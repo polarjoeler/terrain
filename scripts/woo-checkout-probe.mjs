@@ -198,7 +198,7 @@ async function main() {
           const ageMs = discovered_at ? Date.now() - new Date(discovered_at).getTime() : 0;
           const exhausted = ageMs > 3 * 24 * 3600 * 1000;   // ~36 retries at 2h cadence
           if ((permanent || exhausted) && !DRY) {
-            await sql`UPDATE imported_stores SET woo_checkout_at = now() WHERE domain = ${domain}`.catch(() => {});
+            await sql`UPDATE imported_stores SET woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
             gaveup++;
           }
         }
@@ -206,10 +206,10 @@ async function main() {
           dated++;
           for (const g of res.gateways) tally.set(g, (tally.get(g) ?? 0) + 1);
           if (!DRY) await sql`UPDATE imported_stores SET payments = ${res.gateways.join(";")},
-                    payments_source = 'woo_checkout', woo_checkout_at = now() WHERE domain = ${domain}`.catch(() => {});
+                    payments_source = 'woo_checkout', woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
         } else {
           none++;
-          if (!DRY) await sql`UPDATE imported_stores SET woo_checkout_at = now() WHERE domain = ${domain}`.catch(() => {});
+          if (!DRY) await sql`UPDATE imported_stores SET woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
         }
         if (done % 25 === 0) process.stdout.write(`\r  ${done}/${rows.length}  dated ${dated}, none ${none}, net-fail ${net}`);
       }
