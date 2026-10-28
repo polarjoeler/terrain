@@ -3,6 +3,7 @@
  *  computed Lead Fit Score, so the client can facet/sort/search instantly. */
 
 import { db as sharedDb } from "./db";
+import { canonicalApps } from "./apps-canon.ts";
 
 // DB `platform` values NOT yet launched to customers — kept in sync with lib/platforms.ts
 // (customerVisible:false there). Inlined, like VISIBLE_MARKETS below, so the standalone
@@ -131,11 +132,10 @@ function canonicaliseTheme<T extends { theme: string | null }>(rows: T[]): void 
 
 const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]); // app-store links, not installed apps
 function cleanApps(raw: string | null): string | null {
-  if (!raw) return null;
-  const slugs = [...raw.matchAll(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)].map((m) => m[1].toLowerCase()).filter((s) => !APP_SKIP.has(s));
-  if (!slugs.length) return null; // only custom/private apps → nothing public to show
-  const names = [...new Set(slugs)].map((s) => APP_ALIAS[s] ?? s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "));
-  return names.join(";");
+  // Delegates to the shared canonicaliser. The old implementation only extracted
+  // apps.shopify.com slugs and returned null otherwise, which silently discarded every
+  // NAME-form value — 10,260 of the 21,822 rows that have app data at all.
+  return canonicalApps(raw);
 }
 
 // The imported estimated_monthly_sales is in each store's LOCAL currency, so we
