@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
+import { normalizeTechStack } from "@/lib/tech-stack";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
 const fmtMonth = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) : null);
@@ -31,26 +32,6 @@ const bestEmail = (d: LeadDetail): string | null => {
   if (d.contact_email && sameOrg(emailDomain(d.contact_email), d.domain)) return d.contact_email;
   return null;
 };
-
-// Apps are stored as raw Shopify app-store URLs (often concatenated). Show the
-// clean public-app names — dropping custom/private apps, which have no store URL.
-const APP_ALIAS: Record<string, string> = {
-  inbox: "Shopify Inbox", "product-reviews": "Shopify Reviews", geolocation: "Shopify Geolocation",
-  judgeme: "Judge.me", "klaviyo-email-marketing": "Klaviyo", "customer-privacy-banner": "Privacy Banner",
-  "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
-  omnisend: "Omnisend", mailchimp: "Mailchimp",
-};
-const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]);
-function cleanApps(raw: string | null): string[] {
-  if (!raw) return [];
-  const slugs = [...raw.matchAll(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)]
-    .map((m) => m[1].toLowerCase()).filter((s) => !APP_SKIP.has(s));
-  if (slugs.length) {
-    return [...new Set(slugs)].map((s) => APP_ALIAS[s] ?? s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "));
-  }
-  // Already clean, semicolon-separated names (e.g. from a snapshot) — pass through.
-  return chips(raw).filter((x) => /^[A-Za-z][A-Za-z0-9 .&'-]{1,28}$/.test(x));
-}
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) return null;
@@ -163,7 +144,6 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
                 <Row label="Activity" value={data.activity_tier ? <TierBadge tier={data.activity_tier} score={data.activity_score} /> : null} />
                 <Row label="Hosting" value={data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null} />
                 <Row label="Woo version" value={data.platform_version} />
-                <Row label="Plugins" value={chips(data.plugins).length ? <Chips items={chips(data.plugins).slice(0, 12)} tone="lilac" /> : null} />
               </Section>
             )}
 
@@ -222,9 +202,9 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="TikTok" value={social(data.tiktok, `https://tiktok.com/@${data.tiktok}`, null)} />
             </Section>
 
-            {cleanApps(data.apps).length > 0 && (
-              <Section title="Apps installed">
-                <Chips items={cleanApps(data.apps)} tone="lilac" />
+            {normalizeTechStack(data).length > 0 && (
+              <Section title="Apps & tech">
+                <Chips items={normalizeTechStack(data)} tone="lilac" />
               </Section>
             )}
 

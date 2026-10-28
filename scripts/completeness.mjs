@@ -33,7 +33,10 @@ const FIELDS = {
   payments:    { filled: "coalesce(payments,'') <> ''",            check: "payments_checked_at IS NOT NULL" },
   shipping:    { filled: "coalesce(shipping_providers,'') <> ''",  check: "payments_checked_at IS NOT NULL" }, // same checkout probe reads both
   theme:       { filled: "coalesce(theme,'') <> ''",               check: "deep_enriched_at IS NOT NULL" },
-  apps:        { filled: "(coalesce(apps,'') <> '' OR coalesce(technologies,'') <> '')", check: "deep_enriched_at IS NOT NULL" },
+  // "apps" = the normalised tech stack, NOT the raw apps column. apps is Shopify-App-Store-only
+  // (0% on non-Shopify by definition); a non-Shopify store's stack lives in technologies+plugins.
+  // Counting all three is the true coverage — see lib/tech-stack.ts (the UI reads the same union).
+  apps:        { filled: "(coalesce(apps,'') <> '' OR coalesce(technologies,'') <> '' OR coalesce(plugins,'') <> '')", check: "deep_enriched_at IS NOT NULL" },
   // hosted CMSs are hosted BY the platform → no independent host → auto-resolved.
   hosting:     { filled: `(coalesce(hosting_provider,'') <> '' OR lower(platform) IN (${HOSTED}))`, check: "hosting_checked_at IS NOT NULL" },
   contact:     { filled: "(coalesce(contact_email,'') <> '' OR coalesce(email,'') <> '')", check: "contact_checked_at IS NOT NULL" },
