@@ -74,6 +74,13 @@ const STORE_MARKERS = [
   // structured-data / meta signals — catch JS SPAs (e.g. takealot) whose raw HTML has no cart text
   '"@type":"product"', '"@type": "product"', '"@type":"offer"', '"@type":"itemlist"',
   '"@type":"store"', '"@type":"onlinestore"', 'og:type" content="product', 'property="product:price',
+  // builder-specific COMMERCE fingerprints — Wix/Squarespace/Webflow render their store client-side,
+  // so a commerce storefront often has none of the generic cart text above in its raw HTML. These
+  // tokens appear only when the builder's ecommerce product is active (not on a brochure site), so
+  // they rescue real builder stores the "mixed" gate was dropping as not_store.
+  "wixstores", "wix-ecommerce",                          // Wix Stores
+  "sqs-add-to-cart", "squarespace-commerce", "commerce-cart",  // Squarespace Commerce
+  "w-commerce", "wf-ecommerce",                          // Webflow Ecommerce
 ];
 const GATEWAYS = [
   [/payfast/i, "PayFast"], [/paystack/i, "Paystack"], [/peach.?payment/i, "Peach Payments"],
