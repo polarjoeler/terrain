@@ -62,6 +62,12 @@ const OVERWRITE = has("--overwrite");
 // pass. Free and instant: no network, no store is touched. The point of banking contact_text is
 // that an extractor fix can be applied retroactively without re-crawling anything.
 const REVALIDATE = has("--revalidate-names");
+// Re-extract names from text we ALREADY banked, with no network at all. --revalidate-names only
+// re-judges names already stored; this finds ones earlier passes missed — a store crawled under
+// the 3b model, or before the prose rules were demoted, often has usable contact copy sitting in
+// contact_text with no name against it. Pure compute, so it belongs on the always-on box and
+// competes with nothing.
+const REMINE = has("--remine-names");
 // The nightly sweep marches down the revenue list, so the long tail stays unmeasured for weeks.
 // --sample takes a RANDOM slice of what is left instead: a few hundred stores is enough to tell
 // us whether the tail behaves like the head, today, rather than at the end of the census.
@@ -96,7 +102,7 @@ const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,
 const countries = (arg("--country", "") || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
 
 const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || "";
-const LOCAL_LLM_MODEL = process.env.LOCAL_LLM_MODEL || "qwen2.5:7b";
+const LOCAL_LLM_MODEL = arg("--model", process.env.LOCAL_LLM_MODEL || "qwen2.5:7b");
 const ALLOW_PAID = process.env.ALLOW_PAID_ENRICH === "1";
 
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
@@ -704,6 +710,44 @@ async function main() {
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 8), idle_timeout: 20 });
   try {
+    if (REMINE) {
+      if (!LOCAL_LLM_URL) { console.error("--remine-names needs LOCAL_LLM_URL (local, free)."); process.exit(2); }
+      const rows = await sql`
+        SELECT domain, name, category, contact_text, contact_email, email FROM imported_stores
+        WHERE contact_text IS NOT NULL AND length(contact_text) > 300
+          AND contact_name IS NULL
+          ${countries.length ? sql`AND UPPER(country) = ANY(${countries})` : sql``}
+        ORDER BY estimated_monthly_sales DESC NULLS LAST
+        LIMIT ${LIMIT}`;
+      if (!rows.length) { console.log("no banked text left without a name."); return; }
+      console.log(`remine-names: ${rows.length} store(s)${DRY ? " [DRY]" : ""} · ${LOCAL_LLM_MODEL} · banked text only, no network`);
+      let found = 0, done = 0, failed = 0;
+      let i = 0;
+      await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
+        while (i < rows.length) {
+          const r = rows[i++];
+          const brands = brandTokens(r.domain, r.name, r.category);
+          const localParts = [r.contact_email, r.email].filter(Boolean)
+            .map((e) => String(e).split("@")[0].toLowerCase().replace(/[^a-z]/g, ""));
+          let g;
+          try { g = await askLocal({ domain: r.domain, text: r.contact_text }); }
+          catch { failed++; done++; continue; }
+          const ok = personName(g.name, brands, localParts);
+          done++;
+          if (ok) {
+            found++;
+            if (DRY) console.log(`  + ${r.domain.padEnd(34)} ${ok}${g.role ? ` (${g.role})` : ""}`);
+            else await sql`UPDATE imported_stores SET contact_name = ${ok},
+              contact_role = COALESCE(${g.role ?? null}, contact_role),
+              contact_name_source = 'llm-remine' WHERE domain = ${r.domain}`.catch(() => {});
+          }
+          if (done % 200 === 0) console.log(`— ${done}/${rows.length}  found ${found}`);
+        }
+      }));
+      console.log(`\nDone. ${done} read, ${found} new names (${done ? Math.round(100 * found / done) : 0}%), ${failed} model errors.`);
+      console.log(`Each new name on a non-named address is a permutation candidate for contact-permute.`);
+      return;
+    }
     if (REVALIDATE) {
       const rows = await sql`SELECT domain, contact_name, contact_name_source, contact_email, email
         FROM imported_stores WHERE contact_name IS NOT NULL`;
@@ -788,11 +832,16 @@ async function main() {
 
     if (!rows.length) { console.log("nothing to do — every candidate store has a fresh contact check."); return; }
 
-    // The residential IP's Shopify-edge budget is shared with every other probe on this machine,
-    // so the protection here is PACE, not egress spread: a few workers, a pause between pages.
-    if (CONC > 4 && !FORCE_DIRECT) {
-      console.error(`refusing --concurrency ${CONC}: this crawl shares one IP's Shopify-edge budget with the\n`
-        + "payment probes. Keep it ≤4 (measured clean at 2), or pass --force-direct if you mean it.");
+    // The ≤4 clamp protects the ONE shared Shopify-edge IP budget — but only the Shopify lane
+    // (and the unscoped default, which may include Shopify stores) actually hits that edge. The
+    // --platform non-shopify lane (and any specific non-Shopify CMS) crawls each store's OWN
+    // domain, spread across thousands of hosts with no shared budget to protect, so it runs at
+    // full concurrency without --force-direct. Clamping it to ≤4 is what silently starved it.
+    const HITS_SHOPIFY_EDGE = platArg === "shopify" || platArg === "";
+    if (HITS_SHOPIFY_EDGE && CONC > 4 && !FORCE_DIRECT) {
+      console.error(`refusing --concurrency ${CONC} on the Shopify-edge lane: it shares one IP's\n`
+        + "Shopify-edge budget with the payment probes. Keep it ≤4 (measured clean at 2), or pass\n"
+        + "--force-direct if you mean it. (The --platform non-shopify lane is exempt from this clamp.)");
       process.exit(3);
     }
 
