@@ -89,6 +89,12 @@ const PLATFORMS = {
   Ecwid: ["app.ecwid.com"],
   "EC-CUBE": ["ec-cube", "eccube", "ec-layoutrole", "/html/template/default"],   // dominant JP self-hosted platform
   "Square Online": ["squareup.com", "weeblycloud"],
+  // Africa-first + cross-border builders the global vendors miss (added 2026-10-29; mirror of
+  // shopify-radar/woo_probe.py _CMS_FINGERPRINTS). Selar/Catlog are path-based (selar.com/m/…,
+  // catlog.shop/…) so they carry no own-domain markers — found via the sitemap lane, not here.
+  Shoplazza: ["myshoplaza.com", "static.staticdj.com", "shoplazza"],   // China cross-border (Africa push)
+  Shopline: ["myshopline.com", "shoplinecdn.com", "shoplineapp.com"],  // HK/SEA omnichannel
+  Bumpa: ["bumpa.shop", "getbumpa.com"],                               // Nigeria SME builder
 };
 
 function detectPlatform(html, headerBlob) {
