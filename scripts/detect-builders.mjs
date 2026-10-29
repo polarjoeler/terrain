@@ -60,6 +60,9 @@ async function resolveDomain(domain) {
 
 async function main() {
   console.log(`detect-builders${SAMPLE ? ` [SAMPLE ${SAMPLE}]` : DRY ? " [DRY]" : ""} · conc ${CONC}${COUNTRY ? ` · ${COUNTRY}` : ""}`);
+  // Small DB pool on purpose: DNS runs at high concurrency but writes are quick single-row UPDATEs,
+  // so a tiny pool is plenty — and keeps this lane from crowding the shared Supabase pooler (which
+  // starves the live dashboard) when it runs alongside the other writers.
   const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: 3,
     connection: { statement_timeout: 30000, idle_in_transaction_session_timeout: 60000, lock_timeout: 5000 } });
   try {
@@ -69,14 +72,16 @@ async function main() {
       WHERE table_name='imported_stores' AND column_name='dns_checked_at') present`;
     if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS dns_checked_at TIMESTAMPTZ`.catch(() => {});
 
+    // NO heavy ORDER BY — sorting the whole million-row NULL pool before the LIMIT made a 5k batch
+    // take 15+ min. With just LIMIT, Postgres stops as soon as it finds enough matching rows, and the
+    // dns_checked_at marker shrinks the pool each run. Prioritise markets by passing --country (loop
+    // focus markets first); the caller owns ordering, not an expensive global sort.
     const rows = await sql`
       SELECT domain, platform FROM imported_stores
       WHERE (platform IS NULL OR platform = 'custom')
         AND dns_checked_at IS NULL
         AND domain NOT LIKE '%/%'
         ${COUNTRY ? sql`AND country = ${COUNTRY}` : sql``}
-      ORDER BY (country IN ('ZA','KE','NG','EG','MA','GH','TZ','UG','JP')) DESC,
-               published DESC, crux_rank ASC NULLS LAST
       LIMIT ${LIMIT}`;
     if (!rows.length) { console.log("nothing to resolve — builder pool drained."); return; }
     console.log(`resolving ${rows.length} domain(s)…`);
