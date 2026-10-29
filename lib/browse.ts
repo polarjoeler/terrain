@@ -222,7 +222,16 @@ function aggKey(f: BrowseFilters): string {
 // instance reads it back in one indexed lookup (~a round-trip) instead of re-aggregating, and
 // refresh-browse keeps the hot keys (unfiltered + per-country) fresh ahead of traffic. Reads/writes
 // are best-effort: if the table is missing or the DB is busy, we silently fall back to a live scan.
-const BROWSE_CACHE_TTL = "90 minutes";     // serve-stale window; refresh-browse rewrites hot keys well inside it
+//
+// The serve-stale window MUST exceed the gap between warm runs, or keys expire and every cold
+// instance pays the live scan again — the exact "dashboard won't load" outage. The dependable warmer
+// is the Vercel cron (/api/cron/refresh-browse), which self-authenticates and runs daily at 09:00;
+// the 30-min launchd curl is a bonus that needs the fleet's CRON_SECRET to match prod. Since the
+// expanded VISIBLE_MARKETS (27 countries, ~112k rows) made the cold scan heavy enough to time out on
+// a user request, we size this to comfortably outlast the DAILY cron so an already-computed key is
+// always served from cache (counts up to ~a day stale; write-through keeps active keys fresher). If
+// the warm cadence ever goes sub-daily again, this can come back down.
+const BROWSE_CACHE_TTL = "26 hours";     // serve-stale window; must exceed the daily warm-cron gap
 async function dbAggGet(sql: ReturnType<typeof db>, key: string): Promise<AggParsed | null> {
   try {
     const [row] = await sql<{ data: AggParsed }[]>`
