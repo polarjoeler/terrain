@@ -28,7 +28,15 @@ const STORE_NATIVE = ["magento", "adobe_commerce", "prestashop", "bigcommerce", 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, connect_timeout: 15 });
 try {
   // What we'd promote, by platform (confirmed live + a real-store signal).
-  const promotable = sql`NOT published AND live_status = 'active' AND UPPER(country) = ANY(${markets}) AND (
+  // Path-based platforms (Selar/Catlog) live on ONE host, so we don't HTTP-crawl them to set
+  // live_status — a recent last_alive_at (the sitemap's own lastmod) is the liveness proxy instead.
+  // NOTE: country is still required, so a Selar store only promotes once country-enrich has assigned
+  // it a focus market — that enrichment (a paced store-page fetch → currency → country) is the gate.
+  const PATH_BASED = ["selar", "catlog"];
+  const promotable = sql`NOT published AND UPPER(country) = ANY(${markets})
+    AND (live_status = 'active'
+         OR (lower(platform) = ANY(${PATH_BASED}) AND last_alive_at >= now() - interval '12 months'))
+    AND (
       (lower(platform) = 'woocommerce' AND activity_tier IN ('selling','active'))
       OR lower(platform) = ANY(${STORE_NATIVE})
     )`;
