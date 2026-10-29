@@ -27,7 +27,8 @@ const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MA
 // Squarespace/Webflow general site-builders, whose templates leak cart markup on non-store sites and
 // over-publish NGOs/agencies/clinics). Those general builders need rigorous catalogue verification we
 // don't do here, so they stay banked.
-const STORE_CMS = ["prestashop", "magento", "opencart", "ecwid", "bigcommerce", "shopware", "shopstar", "base"];
+const STORE_CMS = ["prestashop", "magento", "opencart", "ecwid", "bigcommerce", "shopware", "shopstar", "base",
+  "shoplazza", "shopline", "bumpa"];  // 2026-10-29: HTTP-fingerprintable builders (Selar/Catlog are path-based → ingester, not here)
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
