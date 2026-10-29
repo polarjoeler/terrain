@@ -1,10 +1,14 @@
 /** Country/market presentation — flag emoji, display name, and adjective — for
  *  the market selectors on the dashboard and insights. Shared so both agree. */
 
-// Markets shown in customer-facing surfaces (dashboard, insights, pickers). We store
-// stores GLOBALLY (CT tailer is global), but only surface these until we launch more.
-// Every customer query filters to this set; everything else stays in the DB, hidden.
-export const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
+// Markets shown in customer-facing surfaces (dashboard, insights, pickers). We store stores
+// GLOBALLY (CT tailer is global); the customer surface shows all of AFRICA (expanded from ZA/KE/NG
+// 2026-10-29). Every customer query filters to this set; non-African rows stay in the DB, hidden.
+// (Kept in sync with the African members of FOCUS_MARKETS below — all have MARKETS metadata.)
+export const VISIBLE_MARKETS = [
+  "ZA", "KE", "NG", "EG", "MA", "GH", "TZ", "UG", "DZ", "TN", "CI", "SN", "MU", "MZ",
+  "CM", "BW", "AO", "NA", "RW", "ZM", "ET", "ZW", "LY", "MW", "SO", "LS", "SZ",
+] as const;
 
 // Every market we actively enrich + are willing to surface in the insights country picker (the picker
 // then shows only those that clear a live-store threshold). Africa focus + Japan. Still a curated set,
