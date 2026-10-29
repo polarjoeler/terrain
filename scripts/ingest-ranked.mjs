@@ -182,7 +182,8 @@ async function latestMonth() {
   throw new Error("no recent CrUX month found");
 }
 
-const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
+const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20,
+  connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
 try {
   await sql`CREATE TABLE IF NOT EXISTS ranked_ingest_log (
     domain TEXT PRIMARY KEY, cc TEXT, rank INT, verdict TEXT, platform TEXT,
