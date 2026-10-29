@@ -9,6 +9,7 @@ import {
   type PlatformSel,
 } from "@/lib/insights";
 import { tagCounts } from "@/lib/tags";
+import { VISIBLE_MARKETS } from "@/lib/markets";
 import { providerMomentumByPeriod, recentPaymentShifts } from "@/lib/provider-insights";
 import { InsightsView } from "./insights-view";
 import { redirect } from "next/navigation";
@@ -72,9 +73,9 @@ export default async function Insights({
     // market, launch-keyed among newly-launched stores (not discovered_at / snapshot counts, which
     // the payment backfill inflated). Empty maps on failure so the page still renders.
     providerMomentumByPeriod(country).catch(() => ({ day: [], week: [], month: [], quarter: [], year: [] })),
-    // Recent switches scoped to the selected market (falls back to the core African markets
-    // ZA/KE/NG if somehow no single market resolves) — a global feed drowned the local signal.
-    recentPaymentShifts(40, country ? [country] : ["ZA", "KE", "NG"]).catch(() => []),
+    // Recent switches scoped to the selected market (falls back to all African markets if no single
+    // market resolves) — a global feed drowned the local signal, so stay continent-scoped.
+    recentPaymentShifts(40, country ? [country] : [...VISIBLE_MARKETS]).catch(() => []),
   ]);
   // Daily snapshots / trends are a single Shopify-only ZA series (the snapshot table is
   // single-series): a WooCommerce/all page view once overwrote it with Woo data (storesTotal

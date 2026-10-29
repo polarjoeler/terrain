@@ -15,10 +15,14 @@ import { db as sharedDb } from "./db";
 // so this shows real Woo stores only.
 const HIDDEN_PLATFORM_DBVALUES = ["wix", "adobe_commerce", "magento"];
 
-// Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — kept in sync).
-// Inlined here rather than imported so the standalone snapshot-refresh script (Node
-// --experimental-strip-types) doesn't choke on a relative .ts import.
-const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
+// Markets surfaced to customers (see lib/markets.ts VISIBLE_MARKETS — the canonical source, kept in
+// sync). Inlined here rather than imported so the standalone snapshot-refresh script (Node
+// --experimental-strip-types) doesn't choke on a relative .ts import. Expanded ZA/KE/NG → all of
+// Africa 2026-10-29.
+const VISIBLE_MARKETS = [
+  "ZA", "KE", "NG", "EG", "MA", "GH", "TZ", "UG", "DZ", "TN", "CI", "SN", "MU", "MZ",
+  "CM", "BW", "AO", "NA", "RW", "ZM", "ET", "ZW", "LY", "MW", "SO", "LS", "SZ",
+] as const;
 
 function db() {
   return sharedDb();

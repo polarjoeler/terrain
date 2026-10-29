@@ -24,7 +24,13 @@ function db() {
   return sharedDb();
 }
 
-const VISIBLE_MARKETS = ["ZA", "KE", "NG"] as const;
+// Markets surfaced to customers — kept in sync with lib/markets.ts VISIBLE_MARKETS (the canonical
+// source). Inlined here rather than imported so standalone scripts that load this module under raw
+// Node don't choke on the "@/" path alias. Expanded ZA/KE/NG → all of Africa 2026-10-29.
+const VISIBLE_MARKETS = [
+  "ZA", "KE", "NG", "EG", "MA", "GH", "TZ", "UG", "DZ", "TN", "CI", "SN", "MU", "MZ",
+  "CM", "BW", "AO", "NA", "RW", "ZM", "ET", "ZW", "LY", "MW", "SO", "LS", "SZ",
+] as const;
 
 /** The address we would actually send to. Once contact-enrich has visited a store (stamping
  *  contact_checked_at), contact_email is the best of every address found across its contact
