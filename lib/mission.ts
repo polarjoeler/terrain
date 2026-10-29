@@ -17,7 +17,7 @@ export type MetricRow = { label: string; africa: number; global: number; pct?: b
 export type Pillar = { key: string; title: string; accent: "mint" | "cyan" | "lilac" | "amber"; headline: string; owners: string; rows: MetricRow[] };
 export type Mission = { machines: FleetMachine[]; alerts: { check: string; detail: string }[]; pillars: Pillar[]; generatedAt: string };
 
-let cache: { at: number; data: Mission } | null = null;
+const cache = new Map<string, { at: number; data: Mission }>(); // keyed by include-imports variant
 let snapshotDay = ""; // guard: attempt the daily snapshot (incl. CREATE TABLE) at most once per process per day
 
 // All pillar counters for one scope, in one aggregate. `scope` is a SQL predicate (Africa or TRUE).
@@ -66,16 +66,21 @@ async function captureSnapshot(sql: ReturnType<typeof db>, africa: M, global: M)
   } catch { /* snapshot is best-effort — never fail the dashboard */ }
 }
 
-export async function missionControl(): Promise<Mission> {
-  if (cache && Date.now() - cache.at < 20_000) return cache.data;
+// Bought bulk-import sources (StoreCensus/StoreLeads/BuiltWith/CSV) — background data, not OUR
+// discovery. "Our work only" excludes these so the numbers reflect what the pipeline actually found.
+export async function missionControl(includeImports = true): Promise<Mission> {
+  const key = includeImports ? "all" : "ours";
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < 20_000) return cached.data;
   const sql = db();
+  const imp = includeImports ? sql`` : sql`AND NOT (source ILIKE 'storecensus%' OR source ILIKE 'storeleads%' OR source ILIKE 'builtwith%' OR source = 'csv')`;
   const [machines, alerts, africa, global] = await Promise.all([
     fleetMachines().catch(() => [] as FleetMachine[]),
     healthAlerts().catch(() => [] as { check: string; detail: string }[]),
-    scopeMetrics(sql, sql`country = ANY(${AFRICA})`).catch(() => ({} as M)),
-    scopeMetrics(sql, sql`TRUE`).catch(() => ({} as M)),
+    scopeMetrics(sql, sql`country = ANY(${AFRICA}) ${imp}`).catch(() => ({} as M)),
+    scopeMetrics(sql, sql`TRUE ${imp}`).catch(() => ({} as M)),
   ]);
-  void captureSnapshot(sql, africa, global);
+  if (includeImports) void captureSnapshot(sql, africa, global);   // canonical daily snapshot = full view
 
   const g = (m: M, k: string) => Number(m[k] ?? 0);
   const delta = (cur: number, prev: number): number | null => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
@@ -130,6 +135,6 @@ export async function missionControl(): Promise<Mission> {
   ];
 
   const data: Mission = { machines, alerts, pillars, generatedAt: new Date().toISOString() };
-  cache = { at: Date.now(), data };
+  cache.set(key, { at: Date.now(), data });
   return data;
 }

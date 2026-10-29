@@ -73,10 +73,11 @@ function PillarCard({ p }: { p: Pillar }) {
   );
 }
 
-export default async function MissionControlPage() {
+export default async function MissionControlPage({ searchParams }: { searchParams?: { imports?: string } }) {
   const email = await currentUser();
   if (!isAdmin(email)) redirect("/login");
-  const { machines, alerts, pillars } = await missionControl();
+  const includeImports = searchParams?.imports !== "off";
+  const { machines, alerts, pillars } = await missionControl(includeImports);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -86,8 +87,14 @@ export default async function MissionControlPage() {
           <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-cream/40">Africa &amp; Global · against our five priorities</div>
           <h1 className="font-display text-3xl text-cream"><span className="text-mint">Mission</span> Control</h1>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-cream/45">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-mint" /> live · 15s · <span className="text-amber/80">● gap</span> = never-done backlog · ▲▼ vs prior 7/30d
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex overflow-hidden rounded-full border border-cream/15 font-mono text-[11px]">
+            <a href="/ops/mission" className={`px-3 py-1 ${includeImports ? "bg-mint/20 text-mint" : "text-cream/50 hover:text-cream"}`}>With imports</a>
+            <a href="/ops/mission?imports=off" className={`px-3 py-1 ${!includeImports ? "bg-mint/20 text-mint" : "text-cream/50 hover:text-cream"}`}>Our work only</a>
+          </div>
+          <div className="flex items-center gap-2 font-mono text-[11px] text-cream/45">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-mint" /> live · 15s · <span className="text-amber/80">● gap</span> = never-done · ▲▼ vs prior
+          </div>
         </div>
       </header>
 
