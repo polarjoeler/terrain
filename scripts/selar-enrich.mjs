@@ -96,33 +96,50 @@ async function main() {
     console.log(`enriching ${rows.length} Selar store(s)…`);
 
     const tally = { active: 0, dead: 0, inactive: 0, countried: 0, unknown: 0 };
-    let cursor = 0;
+    let cursor = 0, dbErrs = 0, skipped = 0;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Supabase is a shared, pooler-fronted instance — a write can lose a lock race under contention.
+    // Retry transient errors with backoff (which also naturally sheds write pressure); never let one
+    // failed row kill the run (the whole point — max work done without "messing with Supabase").
+    const TRANSIENT = /lock timeout|statement timeout|canceling statement|timeout|connection|too many clients|ECONNRESET|terminating|deadlock/i;
+    async function writeRow(q) {
+      for (let a = 0; a < 4; a++) {
+        try { await q(); return true; }
+        catch (e) {
+          if (!TRANSIENT.test(e.message || "") || a === 3) { dbErrs++; if (dbErrs <= 8) console.log(`  ! db: ${e.message}`); return false; }
+          await sleep(400 * (a + 1) * (a + 1)); // 0.4s, 1.6s, 3.6s — back off so Supabase can recover
+        }
+      }
+      return false;
+    }
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
       while (cursor < rows.length) {
         const { domain, name: slug } = rows[cursor++];
-        const res = await get(`https://${domain}`);
-        if (!res) { console.log(`  ! ${domain}: fetch failed`); continue; }
-        const status = liveness(res);
-        const name = deriveName(res.body, slug);
-        const { country, currency } = deriveCountry(res.body);   // authoritative (devalue default_currency)
-        tally[status]++; country ? tally.countried++ : tally.unknown++;
-        if (SAMPLE) console.log(`  ${domain}  →  ${status}  ${country ?? "??"}  (${currency ?? "no-ccy"})  "${name}"`);
-        else if (!DRY) {
-          // Only set country when resolved (COALESCE keeps existing/NULL otherwise). country_source
-          // marks it as the Selar base-currency derivation, distinct from ccTLD/probe country.
-          await sql`UPDATE imported_stores SET
-            country = COALESCE(${country}, country),
-            country_source = ${country ? "selar_currency" : sql`country_source`},
-            name = ${name},
-            live_status = ${status},
-            live_checked_at = now(),
-            live_platform = 'Selar'
-            WHERE domain = ${domain}`;
-        }
-        await new Promise((r) => setTimeout(r, DELAY));
+        try {
+          const res = await get(`https://${domain}`);
+          if (!res) { skipped++; await sleep(DELAY); continue; }
+          const status = liveness(res);
+          const name = deriveName(res.body, slug);
+          const { country, currency } = deriveCountry(res.body);   // authoritative (devalue default_currency)
+          tally[status]++; country ? tally.countried++ : tally.unknown++;
+          if (SAMPLE) console.log(`  ${domain}  →  ${status}  ${country ?? "??"}  (${currency ?? "no-ccy"})  "${name}"`);
+          else if (!DRY) {
+            // Only set country when resolved (COALESCE keeps existing/NULL otherwise). country_source
+            // marks it as the Selar base-currency derivation, distinct from ccTLD/probe country.
+            await writeRow(() => sql`UPDATE imported_stores SET
+              country = COALESCE(${country}, country),
+              country_source = ${country ? "selar_currency" : sql`country_source`},
+              name = ${name},
+              live_status = ${status},
+              live_checked_at = now(),
+              live_platform = 'Selar'
+              WHERE domain = ${domain}`);
+          }
+        } catch (e) { skipped++; if (skipped <= 8) console.log(`  ! ${domain}: ${e.message}`); }
+        await sleep(DELAY);
       }
     }));
-    console.log(`\ndone. ${tally.active} active / ${tally.inactive} inactive / ${tally.dead} dead · country set: ${tally.countried} · unknown (USD/CFA/etc.): ${tally.unknown}`);
+    console.log(`\ndone. ${tally.active} active / ${tally.inactive} inactive / ${tally.dead} dead · country set: ${tally.countried} · unknown: ${tally.unknown} · skipped: ${skipped} · db-errs: ${dbErrs}`);
   } catch (e) { console.error("ERR", e.message); process.exitCode = 1; }
   finally { await sql.end(); }
 }
