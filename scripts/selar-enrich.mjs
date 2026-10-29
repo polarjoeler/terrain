@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 // selar-enrich — one PACED pass over banked Selar stores that, in a single store-page fetch, sets
-// LIVENESS (active/inactive/dead) and the real NAME. Country is intentionally NOT set (see below).
+// LIVENESS (active/inactive/dead), the real NAME, and COUNTRY.
 //
 // Selar stores all live on ONE host (selar.com), so this is deliberately gentle (low concurrency +
 // a delay between fetches) — not the fan-out the own-domain contact lane uses. And it's LOW-CADENCE
 // by design: Selar is lower-value than Shopify, so run it monthly / on demand, not nightly.
 //
-// WHY NO COUNTRY: the obvious signal (currency on the page) is a trap. The rendered currency is the
-// SWITCHER's display default (ZAR), not the seller's — counting it mislabeled Nigerian sellers as
-// South African on a 40-store sample (2026-10-29). The seller's real base currency is a Nuxt
-// payload index (`default_currency:N`) that needs a proper payload parser to resolve. Until that
-// exists we leave country NULL rather than guess wrong (USD is also NEVER United States — African
-// sellers price in USD). A country resolver is a separate, deferred task.
+// COUNTRY (done right): do NOT count currency strings in the rendered HTML — that picks up the
+// switcher's DISPLAY default (ZAR) and mislabeled Nigerian sellers as ZA (verified 2026-10-29).
+// The authoritative signal is the seller's `default_currency` in the Nuxt/devalue payload: the page
+// embeds a flat array where integers are indices, so default_currency is an index whose value is
+// the ISO code. Resolved correctly this reads NGN for Nigerian sellers, etc. We map only
+// unambiguous single-country currencies to a country; USD/GBP/EUR and the multi-country CFA zones
+// (XAF/XOF) stay NULL — USD is NEVER United States (African sellers price in USD).
 //
 // Run:  node --env-file=.env.local scripts/selar-enrich.mjs --sample 100   # validate, no writes
 //       node --env-file=.env.local scripts/selar-enrich.mjs --limit 5000   # enrich a batch
@@ -25,14 +26,13 @@ const CONC = Number(arg("--conc", "2"));              // gentle: one host
 const DELAY = Number(arg("--delay", "700"));          // ms between a worker's fetches
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
-// Unambiguous single-country currencies → ISO2. African focus first. USD/GBP/EUR/other multi-country
-// (XOF/XAF CFA zones) are DELIBERATELY ABSENT → country stays unknown. USD is NOT United States.
+// Unambiguous single-country currencies → ISO2. USD/GBP/EUR and the multi-country CFA zones
+// (XAF/XOF) are DELIBERATELY ABSENT → country stays NULL (unknown). USD is NOT United States.
 const CCY_COUNTRY = {
-  ZAR: "ZA", NGN: "NG", KES: "KE", GHS: "GH", UGX: "UG", TZS: "TZ", RWF: "RW", ZMW: "ZM",
-  EGP: "EG", MAD: "MA", NAD: "NA", BWP: "BW", MUR: "MU", ETB: "ET", MWK: "MW", MZN: "MZ",
-  AOA: "AO", INR: "IN", // non-African single-country ones we can still place honestly
+  NGN: "NG", ZAR: "ZA", KES: "KE", GHS: "GH", UGX: "UG", TZS: "TZ", RWF: "RW", ZMW: "ZM",
+  SLE: "SL", EGP: "EG", MAD: "MA", NAD: "NA", BWP: "BW", MUR: "MU", ETB: "ET", MWK: "MW",
+  MZN: "MZ", AOA: "AO", INR: "IN",
 };
-const CCY_RE = /\b(ZAR|NGN|KES|GHS|UGX|TZS|RWF|ZMW|EGP|MAD|NAD|BWP|MUR|ETB|MWK|MZN|AOA|INR|USD|GBP|EUR|CAD|AUD)\b/g;
 
 async function get(url, timeoutMs = 20000) {
   const ac = new AbortController();
@@ -45,17 +45,20 @@ async function get(url, timeoutMs = 20000) {
   finally { clearTimeout(t); }
 }
 
-// Modal currency → country. Returns { country, currency, confident }.
+// Authoritative country from the devalue payload's default_currency (an index into the flat array).
 function deriveCountry(html) {
-  const counts = {};
-  for (const m of html.matchAll(CCY_RE)) counts[m[1]] = (counts[m[1]] ?? 0) + 1;
-  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (!ranked.length) return { country: null, currency: null, confident: false };
-  const [ccy, n] = ranked[0];
-  // Confidence: the real currency repeats; the selector list shows each once. Require a clear lead.
-  const confident = n >= 3 && (ranked.length < 2 || n > ranked[1][1]);
-  const country = confident ? (CCY_COUNTRY[ccy] ?? null) : null;   // USD/GBP/EUR/CFA → null (unknown, NOT US)
-  return { country, currency: ccy, confident };
+  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const s = scripts.find((x) => x.includes('"default_currency"') && x.includes("["));
+  if (!s) return { country: null, currency: null };
+  const i = s.indexOf("["), j = s.lastIndexOf("]");
+  if (i < 0 || j <= i) return { country: null, currency: null };
+  let arr; try { arr = JSON.parse(s.slice(i, j + 1)); } catch { return { country: null, currency: null }; }
+  if (!Array.isArray(arr)) return { country: null, currency: null };
+  const st = arr.find((e) => e && typeof e === "object" && !Array.isArray(e) && "default_currency" in e);
+  if (!st) return { country: null, currency: null };
+  const ccy = arr[st.default_currency];
+  if (typeof ccy !== "string" || !/^[A-Z]{3}$/.test(ccy)) return { country: null, currency: null };
+  return { country: CCY_COUNTRY[ccy] ?? null, currency: ccy };   // unmapped (USD/GBP/CFA) → null
 }
 
 function deriveName(html, slug) {
@@ -74,7 +77,8 @@ function liveness({ status, finalUrl, body }) {
   if (status === 404 || status >= 500) return "dead";
   if (/\/m\//.test(finalUrl) === false) return "dead";                 // bounced off the /m/<slug> path
   if (/store (not found|unavailable|does not exist)|page not found/i.test(body)) return "dead";
-  if (status === 200 && CCY_RE.test(body)) return "active";
+  // A live storefront hydrates the devalue state (carries default_currency); a 404 shell does not.
+  if (status === 200 && body.includes('"default_currency"')) return "active";
   return "inactive";
 }
 
@@ -91,7 +95,7 @@ async function main() {
     if (!rows.length) { console.log("nothing to enrich — all Selar stores have country + a liveness check."); return; }
     console.log(`enriching ${rows.length} Selar store(s)…`);
 
-    const tally = { active: 0, dead: 0, inactive: 0 };
+    const tally = { active: 0, dead: 0, inactive: 0, countried: 0, unknown: 0 };
     let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
       while (cursor < rows.length) {
@@ -100,17 +104,15 @@ async function main() {
         if (!res) { console.log(`  ! ${domain}: fetch failed`); continue; }
         const status = liveness(res);
         const name = deriveName(res.body, slug);
-        // COUNTRY IS DELIBERATELY NOT WRITTEN. The rendered currency (ZAR in the switcher) is a
-        // display/default artifact, not the seller's — counting it mislabels Nigerian sellers as ZA
-        // (verified on a 40-store sample, 2026-10-29). The real base currency is a Nuxt payload
-        // index (`default_currency:N`) that needs a proper payload parser; until that exists we
-        // leave country NULL rather than guess wrong. USD is never United States (African sellers
-        // price in USD). deriveCountry() is kept only for --sample visibility, never persisted.
-        const dbg = SAMPLE ? deriveCountry(res.body) : null;
-        tally[status]++;
-        if (SAMPLE) console.log(`  ${domain}  →  ${status}  "${name}"   [ccy-guess ${dbg.currency ?? "none"}${dbg.confident ? "" : " low-conf"} — NOT written]`);
+        const { country, currency } = deriveCountry(res.body);   // authoritative (devalue default_currency)
+        tally[status]++; country ? tally.countried++ : tally.unknown++;
+        if (SAMPLE) console.log(`  ${domain}  →  ${status}  ${country ?? "??"}  (${currency ?? "no-ccy"})  "${name}"`);
         else if (!DRY) {
+          // Only set country when resolved (COALESCE keeps existing/NULL otherwise). country_source
+          // marks it as the Selar base-currency derivation, distinct from ccTLD/probe country.
           await sql`UPDATE imported_stores SET
+            country = COALESCE(${country}, country),
+            country_source = ${country ? "selar_currency" : sql`country_source`},
             name = ${name},
             live_status = ${status},
             live_checked_at = now(),
@@ -120,7 +122,7 @@ async function main() {
         await new Promise((r) => setTimeout(r, DELAY));
       }
     }));
-    console.log(`\ndone. ${tally.active} active / ${tally.inactive} inactive / ${tally.dead} dead. (country not derived — see header note.)`);
+    console.log(`\ndone. ${tally.active} active / ${tally.inactive} inactive / ${tally.dead} dead · country set: ${tally.countried} · unknown (USD/CFA/etc.): ${tally.unknown}`);
   } catch (e) { console.error("ERR", e.message); process.exitCode = 1; }
   finally { await sql.end(); }
 }
