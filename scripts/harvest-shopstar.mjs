@@ -48,38 +48,46 @@ async function main() {
     doms.forEach((d) => seen.add(d));
     console.log(`  ${ip}: ${doms.length} domains`);
   }
-  // Subdomains are definitely ShopStar; custom domains must be HTTP-confirmed (shared IP).
-  const subs = [...seen].filter((d) => d.endsWith(".shopstar.co.za"));
-  const customs = [...seen].filter((d) => !d.endsWith(".shopstar.co.za"));
-  console.log(`total unique: ${seen.size} · subdomains (confident): ${subs.length} · custom (need HTTP-confirm): ${customs.length}`);
-  if (DRY) { subs.slice(0, 10).forEach((d) => console.log("  sub  " + d)); customs.slice(0, 10).forEach((d) => console.log("  cust " + d)); console.log("[DRY] no writes, no confirm fetches."); return; }
+  const candidates = [...seen];
+  console.log(`total unique: ${candidates.length} (subdomains: ${candidates.filter((d) => d.endsWith(".shopstar.co.za")).length})`);
+  if (DRY) { candidates.slice(0, 15).forEach((d) => console.log("  " + d)); console.log("[DRY] no writes, no confirm fetches."); return; }
   if (!seen.size) { console.log("nothing to land (reverse-IP returned nothing — likely rate-limited; retry later)."); return; }
 
-  // HTTP-confirm customs, paced (conc 4, 300ms — they share the xneelo host).
-  const confirmed = [...subs];
-  let ci = 0, hit = 0;
-  await Promise.all(Array.from({ length: 4 }, async () => {
-    while (ci < customs.length) {
-      const d = customs[ci++];
-      if (await isShopStar(d)) { confirmed.push(d); hit++; }
-      await new Promise((r) => setTimeout(r, 300));
+  // Confirm EVERY candidate via the ShopStar needle (shared xneelo IP → co-tenants must be excluded).
+  // A 200 + needle also = live, so we stamp live_status here → promote-confirmed can surface them.
+  const confirmed = [];
+  let ci = 0;
+  await Promise.all(Array.from({ length: 5 }, async () => {
+    while (ci < candidates.length) {
+      const d = candidates[ci++];
+      if (await isShopStar(d)) confirmed.push(d);
+      await new Promise((r) => setTimeout(r, 250));
     }
   }));
-  console.log(`confirmed ShopStar: ${subs.length} subdomains + ${hit}/${customs.length} customs = ${confirmed.length}`);
+  console.log(`confirmed live ShopStar: ${confirmed.length} / ${candidates.length}`);
+  if (!confirmed.length) { console.log("none confirmed."); return; }
 
   const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: 2 });
   try {
+    const now = new Date().toISOString();
     const rows = confirmed.map((d) => ({
       domain: d, name: d, platform: "ShopStar", country: "ZA", published: false,
-      source: "shopstar_revip", country_source: "shopstar", discovered_at: new Date().toISOString(),
+      source: "shopstar_revip", country_source: "shopstar", discovered_at: now,
+      live_status: "active", live_checked_at: now, last_alive_at: now,
     }));
-    const cols = ["domain", "name", "platform", "country", "published", "source", "country_source", "discovered_at"];
-    let landed = 0;
+    const cols = ["domain", "name", "platform", "country", "published", "source", "country_source", "discovered_at", "live_status", "live_checked_at", "last_alive_at"];
+    let n = 0;
     for (let i = 0; i < rows.length; i += 500) {
-      const res = await sql`INSERT INTO imported_stores ${sql(rows.slice(i, i + 500), ...cols)} ON CONFLICT (domain) DO NOTHING`;
-      landed += res.count;
+      // Upsert: new rows land; existing rows (incl. the 615 from the first run) get their live
+      // fields refreshed so they're promotable — but never clobber a manual country override.
+      const res = await sql`INSERT INTO imported_stores ${sql(rows.slice(i, i + 500), ...cols)}
+        ON CONFLICT (domain) DO UPDATE SET
+          live_status = EXCLUDED.live_status, live_checked_at = EXCLUDED.live_checked_at, last_alive_at = EXCLUDED.last_alive_at,
+          platform = COALESCE(imported_stores.platform, EXCLUDED.platform),
+          country = CASE WHEN imported_stores.country_source = 'manual' THEN imported_stores.country ELSE COALESCE(imported_stores.country, EXCLUDED.country) END`;
+      n += rows.slice(i, i + 500).length;
     }
-    console.log(`landed ${landed} NEW ShopStar store(s) (ON CONFLICT skipped existing).`);
+    console.log(`upserted ${confirmed.length} confirmed ShopStar store(s) with live_status=active.`);
   } catch (e) { console.error("ERR", e.message); process.exitCode = 1; } finally { await sql.end(); }
 }
 main();
