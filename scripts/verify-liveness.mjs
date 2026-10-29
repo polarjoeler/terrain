@@ -99,6 +99,7 @@ const PLATFORMS = {
   Payhip: ["payhip.com"],                                              // creator/digital commerce
   "Paystack Storefront": ["paystack.shop"],                            // NG/GH/ZA payment-provider storefront (path-based)
   "Flutterwave Store": ["flutterwave.store"],                          // NG/Africa SME storefront
+  Medusa: ["medusajs", "medusa-react", "x-medusa-"],                   // headless open-source
 };
 
 function detectPlatform(html, headerBlob) {
