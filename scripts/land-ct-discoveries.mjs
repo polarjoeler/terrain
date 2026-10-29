@@ -150,9 +150,9 @@ async function main() {
       // artifacts (2026-10-29). launched_at_source='cert' keeps it distinct from a precise import
       // date; the COALESCE below keeps the EARLIEST, so a renewal never moves an existing date.
       launched_at: certNotBefore,
-      launched_at_source: certNotBefore ? "cert" : null,
+      launched_source: certNotBefore ? "cert" : null,
     }));
-    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before", "launched_at", "launched_at_source"];
+    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before", "launched_at", "launched_source"];
     for (let i = 0; i < records.length; i += 400) {
       const batch = records.slice(i, i + 400);
       // Insert new; for existing, only backfill discovered_at + platform-if-unset + cert_not_before-if-unset
@@ -165,8 +165,8 @@ async function main() {
           cert_not_before   = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before),
           -- Keep the EARLIEST launch date (never let a renewal move it), and only adopt the cert
           -- estimate when we don't already hold a date — a precise import date always wins.
-          launched_at       = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
-          launched_at_source= COALESCE(imported_stores.launched_at_source, EXCLUDED.launched_at_source)
+          launched_at    = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
+          launched_source= COALESCE(imported_stores.launched_source, EXCLUDED.launched_source)
         -- Only write when a COALESCE would actually change something. Without this the
         -- run re-upserted all 201,133 rows every 30 minutes (~9.6M/day) where the
         -- COALESCEs were no-ops — Postgres still writes a new row version per upsert,
