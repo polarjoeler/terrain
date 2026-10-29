@@ -54,7 +54,10 @@ function analyze(html) {
 
 async function main() {
   console.log(`reprobe-wordpress${SAMPLE ? ` [SAMPLE ${SAMPLE}]` : DRY ? " [DRY]" : ""} · conc ${CONC} · ${DELAY}ms`);
-  const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: Math.min(CONC + 2, 12) });
+  // Hard per-connection timeouts so a wedged write self-terminates in seconds rather than holding a
+  // row lock for minutes and freezing the table behind a queued ALTER (the 2026-10-29 lock jam).
+  const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: Math.min(CONC + 2, 12),
+    connection: { statement_timeout: 30000, idle_in_transaction_session_timeout: 60000, lock_timeout: 5000 } });
   try {
     const rows = await sql`SELECT domain FROM imported_stores
       WHERE platform = 'WordPress' AND live_checked_at IS NULL

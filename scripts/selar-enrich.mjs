@@ -133,7 +133,11 @@ function liveness({ status, finalUrl, body }) {
 
 async function main() {
   console.log(`selar-enrich${SAMPLE ? ` [SAMPLE ${SAMPLE}]` : DRY ? " [DRY]" : ""} · conc ${CONC} · ${DELAY}ms`);
-  const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: Math.min(CONC + 1, 6) });
+  // Hard per-connection timeouts so a write that wedges (e.g. a half-open socket on Rex's network)
+  // self-terminates in seconds instead of holding a row lock for minutes and freezing the whole
+  // table behind the next no-op ALTER (the 2026-10-29 lock jam). Single-row writes are sub-second.
+  const sql = postgres(process.env.DATABASE_URL || process.env.POSTGRES_URL, { ssl: "require", max: Math.min(CONC + 1, 6),
+    connection: { statement_timeout: 30000, idle_in_transaction_session_timeout: 60000, lock_timeout: 5000 } });
   try {
     const rows = await sql`
       SELECT domain, name FROM imported_stores

@@ -51,10 +51,17 @@ async function hostOf(domain) {
   return a ? { asn: a.asn, provider: a.provider } : { dead: true };
 }
 
-const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 10), idle_timeout: 20 });
+// Per-connection timeouts apply to EVERY pooled connection (a bare `SET lock_timeout` only hit one
+// connection, not the one the ALTER ran on — which is how the no-op ALTER froze the table on
+// 2026-10-29). lock_timeout bounds any DDL wait; statement/idle timeouts kill wedged writes.
+const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 10), idle_timeout: 20,
+  connection: { statement_timeout: 30000, idle_in_transaction_session_timeout: 60000, lock_timeout: 3000 } });
 try {
-  await sql`SET lock_timeout = '4s'`;
-  await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS hosting_checked_at TIMESTAMPTZ`.catch(() => {});
+  // Only ALTER when the column is genuinely missing — a no-op `ADD COLUMN IF NOT EXISTS` still takes
+  // an ACCESS EXCLUSIVE lock and, if it queues behind a slow txn, freezes the whole table.
+  const [{ present }] = await sql`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+    WHERE table_name='imported_stores' AND column_name='hosting_checked_at') present`;
+  if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS hosting_checked_at TIMESTAMPTZ`.catch(() => {});
   const rows = await sql`
     SELECT domain FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
