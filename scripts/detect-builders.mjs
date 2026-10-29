@@ -78,54 +78,58 @@ async function main() {
       WHERE table_name='imported_stores' AND column_name='dns_checked_at') present`;
     if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS dns_checked_at TIMESTAMPTZ`.catch(() => {});
 
-    // NO heavy ORDER BY — sorting the whole million-row NULL pool before the LIMIT made a 5k batch
-    // take 15+ min. With just LIMIT, Postgres stops as soon as it finds enough matching rows, and the
-    // dns_checked_at marker shrinks the pool each run. Prioritise markets by passing --country (loop
-    // focus markets first); the caller owns ordering, not an expensive global sort.
-    const rows = await sql`
-      SELECT domain, platform FROM imported_stores
-      WHERE (platform IS NULL OR platform = 'custom')
-        AND dns_checked_at IS NULL
-        AND domain NOT LIKE '%/%'
-        ${COUNTRY ? sql`AND country = ${COUNTRY}` : sql``}
-      LIMIT ${LIMIT}`;
-    if (!rows.length) { console.log("nothing to resolve — builder pool drained."); return; }
-    console.log(`resolving ${rows.length} domain(s)…`);
+    // Process in BATCHES: resolve a batch at DNS concurrency (fast — ~38/s), then BULK-write it in a
+    // handful of `domain = ANY($array)` UPDATEs. One-UPDATE-per-domain through the small pool capped
+    // the lane at ~1/s (write-RTT-bound) even though DNS was 38/s — batching decouples the two. Each
+    // batch commits its dns_checked_at marks, so the lane stays resumable. No heavy ORDER BY (sorting
+    // the whole NULL pool was 15min/5k); prioritise markets via --country.
+    const BATCH = SAMPLE ? LIMIT : 3000;
+    const chunk = (a, n) => { const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; };
+    const found = {}; let totalDone = 0, totalHits = 0, dbErrs = 0;
+    while (totalDone < LIMIT) {
+      const rows = await sql`
+        SELECT domain FROM imported_stores
+        WHERE (platform IS NULL OR platform = 'custom')
+          AND dns_checked_at IS NULL
+          AND domain NOT LIKE '%/%'
+          ${COUNTRY ? sql`AND country = ${COUNTRY}` : sql``}
+        LIMIT ${Math.min(BATCH, LIMIT - totalDone)}`;
+      if (!rows.length) { if (totalDone === 0) console.log("nothing to resolve — builder pool drained."); break; }
 
-    const found = {}; let cursor = 0, done = 0, hits = 0, dbErrs = 0;
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const TRANSIENT = /lock timeout|statement timeout|canceling statement|timeout|connection|too many clients|ECONNRESET|terminating|deadlock/i;
-    async function writeRow(q) {
-      for (let a = 0; a < 4; a++) {
-        try { await q(); return; } catch (e) {
-          if (!TRANSIENT.test(e.message || "") || a === 3) { if (++dbErrs <= 8) console.log(`  ! db: ${e.message}`); return; }
-          await sleep(400 * (a + 1) * (a + 1));
+      // resolve the batch — collect builder matches (grouped by platform) + every checked domain
+      const matches = {}; const checked = []; let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
+        const r = makeResolver();   // one resolver per worker (pointed at public DNS)
+        while (cursor < rows.length) {
+          const { domain } = rows[cursor++];
+          const { cnames, a4 } = await resolveDomain(r, domain);
+          const builder = matchBuilder(cnames, a4);
+          checked.push(domain);
+          if (builder) (matches[builder] ??= []).push(domain);
+          if (SAMPLE) console.log(`  ${domain} → ${builder ?? "—"}${builder ? "" : `  (cname:${cnames[0] ?? "none"} a:${a4[0] ?? "none"})`}`);
+        }
+      }));
+
+      if (!SAMPLE) {
+        // bulk write: reclassify matched domains per platform, then stamp dns_checked_at on all checked
+        for (const [plat, doms] of Object.entries(matches)) {
+          for (const c of chunk(doms, 1000)) {
+            await sql`UPDATE imported_stores SET platform = ${plat}, hosting_provider = ${plat}, dns_checked_at = now()
+              WHERE domain = ANY(${c}) AND (platform IS NULL OR platform = 'custom')`.catch((e) => { if (++dbErrs <= 8) console.log(`  ! db: ${e.message}`); });
+          }
+        }
+        for (const c of chunk(checked, 1000)) {
+          await sql`UPDATE imported_stores SET dns_checked_at = now()
+            WHERE domain = ANY(${c}) AND dns_checked_at IS NULL`.catch((e) => { if (++dbErrs <= 8) console.log(`  ! db: ${e.message}`); });
         }
       }
+
+      totalDone += rows.length;
+      for (const [p, d] of Object.entries(matches)) { found[p] = (found[p] ?? 0) + d.length; totalHits += d.length; }
+      if (!SAMPLE) process.stdout.write(`\r  ${totalDone} resolved · builders ${totalHits}`);
+      if (rows.length < BATCH) break;   // pool drained for this scope
     }
-    await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
-      const r = makeResolver();   // reused across this worker's whole run
-      while (cursor < rows.length) {
-        const { domain } = rows[cursor++];
-        const { cnames, a4 } = await resolveDomain(r, domain);
-        const builder = matchBuilder(cnames, a4);
-        done++;
-        if (builder) { hits++; found[builder] = (found[builder] ?? 0) + 1; }
-        if (SAMPLE) {
-          console.log(`  ${domain} → ${builder ?? "—"}${builder ? "" : `  (cname:${cnames[0] ?? "none"} a:${a4[0] ?? "none"})`}`);
-        } else {
-          // builder match → set platform (only over NULL/custom) + hosting_provider; always stamp the
-          // dns_checked_at marker so the row drains from the pool whether or not it matched.
-          await writeRow(() => sql`UPDATE imported_stores SET
-            platform = ${builder ? builder : sql`platform`},
-            hosting_provider = ${builder ? builder : sql`hosting_provider`},
-            dns_checked_at = now()
-            WHERE domain = ${domain} AND (platform IS NULL OR platform = 'custom')`);
-        }
-        if (!SAMPLE && done % 500 === 0) process.stdout.write(`\r  ${done}/${rows.length} · builders ${hits}`);
-      }
-    }));
-    console.log(`\ndone. ${done} resolved · ${hits} builders · db-errs: ${dbErrs}`);
+    console.log(`\ndone. ${totalDone} resolved · ${totalHits} builders · db-errs: ${dbErrs}`);
     console.log("breakdown:", found);
   } catch (e) { console.error("ERR", e.message); process.exitCode = 1; }
   finally { await sql.end(); }
