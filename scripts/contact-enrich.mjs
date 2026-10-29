@@ -708,7 +708,10 @@ async function main() {
   }
 
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 8), idle_timeout: 20 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 8), idle_timeout: 20,
+    // Per-connection timeouts so a wedged write self-terminates instead of holding a row lock for ages
+    // (the 2026-10-29 lock jam). DDL above is --migrate-gated, so this only guards normal writes.
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
   try {
     if (REMINE) {
       if (!LOCAL_LLM_URL) { console.error("--remine-names needs LOCAL_LLM_URL (local, free)."); process.exit(2); }

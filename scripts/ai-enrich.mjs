@@ -224,14 +224,20 @@ async function main() {
     process.exit(2);
   }
   if (!DRY) console.log(LOCAL_LLM_URL ? `backend: LOCAL ${LOCAL_LLM_MODEL} @ ${LOCAL_LLM_URL}` : `backend: PAID Anthropic ${MODEL}`);
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONCURRENCY + 1 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONCURRENCY + 1,
+    // Per-connection timeouts: a wedged write self-terminates in ≤2min instead of holding a row lock
+    // for ages and freezing the table behind a queued ALTER (the 2026-10-29 lock jam).
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
   try {
     // ADD COLUMN IF NOT EXISTS still takes a brief ACCESS EXCLUSIVE lock on the hot table even as a
     // no-op. Harmless once per run, but a tight batch loop (the continuous cron) would acquire it every
     // couple of minutes and can queue behind/ahead of long discovery reads — so the cron runs this once
     // up front and sets SKIP_SCHEMA_ENSURE for the per-batch invocations.
     if (!process.env.SKIP_SCHEMA_ENSURE) {
-      await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ`;
+      // Only ALTER when genuinely missing — a no-op ADD COLUMN still takes ACCESS EXCLUSIVE.
+      const [{ present }] = await sql`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+        WHERE table_name='imported_stores' AND column_name='ai_enriched_at') present`;
+      if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ`;
     }
     const rows = await sql`
       SELECT domain FROM imported_stores

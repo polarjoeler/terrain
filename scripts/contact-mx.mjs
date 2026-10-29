@@ -78,7 +78,8 @@ const DDL = [
 
 async function main() {
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 6, idle_timeout: 20 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 6, idle_timeout: 20,
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
   try {
     if (MIGRATE) {
       for (const q of DDL) {

@@ -87,7 +87,10 @@ async function main() {
     return;
   }
 
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20,
+    // Generous statement_timeout (this lander's chunked queries can run long + it already retries),
+    // but idle/lock guards so a wedged connection can't freeze the table (the 2026-10-29 lock jam).
+    connection: { statement_timeout: 240000, idle_in_transaction_session_timeout: 120000, lock_timeout: 8000 } });
 
   // Retry on statement timeout. The queries themselves run in ~1s, but the first
   // statement on a pooled connection intermittently blocks ~57s behind the probe

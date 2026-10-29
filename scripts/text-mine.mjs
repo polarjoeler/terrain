@@ -103,7 +103,8 @@ const TEXT = "COALESCE(NULLIF(homepage_text,''), NULLIF(contact_text,''))";
 
 async function main() {
   if (!LLM) { console.error("LOCAL_LLM_URL not set — this lane is local-only by design."); process.exit(2); }
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20,
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
   try {
     if (MIGRATE) {
       for (const q of DDL) {
