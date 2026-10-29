@@ -77,6 +77,7 @@ async function main() {
     const rows = await sql`
       SELECT domain, country FROM imported_stores
       WHERE ${target} AND country_checked_at IS NULL
+        AND country_source IS DISTINCT FROM 'manual'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       ORDER BY published DESC, discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;

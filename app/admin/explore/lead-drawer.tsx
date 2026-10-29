@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { marketLabel } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
+import { updateStore, type StorePatch } from "./store-edit-action";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
 const fmtMonth = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) : null);
@@ -104,6 +105,37 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
     return () => window.removeEventListener("keydown", onKey);
   }, [domain, onClose]);
 
+  // --- Admin manual edit (this drawer only renders under the admin-gated /admin/explore) ---
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [form, setForm] = useState<{ name: string; country: string; platform: string; published: boolean; revenue: string; tagsText: string }>(
+    { name: "", country: "", platform: "", published: false, revenue: "", tagsText: "" });
+
+  function beginEdit() {
+    if (!data) return;
+    setForm({
+      name: data.name ?? "", country: data.country ?? "", platform: data.platform ?? "",
+      published: Boolean(data.published), revenue: data.estimated_monthly_sales ?? "",
+      tagsText: (data.tags ?? []).join(", "),
+    });
+    setSaveErr(null); setEditing(true);
+  }
+  async function save() {
+    if (!data) return;
+    setSaving(true); setSaveErr(null);
+    const tags = form.tagsText.split(",").map((t) => t.trim()).filter(Boolean);
+    const patch: StorePatch = {
+      name: form.name || null, country: form.country || null, platform: form.platform || null,
+      published: form.published, estimated_monthly_sales: form.revenue || null, tags,
+    };
+    const res = await updateStore(data.domain, patch);
+    setSaving(false);
+    if ("error" in res) { setSaveErr(res.error); return; }
+    setData({ ...data, name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags } as LeadDetail);
+    setEditing(false);
+  }
+
   if (!domain) return null;
   const money = (v: string | null, ccy?: string | null) => (v != null ? `${ccy ? ccy + " " : ""}${Number(v).toLocaleString()}` : null);
   const social = (handle: string | null, url: string, followers: number | null) =>
@@ -118,14 +150,48 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             <h2 className="truncate font-display text-2xl text-cream">{data?.name || domain}</h2>
             <a href={`https://${domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/45 hover:underline">{domain} ↗</a>
           </div>
-          <button onClick={onClose} className="shrink-0 rounded-full border border-cream/20 px-3 py-1 text-sm text-cream/60 transition hover:border-cream/50 hover:text-cream">Close</button>
+          <div className="flex shrink-0 gap-2">
+            {data && !editing && <button onClick={beginEdit} className="rounded-full border border-cyan/40 px-3 py-1 text-sm text-cyan/80 transition hover:border-cyan hover:text-cyan">Edit</button>}
+            <button onClick={onClose} className="rounded-full border border-cream/20 px-3 py-1 text-sm text-cream/60 transition hover:border-cream/50 hover:text-cream">Close</button>
+          </div>
         </div>
 
         {loading && <p className="mt-8 text-sm text-cream/40">Loading all known data…</p>}
         {err && <p className="mt-8 text-sm text-orange">{err}</p>}
 
+        {data && editing && (
+          <div className="mt-4 rounded-2xl border border-cyan/30 bg-cyan/[0.05] p-4">
+            <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-cyan/80">Edit store · admin</div>
+            <div className="space-y-2.5 text-sm">
+              {([["name", "Name"], ["country", "Country (ISO2)"], ["platform", "Platform"], ["revenue", "Monthly sales (est.)"], ["tagsText", "Tags (comma-sep)"]] as const).map(([k, label]) => (
+                <label key={k} className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-cream/40">{label}</span>
+                  <input value={String((form as Record<string, unknown>)[k] ?? "")} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+                    className="min-w-0 flex-1 rounded-lg border border-cream/20 bg-cream/[0.04] px-2.5 py-1 text-cream outline-none focus:border-cyan/60" />
+                </label>
+              ))}
+              <label className="flex items-center gap-3">
+                <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-cream/40">Published</span>
+                <input type="checkbox" checked={form.published} onChange={(e) => setForm((f) => ({ ...f, published: e.target.checked }))} className="h-4 w-4 accent-cyan" />
+                <span className="text-xs text-cream/50">{form.published ? "visible in customer dashboard" : "banked / hidden"}</span>
+              </label>
+            </div>
+            {saveErr && <p className="mt-2 text-xs text-orange">Couldn&apos;t save: {saveErr}</p>}
+            <div className="mt-3 flex gap-2">
+              <button onClick={save} disabled={saving} className="rounded-full bg-cyan px-4 py-1.5 text-sm font-semibold text-ink-deep transition hover:bg-cyan/90 disabled:opacity-50">{saving ? "Saving…" : "Save changes"}</button>
+              <button onClick={() => setEditing(false)} disabled={saving} className="rounded-full border border-cream/20 px-4 py-1.5 text-sm text-cream/60 transition hover:border-cream/50 hover:text-cream">Cancel</button>
+            </div>
+            <p className="mt-2 text-[11px] text-cream/35">Shared data — this changes what every customer sees. Saved as a manual override (survives re-enrichment) and logged.</p>
+          </div>
+        )}
+
         {data && (
           <div className="mt-4">
+            {data.tags.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {data.tags.map((t) => <span key={t} className="rounded-full bg-cyan/10 px-2 py-0.5 text-[11px] text-cyan/80">#{t}</span>)}
+              </div>
+            )}
             <div className="flex flex-wrap gap-1.5">
               {data.country && <span className="rounded-full bg-cream/10 px-2.5 py-0.5 text-xs text-cream/70">{marketLabel(data.country)}</span>}
               {data.plus && <span className="rounded-full bg-lilac/20 px-2.5 py-0.5 text-xs font-bold text-lilac">⚡ Plus</span>}

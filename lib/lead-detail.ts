@@ -10,7 +10,7 @@ function db() {
 export type LeadDetail = {
   domain: string; name: string | null; category: string | null;
   country: string | null; city: string | null;
-  theme: string | null; platform: string | null; plus: boolean | null;
+  theme: string | null; platform: string | null; plus: boolean | null; published: boolean | null;
   activity_tier: string | null; activity_score: number | null;   // Woo: real-store reveal
   hosting_provider: string | null; hosting_asn: number | null; platform_version: string | null; plugins: string | null; technologies: string | null;
   payments: string | null; shipping_providers: string | null; free_shipping: boolean | null;
@@ -28,12 +28,14 @@ export type LeadDetail = {
   crux_rank: number | null; crux_rank_month: string | null; crux_trend: string | null;
   /** Ballpark revenue band + its confidence (see scripts/revenue-ballpark.mjs). */
   revenue_band: string | null; revenue_confidence: string | null;
+  /** Curated tags (store_tags) — shown + editable in the admin drawer. */
+  tags: string[];
 };
 
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
   const d = domain.trim().toLowerCase();
   const [r] = await db()<LeadDetail[]>`
-    SELECT domain, name, category, country, city, theme, platform, plus,
+    SELECT domain, name, category, country, city, theme, platform, plus, published,
            activity_tier, activity_score, hosting_provider, hosting_asn, platform_version, plugins, technologies,
            payments, shipping_providers, free_shipping, logistics_apps, apps,
            product_count, avg_product_price, estimated_monthly_sales, est_revenue_usd, currency,
@@ -41,7 +43,8 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            instagram, facebook, tiktok, instagram_followers, facebook_followers,
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
            source, live_status,
-           crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence
+           crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence,
+           COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
   return r ?? null;
 }
