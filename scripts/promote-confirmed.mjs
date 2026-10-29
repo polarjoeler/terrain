@@ -23,7 +23,8 @@ const STORE_NATIVE = ["magento", "adobe_commerce", "prestashop", "bigcommerce", 
   "ec-cube", "opencart", "shopware", "shopstar", "salesforce commerce cloud", "futureshop", "makeshop", "shopserve",
   // Africa-first + cross-border builders (added 2026-10-29) so detected stores get promoted to
   // published — otherwise they stay banked and never reach Insights/country reports (both dynamic).
-  "shoplazza", "shopline", "bumpa", "selar", "catlog"];
+  "shoplazza", "shopline", "bumpa", "selar", "catlog",
+  "gumroad", "payhip", "paystack storefront", "flutterwave store"];
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, connect_timeout: 15 });
 try {

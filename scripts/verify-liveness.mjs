@@ -95,6 +95,10 @@ const PLATFORMS = {
   Shoplazza: ["myshoplaza.com", "static.staticdj.com", "shoplazza"],   // China cross-border (Africa push)
   Shopline: ["myshopline.com", "shoplinecdn.com", "shoplineapp.com"],  // HK/SEA omnichannel
   Bumpa: ["bumpa.shop", "getbumpa.com"],                               // Nigeria SME builder
+  Gumroad: ["gumroad.com"],                                            // creator commerce (+ Rippl supply)
+  Payhip: ["payhip.com"],                                              // creator/digital commerce
+  "Paystack Storefront": ["paystack.shop"],                            // NG/GH/ZA payment-provider storefront (path-based)
+  "Flutterwave Store": ["flutterwave.store"],                          // NG/Africa SME storefront
 };
 
 function detectPlatform(html, headerBlob) {

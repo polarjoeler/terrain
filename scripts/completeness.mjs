@@ -25,7 +25,7 @@ const FOCUS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN
 const cArg = arg("--country", null);
 const markets = cArg ? cArg.toUpperCase().split(",").map((s) => s.trim()) : FOCUS;
 
-const HOSTED = "'shopify','wix','squarespace','bigcommerce','base','colorme','makeshop','cafe24','ec-cube','futureshop','ecwid','shopstar','shoplazza','shopline','bumpa','selar','catlog','salesforce commerce cloud'";
+const HOSTED = "'shopify','wix','squarespace','bigcommerce','base','colorme','makeshop','cafe24','ec-cube','futureshop','ecwid','shopstar','shoplazza','shopline','bumpa','selar','catlog','gumroad','payhip','paystack storefront','flutterwave store','salesforce commerce cloud'";
 
 // Each field: `filled` (we have the value) and `check` (we looked — the *_checked_at marker).
 // resolved = filled OR check. complete = all fields resolved.
