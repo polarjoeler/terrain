@@ -46,9 +46,15 @@ function matchBuilder(cnames, a4) {
   return null;
 }
 
-// One resolver per worker, with a hard timeout — a hung lookup must never wedge the lane.
-async function resolveDomain(domain) {
+// One resolver per WORKER (not per domain — that serialized against the local resolver and crawled
+// at ~3/s). Point it at fast public DNS so high concurrency actually parallelizes; hard timeout so a
+// hung lookup never wedges the lane.
+function makeResolver() {
   const r = new Resolver({ timeout: TIMEOUT, tries: 1 });
+  try { r.setServers(["1.1.1.1", "8.8.8.8", "1.0.0.1", "8.8.4.4"]); } catch { /* fall back to system DNS */ }
+  return r;
+}
+async function resolveDomain(r, domain) {
   const safe = async (fn, host) => { try { return await fn.call(r, host); } catch { return []; } };
   const [apexA, wwwC, wwwA] = await Promise.all([
     safe(r.resolve4, domain),
@@ -98,9 +104,10 @@ async function main() {
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
+      const r = makeResolver();   // reused across this worker's whole run
       while (cursor < rows.length) {
         const { domain } = rows[cursor++];
-        const { cnames, a4 } = await resolveDomain(domain);
+        const { cnames, a4 } = await resolveDomain(r, domain);
         const builder = matchBuilder(cnames, a4);
         done++;
         if (builder) { hits++; found[builder] = (found[builder] ?? 0) + 1; }
