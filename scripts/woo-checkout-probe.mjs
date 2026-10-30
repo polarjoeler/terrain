@@ -196,7 +196,10 @@ async function main() {
           // comes back. Transient failures on recently-discovered stores still retry.
           const permanent = res.code >= 520 && res.code <= 530;
           const ageMs = discovered_at ? Date.now() - new Date(discovered_at).getTime() : 0;
-          const exhausted = ageMs > 3 * 24 * 3600 * 1000;   // ~36 retries at 2h cadence
+          // A null discovered_at is a legacy import that will never age past the threshold, so an
+          // all-null-net-failing tail (seen: 6 .ng rows) recycled forever and starved the "last
+          // write" health signal into a permanent alert. Treat null discovered_at as exhausted too.
+          const exhausted = !discovered_at || ageMs > 3 * 24 * 3600 * 1000;   // ~36 retries at 2h cadence
           if ((permanent || exhausted) && !DRY) {
             await sql`UPDATE imported_stores SET woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
             gaveup++;
