@@ -63,6 +63,33 @@ const [disc] = await sql`SELECT
   FROM imported_stores`;
 
 // ── 2. COVERAGE by market — the live base and how much of it carries data ────────────────────
+// ── 1b. DISCOVERY MIX — platform, source-class, GLOBAL geo + CMS (last 7 days) ───────────────
+const [mix] = await sql`SELECT
+  count(*) FILTER (WHERE lower(platform)='shopify')::int shop,
+  count(*) FILTER (WHERE platform IS NOT NULL AND platform<>'' AND lower(platform)<>'shopify')::int nonshop,
+  count(*) FILTER (WHERE platform IS NULL OR platform='')::int unknownp
+  FROM imported_stores WHERE discovered_at > now()-interval '7 days'`.catch(() => [{ shop: 0, nonshop: 0, unknownp: 0 }]);
+const mixSrc = await sql`SELECT COALESCE(source,'(null)') s, count(*)::int c FROM imported_stores
+  WHERE discovered_at > now()-interval '7 days' GROUP BY 1 ORDER BY 2 DESC`.catch(() => []);
+const mixGeo = await sql`SELECT upper(country) c, count(*)::int cnt,
+    count(*) FILTER (WHERE lower(platform)='shopify')::int shop,
+    count(*) FILTER (WHERE launched_at > now()-interval '90 days')::int nw
+  FROM imported_stores WHERE discovered_at > now()-interval '7 days' AND country IS NOT NULL AND country<>''
+  GROUP BY 1 ORDER BY 2 DESC LIMIT 12`.catch(() => []);
+const mixCms = await sql`SELECT COALESCE(NULLIF(platform,''),'(unclassified)') p, count(*)::int c FROM imported_stores
+  WHERE discovered_at > now()-interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`.catch(() => []);
+// Source-class: continuous organic (CT/DNS firehose) vs targeted platform mines vs bulk imports/seeds.
+// Mines + imports are the "special finds" we call out by name so a one-off burst (e.g. a Selar
+// sitemap mine) can't masquerade as steady new-market discovery.
+const srcClass = (s) =>
+  /^(ct_tail|vps_ct|woo_ct|cms_dns|common_crawl)/.test(s) ? "organic (CT/DNS)"
+  : /sitemap|_search|revip|woo_probe|paystack|selar|shopstar|bumpa|catlog|_cms$/.test(s) ? "targeted mine"
+  : /storeleads|storecensus|crux|import|sheet/.test(s) ? "import/seed"
+  : "other";
+const classAgg = {};
+for (const r of mixSrc) classAgg[srcClass(r.s)] = (classAgg[srcClass(r.s)] ?? 0) + r.c;
+const special = mixSrc.filter((r) => srcClass(r.s) === "targeted mine" || srcClass(r.s) === "import/seed").slice(0, 4);
+
 const cov = await sql`SELECT upper(country) c,
     count(*)::int live,
     count(*) FILTER (WHERE discovered_at > now()-interval '7 days')::int new7,
@@ -138,6 +165,19 @@ L.push(`   • ${n(disc.legacy7)} legacy        — older, or launch date unknow
 L.push(`Scanned so far (of this week's ${n(disc.d7)} finds):`);
 L.push(`   liveness ${pctS(disc.sc_live, disc.d7)} (${n(disc.sc_live)})  ·  payments ${pctS(disc.sc_pay, disc.d7)} (${n(disc.sc_pay)})  ·  catalog ${pctS(disc.sc_cat, disc.d7)} (${n(disc.sc_cat)})`);
 L.push(`   awaiting first liveness scan: ${n(Math.max(0, disc.d7 - disc.sc_live))}`);
+L.push(``);
+
+// 1b · DISCOVERY MIX (platform / source-class / global geo / CMS)
+const mixTot = mix.shop + mix.nonshop + mix.unknownp;
+L.push(`━━ 1b · DISCOVERY MIX — are we catching new across geos & CMSs? ━━`);
+L.push(`Platform:  Shopify ${pctS(mix.shop, mixTot)} (${n(mix.shop)})  ·  non-Shopify ${pctS(mix.nonshop, mixTot)} (${n(mix.nonshop)})  ·  unclassified ${pctS(mix.unknownp, mixTot)} (${n(mix.unknownp)})`);
+L.push(`Stream:    ${Object.entries(classAgg).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${n(v)}`).join("   ·   ")}`);
+if (special.length) L.push(`⚑ special finds / imports: ${special.map((r) => `${r.s} ${n(r.c)}`).join("   ·   ")}`);
+L.push(`By geo (global · count · Shopify% · launched<90d%):`);
+for (const r of mixGeo) L.push(`   ${r.c.padEnd(4)} ${n(r.cnt).padStart(8)} · shop ${pctS(r.shop, r.cnt).padStart(4)} · new ${pctS(r.nw, r.cnt).padStart(4)}`);
+L.push(`By CMS:    ${mixCms.map((r) => `${r.p} ${n(r.c)}`).join("   ·   ")}`);
+L.push(`(non-Shopify discovery outside Africa/JP is near-zero by design: CT only lands Shopify globally;`);
+L.push(` non-Shopify is routed onward only for focus-market ccTLDs — the global non-Shopify firehose is OFF.)`);
 L.push(``);
 
 // 2 · COVERAGE PROGRESS
