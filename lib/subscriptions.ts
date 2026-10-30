@@ -6,6 +6,7 @@
  */
 
 import { db } from "./db";
+import { planOf, resolvePlan, type PlanKey } from "./plans.ts";
 import { getStore } from "./store";
 
 export const TRIAL_DAYS = 7;
@@ -38,24 +39,30 @@ export async function listSubscribers(): Promise<Subscriber[]> {
 }
 
 /** Admin actions on a subscriber's access (used by /api/admin/subscriber). */
-export type SubscriberAction = "trial" | "activate" | "cancel" | "makePro" | "makeStarter";
+/** Admin actions on a subscriber's access (used by /api/admin/subscriber). `setPlan:<key>`
+ *  replaced the old makePro/makeStarter pair so adding a tier needs no new action. */
+export type SubscriberAction = "trial" | "activate" | "cancel" | `setPlan:${PlanKey}`;
 export async function applyAdminAction(email: string, action: SubscriberAction): Promise<Subscriber> {
   const in7Days = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
+  if (action.startsWith("setPlan:")) {
+    return upsertSubscriber(email, { plan: resolvePlan(action.slice("setPlan:".length)) });
+  }
   switch (action) {
     case "trial":
-      return upsertSubscriber(email, { plan: "pro", status: "trialing", trialEndsAt: in7Days });
+      // Trials land on Intelligence — the tier we want people to evaluate.
+      return upsertSubscriber(email, { plan: "intelligence", status: "trialing", trialEndsAt: in7Days });
     case "activate":
-      return upsertSubscriber(email, { plan: "pro", status: "active" });
+      return upsertSubscriber(email, { plan: "intelligence", status: "active" });
     case "cancel":
       return upsertSubscriber(email, { status: "cancelled" });
-    case "makePro":
-      return upsertSubscriber(email, { plan: "pro" });
-    case "makeStarter":
-      return upsertSubscriber(email, { plan: "starter" });
+    default:
+      return upsertSubscriber(email, {});
   }
 }
 
-export type PlanKey = "starter" | "pro";
+// PlanKey now lives in lib/plans.ts alongside the entitlements, so the plan name and
+// what it permits cannot drift apart again. Re-exported for existing importers.
+export type { PlanKey };
 export type Status = "trialing" | "active" | "past_due" | "cancelled" | "expired";
 
 export type Subscriber = {
@@ -75,6 +82,8 @@ export type Subscriber = {
   updatedAt: string;
 };
 
+/** @deprecated Per-plan limits live in lib/plans.ts. Kept only so older imports
+ *  don't break mid-migration; delete once nothing references it. */
 export const EXPORT_LIMIT_PRO = 200;
 
 function currentMonth(): string {
@@ -84,35 +93,55 @@ function currentMonth(): string {
 /** Remaining export allowance this month (0 for non-Pro). */
 export function exportQuota(s: Subscriber | null): {
   used: number;
-  limit: number;
-  remaining: number;
+  limit: number | null;
+  remaining: number | null;
 } {
-  const limit = s && s.plan === "pro" ? EXPORT_LIMIT_PRO : 0;
-  const used = s && s.exportMonth === currentMonth() ? s.exportUsed ?? 0 : 0;
-  return { used, limit, remaining: Math.max(0, limit - used) };
+  // Delegates to usageFor so there is one definition of "how much have they used".
+  const u = usageFor(s);
+  return { used: u.used, limit: u.limit, remaining: u.remaining };
 }
 
 /** Try to consume `n` export rows. Server-enforced; resets on month rollover. */
 export async function consumeExportQuota(
   email: string,
   n: number,
-): Promise<{ ok: boolean; remaining: number; limit: number; reason?: string }> {
+): Promise<{ ok: boolean; remaining: number | null; limit: number | null; reason?: string }> {
   const s = await getSubscriber(email);
-  if (!s || s.plan !== "pro" || !hasAccess(s)) {
-    return { ok: false, remaining: 0, limit: 0, reason: "Export is a Pro feature." };
+  if (!s || !hasAccess(s)) {
+    return { ok: false, remaining: 0, limit: 0, reason: "Your subscription doesn't include export." };
   }
+  const plan = planOf(s.plan);
+  const limit = plan.exportLimit;
   const month = currentMonth();
   const used = s.exportMonth === month ? s.exportUsed ?? 0 : 0;
-  if (used + n > EXPORT_LIMIT_PRO) {
+
+  // Unmetered plans are still COUNTED — usage is shown to the customer, and crossing
+  // USAGE_ALERT_ROWS tells us to look. We never refuse: Store Leads gates export by plan
+  // rather than capping it, and an advertised cap we'd have to honour is worse than an
+  // unadvertised threshold we can act on.
+  if (limit == null) {
+    await upsertSubscriber(email, { exportMonth: month, exportUsed: used + n });
+    return { ok: true, remaining: null, limit: null };
+  }
+
+  if (used + n > limit) {
     return {
       ok: false,
-      remaining: EXPORT_LIMIT_PRO - used,
-      limit: EXPORT_LIMIT_PRO,
-      reason: `Monthly export limit reached (${EXPORT_LIMIT_PRO}/mo).`,
+      remaining: limit - used,
+      limit,
+      reason: `That's ${n.toLocaleString()} stores but only ${(limit - used).toLocaleString()} left on ${plan.label} this month (${limit.toLocaleString()}/mo).`,
     };
   }
   await upsertSubscriber(email, { exportMonth: month, exportUsed: used + n });
-  return { ok: true, remaining: EXPORT_LIMIT_PRO - used - n, limit: EXPORT_LIMIT_PRO };
+  return { ok: true, remaining: limit - used - n, limit };
+}
+
+/** Usage for the account page — what the customer sees. `limit: null` = unmetered. */
+export function usageFor(s: Subscriber | null): { used: number; limit: number | null; remaining: number | null; plan: ReturnType<typeof planOf> } {
+  const plan = planOf(s?.plan);
+  const used = s && s.exportMonth === currentMonth() ? s.exportUsed ?? 0 : 0;
+  const limit = plan.exportLimit;
+  return { used, limit, remaining: limit == null ? null : Math.max(0, limit - used), plan };
 }
 
 const key = (email: string) => email.trim().toLowerCase();
@@ -143,7 +172,7 @@ export async function upsertSubscriber(
 
   const next: Subscriber = {
     email: k,
-    plan: patch.plan ?? existing?.plan ?? "starter",
+    plan: patch.plan ?? existing?.plan ?? "leads",
     status: patch.status ?? existing?.status ?? "trialing",
     trialEndsAt: patch.trialEndsAt ?? existing?.trialEndsAt ?? null,
     customerCode: patch.customerCode ?? existing?.customerCode,

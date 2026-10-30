@@ -182,11 +182,22 @@ export type ExploreInitial = {
   status?: "migrated" | "dead"; checkedDays?: number;
 };
 
-export function Explorer({ initialData, initial, showStats }: {
+export type ExportUsage = {
+  used: number;
+  /** null = unmetered (Intelligence, Partner) — we count, we don't refuse. */
+  limit: number | null;
+  remaining: number | null;
+  planLabel: string;
+};
+
+export function Explorer({ initialData, initial, showStats, usage: usageProp }: {
   initialData: BrowseResult; initial?: ExploreInitial;
   /** Render the live stat tiles above the table. The dashboard turns this on;
    *  /admin/explore leaves it off (it has its own header). */
   showStats?: boolean;
+  /** This seat's export allowance, resolved server-side. Omitted for admins, who
+   *  export unmetered. */
+  usage?: ExportUsage;
 }) {
   const [q, setQ] = useState(initial?.q ?? "");
   // The search box updates `q` instantly (responsive input), but the heavy work — the full
@@ -224,6 +235,10 @@ export function Explorer({ initialData, initial, showStats }: {
   const togglePick = (domain: string) => setPicked((prev) => { const n = new Set(prev); n.has(domain) ? n.delete(domain) : n.add(domain); return n; });
   const [data, setData] = useState<BrowseResult>(initialData);
   const [loading, setLoading] = useState(false);
+  // Export allowance, kept live: every export response carries the new figure, so the
+  // customer sees what a download cost without a reload.
+  const [usage, setUsage] = useState<ExportUsage | undefined>(usageProp);
+  const [exportMsg, setExportMsg] = useState("");
 
   const toggle = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (v: string) =>
     set((prev) => { const n = new Set(prev); n.has(v) ? n.delete(v) : n.add(v); return n; });
@@ -317,8 +332,31 @@ export function Explorer({ initialData, initial, showStats }: {
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
   const [exporting, setExporting] = useState(false);
+  // How many rows THIS click would export: the ticked rows, or the whole filtered set.
+  const pendingRows = picked.size > 0 ? picked.size : data.total;
+  const overAllowance = usage?.remaining != null && pendingRows > usage.remaining;
+  // Metered plans show what's left; unmetered ones show what's been used. Both read from the
+  // plan, so adding a tier needs no change here.
+  const usageLabel = !usage
+    ? null
+    : usage.limit == null
+      ? `${usage.used.toLocaleString()} leads exported this month · ${usage.planLabel}`
+      : `${(usage.remaining ?? 0).toLocaleString()} of ${usage.limit.toLocaleString()} leads left this month · ${usage.planLabel}`;
+
+  // Both export surfaces report what the download cost and what is left.
+  const noteRemaining = (rows: string | null, remaining: string | null) => {
+    const n = Number(rows);
+    setUsage((u) => {
+      if (!u) return u;
+      const used = Number.isFinite(n) ? u.used + n : u.used;
+      const left = remaining == null || remaining === "unmetered" ? null : Number(remaining);
+      return { ...u, used, remaining: left == null || Number.isNaN(left) ? u.remaining : left };
+    });
+  };
+
   const exportCsv = async () => {
     setExporting(true);
+    setExportMsg("");
     try {
       // Ticked rows → export just those; nothing ticked → the whole filtered set.
       const body = picked.size > 0 ? { domains: [...picked] } : filters;
@@ -326,7 +364,17 @@ export function Explorer({ initialData, initial, showStats }: {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        // The server is the only authority on quota; surface its exact wording (it names
+        // how many rows are left) rather than guessing client-side.
+        const j = await res.json().catch(() => ({}));
+        setExportMsg(j.error ?? "Export failed");
+        if (j.quota && typeof j.remaining === "number") {
+          setUsage((u) => (u ? { ...u, remaining: j.remaining, used: (u.limit ?? 0) - j.remaining } : u));
+        }
+        return;
+      }
+      noteRemaining(res.headers.get("X-Export-Rows"), res.headers.get("X-Export-Remaining"));
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -349,7 +397,8 @@ export function Explorer({ initialData, initial, showStats }: {
       const body = { sheet: sheet.trim(), filters: picked.size > 0 ? { domains: [...picked] } : filters };
       const res = await fetch("/api/leads/export-sheet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { alert(j.error || "Export failed"); return; }
+      if (!res.ok) { setExportMsg(j.error || "Export failed"); return; }
+      if (typeof j.rows === "number") noteRemaining(String(j.rows), j.remaining == null ? "unmetered" : String(j.remaining));
       try { localStorage.setItem("terrainSheetUrl", sheet.trim()); } catch { /* private window */ }
       window.open(j.url as string, "_blank");
     } finally { setSheetBusy(false); }
@@ -548,14 +597,29 @@ export function Explorer({ initialData, initial, showStats }: {
                 </>
               )}
             </div>
-            <button onClick={exportCsv} disabled={exporting} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
+            <button onClick={exportCsv} disabled={exporting || overAllowance} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
               {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
             </button>
-            <button onClick={exportSheet} disabled={sheetBusy} title="Export the filtered set into a Google Sheet" className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
+            <button onClick={exportSheet} disabled={sheetBusy || overAllowance} title="Export the filtered set into a Google Sheet" className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
               {sheetBusy ? "Exporting…" : "→ Google Sheets"}
             </button>
           </div>
         </div>
+
+        {/* Export allowance. Shown next to the buttons rather than buried in /account, because
+            this is the moment the number matters. Over-allowance disables both surfaces and says
+            what to do instead — a refusal after a 40k-row query wastes everyone's time. */}
+        {(usageLabel || exportMsg) && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            {usageLabel && <span className="text-cream/45">{usageLabel}</span>}
+            {overAllowance && usage?.remaining != null && (
+              <span className="text-orange/90">
+                That&rsquo;s {pendingRows.toLocaleString()} rows and {usage.remaining.toLocaleString()} left — tick up to {usage.remaining.toLocaleString()} rows, or narrow the filters.
+              </span>
+            )}
+            {exportMsg && <span className="text-orange">{exportMsg}</span>}
+          </div>
+        )}
 
         <div className={`mt-4 overflow-x-auto rounded-2xl border border-cream/10 transition-opacity ${loading ? "opacity-60" : ""}`}>
           <table className="w-full min-w-[980px] text-left text-sm">

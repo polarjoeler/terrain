@@ -50,6 +50,10 @@ export type SortKey = "new" | "score" | "sales" | "name" | "launched" | "discove
 export type BrowseFilters = {
   q?: string;
   country?: string[]; platform?: string[]; category?: string[];
+  /** PLAN SCOPE — the platforms the subscriber's plan permits. Distinct from `platform`,
+   *  which is the user's own filter: this one is a ceiling they cannot widen, injected
+   *  server-side from the subscriber. Leave undefined for admin/unscoped reads. */
+  planPlatforms?: string[];
   band?: string[]; theme?: string[]; city?: string[];
   payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[]; tech?: string[];
   activity?: string[]; hosting?: string[];
@@ -146,7 +150,19 @@ function buildWhere(f: BrowseFilters) {
   if (f.domains?.length) conds.push(sql`domain = ANY(${f.domains})`);
   if (f.q) conds.push(sql`(domain ILIKE ${"%" + f.q + "%"} OR name ILIKE ${"%" + f.q + "%"})`);
   if (f.country?.length) conds.push(sql`country = ANY(${f.country})`);
-  if (f.platform?.length) conds.push(sql`platform = ANY(${f.platform})`);
+  // Plan scope first, as a hard ceiling. Applied even when the user sets no platform
+  // filter, so a Shopify-only subscriber can never reach the 32,027 WooCommerce rows that
+  // Partner pays for — including via a hand-crafted query string.
+  if (f.planPlatforms?.length) conds.push(sql`platform = ANY(${f.planPlatforms})`);
+  // The user's own filter narrows WITHIN that ceiling; intersecting rather than replacing
+  // means ?platform=WooCommerce from a Leads account yields nothing, not everything.
+  if (f.platform?.length) {
+    const allowed = f.planPlatforms?.length
+      ? f.platform.filter((p) => f.planPlatforms!.some((a) => a.toLowerCase() === p.toLowerCase()))
+      : f.platform;
+    // An entirely out-of-scope request must return no rows, not fall through unfiltered.
+    conds.push(allowed.length ? sql`platform = ANY(${allowed})` : sql`false`);
+  }
   if (f.category?.length) conds.push(sql`category = ANY(${f.category})`);
   if (f.city?.length) conds.push(sql`city = ANY(${f.city})`);
   if (f.theme?.length) conds.push(sql`btrim(theme) ILIKE ANY(${f.theme})`);
@@ -462,7 +478,9 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
            ${sql.unsafe(bestEmailSql)} AS email, contact_type, contact_name, contact_role,
            whatsapp, contact_phone, contact_form_url, contact_mx_ok, contact_mx_provider,
            contact_shared_count, contact_email_guess, contact_guess_status, payments, shipping_providers,
-           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin
+           logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin,
+           price_min, price_max, products_sold, plan AS shopify_plan, description,
+           instagram_followers, facebook_followers, first_product_at, first_seen
     FROM imported_stores WHERE ${where}
     ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
     LIMIT ${EXPORT_CAP}`;
@@ -473,26 +491,52 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // `shipping_providers` is the Shopify checkout read; `logistics_apps` is the cross-platform homepage
   // carrier fingerprint (Bob Go, Pargo, TUNL…). Merge them so non-Shopify stores show shipping too.
   const shipMerged = (a: unknown, b: unknown) => [...new Set(`${a ?? ""};${b ?? ""}`.split(";").map((x) => x.trim()).filter(Boolean))].join("; ") || null;
+  // `date` columns arrive as Date objects from postgres.js; a raw Date stringifies to the
+  // full locale form, which spreadsheets then refuse to sort. Emit plain ISO days.
+  const dayCell = (v: unknown) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
   // contact_type is exported next to the address on purpose: a CSV of bare emails is exactly the
   // artefact customers complain about, because nothing in it says which rows are worth a send.
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "aov_usd", "est_monthly_sales_usd", "revenue_band", "plus", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "facebook", "tiktok", "linkedin"];
+  // price_min/price_max/currency are the NATIVE-currency catalogue spread; aov_usd is the
+  // normalised one. Both ship: the native pair is what a merchant recognises, the USD one is
+  // what sorts across markets. shopify_plan is the plan-tier ladder (see the plan-detection
+  // work), not Terrain's subscription plan.
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
     return [r.domain, r.name, r.category, r.country, r.city, r.platform, r.activity_tier, r.activity_score,
-      r.hosting_provider, r.platform_version, r.theme, r.product_count, aov == null ? null : Math.round(aov),
-      sales, revenueBand(sales), r.plus, r.email, r.contact_type, r.contact_name, r.contact_role,
+      r.hosting_provider, r.platform_version, r.theme, r.product_count,
+      r.price_min == null ? null : Number(r.price_min), r.price_max == null ? null : Number(r.price_max), r.currency,
+      aov == null ? null : Math.round(aov),
+      sales, r.products_sold == null ? null : Number(r.products_sold), revenueBand(sales), r.plus, r.shopify_plan,
+      r.email, r.contact_type, r.contact_name, r.contact_role,
       r.whatsapp, r.contact_phone, r.contact_form_url,
       r.contact_mx_ok == null ? null : (r.contact_mx_ok ? "yes" : "no — no MX, will bounce"),
       r.contact_mx_provider, r.contact_shared_count, r.contact_email_guess, r.contact_guess_status,
       r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
-      r.plugins, r.technologies, r.instagram, r.facebook, r.tiktok, r.linkedin] as ExportCell[];
+      r.plugins, r.technologies,
+      r.instagram, r.instagram_followers == null ? null : Number(r.instagram_followers),
+      r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
+      r.tiktok, r.linkedin,
+      r.description, dayCell(r.first_product_at), dayCell(r.first_seen)] as ExportCell[];
   });
+  // Header and row width drift silently — two lists kept in one order by hand. Catch it here
+  // rather than in a customer's spreadsheet.
+  if (rows.length && rows[0].length !== header.length) {
+    throw new Error(`export column drift: ${header.length} headers, ${rows[0].length} cells`);
+  }
   return { header, rows };
+}
+
+/** Serialise already-fetched rows. Separate from browseExportCsv so a caller that needs the
+ *  exact row COUNT (export metering) can count rows rather than counting newlines — a cell
+ *  holding a newline, which `description` routinely does, makes a line count wrong. */
+export function toCsv(header: string[], rows: ExportCell[][]): string {
+  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return [header.join(","), ...rows.map((row) => row.map(esc).join(","))].join("\n");
 }
 
 export async function browseExportCsv(f: BrowseFilters = {}): Promise<string> {
   const { header, rows } = await browseExportRows(f);
-  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  return [header.join(","), ...rows.map((row) => row.map(esc).join(","))].join("\n");
+  return toCsv(header, rows);
 }

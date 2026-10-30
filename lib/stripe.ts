@@ -8,6 +8,7 @@
 
 import Stripe from "stripe";
 import { TRIAL_DAYS, type PlanKey, type Status } from "./subscriptions";
+import { resolvePlan } from "./plans";
 
 let _stripe: Stripe | null = null;
 
@@ -20,22 +21,48 @@ export function stripe(): Stripe {
   return _stripe;
 }
 
-export function priceIdFor(plan: PlanKey): string | undefined {
-  return plan === "pro"
-    ? process.env.STRIPE_PRICE_PRO
-    : process.env.STRIPE_PRICE_STARTER;
+/** Stripe price id per plan and billing period. Env-driven so the same code runs against
+ *  test and live keys. Annual exists only for Intelligence and Partner — the 2027 promo
+ *  (4 months free); Leads is monthly-only on purpose. */
+const PRICE_ENV: Record<PlanKey, { month: string; year?: string }> = {
+  leads: { month: "STRIPE_PRICE_LEADS" },
+  intelligence: { month: "STRIPE_PRICE_INTELLIGENCE", year: "STRIPE_PRICE_INTELLIGENCE_YEAR" },
+  partner: { month: "STRIPE_PRICE_PARTNER", year: "STRIPE_PRICE_PARTNER_YEAR" },
+};
+
+/** Add-ons billed as extra subscription items, not plans. */
+export const SEAT_PRICE_ENV = "STRIPE_PRICE_SEAT";
+export const ADDON_RADAR_PRICE_ENV = "STRIPE_PRICE_ADDON_RADAR";
+
+export type Period = "month" | "year";
+
+export function priceIdFor(plan: PlanKey, period: Period = "month"): string | undefined {
+  const map = PRICE_ENV[plan];
+  const name = period === "year" ? map.year : map.month;
+  if (!name) return undefined;
+  const id = process.env[name];
+  if (id) return id;
+  // Transitional: the first two price ids were created as STARTER/PRO before the tiers
+  // were renamed. Fall back so a half-migrated environment still checks out rather than
+  // 500ing, and so the rename can ship ahead of creating the new Stripe objects.
+  if (period === "month" && plan === "leads") return process.env.STRIPE_PRICE_STARTER;
+  if (period === "month" && plan === "intelligence") return process.env.STRIPE_PRICE_PRO;
+  return undefined;
 }
 
 /** Hosted Checkout URL for a subscription with a card-required 7-day trial. */
 export async function createCheckoutSession(opts: {
   email: string;
   plan: PlanKey;
+  /** month (default) or the 2027 annual price, where the plan offers one. */
+  period?: Period;
   origin: string;
 }): Promise<string> {
-  const price = priceIdFor(opts.plan);
+  const period = opts.period ?? "month";
+  const price = priceIdFor(opts.plan, period);
   if (!price) {
     throw new Error(
-      `No Stripe price for '${opts.plan}'. Run scripts/setup-stripe.mjs and set STRIPE_PRICE_*`,
+      `No Stripe price for '${opts.plan}' (${period}). Run scripts/setup-stripe.mjs and set STRIPE_PRICE_*`,
     );
   }
   const session = await stripe().checkout.sessions.create({
@@ -46,9 +73,9 @@ export async function createCheckoutSession(opts: {
     payment_method_collection: "always",
     subscription_data: {
       trial_period_days: TRIAL_DAYS,
-      metadata: { plan: opts.plan, product: "terrain" },
+      metadata: { plan: opts.plan, period, product: "terrain" },
     },
-    metadata: { plan: opts.plan, email: opts.email },
+    metadata: { plan: opts.plan, period, email: opts.email },
     allow_promotion_codes: true,
     success_url: `${opts.origin}/dashboard?welcome=1`,
     cancel_url: `${opts.origin}/billing`,
@@ -101,5 +128,7 @@ export function mapStatus(s: Stripe.Subscription.Status): Status {
 }
 
 export function planFromMetadata(meta: Stripe.Metadata | null | undefined): PlanKey {
-  return meta?.plan === "pro" ? "pro" : "starter";
+  // resolvePlan maps legacy starter/pro metadata on subscriptions created before the
+  // rename, so existing Stripe objects keep resolving to the right entitlements.
+  return resolvePlan(meta?.plan);
 }
