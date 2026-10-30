@@ -96,11 +96,18 @@ const union = (existing, found) => {
 
 async function main() {
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONC + 1 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONC + 1,
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 3000 } });
   const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
+  const hasCol = async (c) => (await sql`SELECT 1 FROM information_schema.columns
+    WHERE table_name='imported_stores' AND column_name=${c} LIMIT 1`).length > 0;
   try {
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS homepage_text TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS deep_enriched_at TIMESTAMPTZ`);
+    // A no-op ADD COLUMN IF NOT EXISTS STILL grabs ACCESS EXCLUSIVE and, behind a live writer, queues —
+    // jamming every other query on the table (the lock-jam class). So skip the ALTER when the column is
+    // already there (the normal case); the short lock_timeout above makes even a needed ALTER fail fast
+    // rather than freeze the table. Critical now that a 2nd machine (Lucy/Rain) runs this concurrently.
+    if (!(await hasCol("homepage_text"))) await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS homepage_text TEXT`);
+    if (!(await hasCol("deep_enriched_at"))) await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS deep_enriched_at TIMESTAMPTZ`);
 
     // Default scope: every non-Shopify CMS (own-domain fetch, no Shopify-edge budget).
     const platFilter = platArg
