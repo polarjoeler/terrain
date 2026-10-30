@@ -458,20 +458,34 @@ function personName(v, brands, localParts = []) {
 // `shaped` entries are the Shopify-shaped ones; we try them first on a Shopify store and last
 // otherwise, and abandon them entirely after two 404s (the platform label was wrong, or the
 // merchant renamed their pages) rather than spending the whole budget on a 404 page.
+// The people/story pages (/team, /our-story, /meet-the-team, /leadership …) carry a NAMED human
+// far more often than contact/policy pages, which mostly yield the inbox. They sit after the
+// proven contact+about paths, so the default budget-8 nightly sweep still spends its fetches on
+// the email-rich pages first and only digs into people-pages on a store that 404'd earlier or is
+// still unnamed; a targeted `--max-fetches 16` re-run reaches them deliberately for a focus set.
 const SURFACE = [
   { path: "/pages/contact", curated: true, shaped: true },
   { path: "/policies/contact-information", curated: true, shaped: true },
   { path: "/pages/contact-us", curated: true, shaped: true },
   { path: "/pages/about", curated: true, shaped: true },
-  { path: "/policies/refund-policy", curated: true, shaped: true },
   { path: "/blogs/news.atom", curated: false, atom: true, shaped: true },
   { path: "/pages/about-us", curated: true, shaped: true },
+  { path: "/pages/our-team", curated: true, shaped: true, deep: true },
+  { path: "/pages/team", curated: true, shaped: true, deep: true },
+  { path: "/pages/meet-the-team", curated: true, shaped: true, deep: true },
+  { path: "/pages/our-story", curated: true, shaped: true, deep: true },
+  { path: "/policies/refund-policy", curated: true, shaped: true },
   { path: "/policies/terms-of-service", curated: true, shaped: true },
   { path: "/policies/legal_notice", curated: true, shaped: true },
   { path: "/contact", curated: true },
   { path: "/contact-us", curated: true },
   { path: "/about", curated: true },
   { path: "/about-us", curated: true },
+  { path: "/our-team", curated: true },
+  { path: "/team", curated: true },
+  { path: "/meet-the-team", curated: true },
+  { path: "/our-story", curated: true },
+  { path: "/leadership", curated: true },
 ];
 const orderedSurface = (isShopify) => {
   const shaped = SURFACE.filter((s) => s.shaped), generic = SURFACE.filter((s) => !s.shaped);
@@ -564,14 +578,14 @@ async function crawlStore(store, nextProxy) {
   let shapedMisses = 0;
   for (const s of orderedSurface(isShopify)) {
     if (fetches >= MAX_FETCHES || satisfied()) break;
-    if (s.shaped && shapedMisses >= 2) continue;     // not Shopify-shaped after all — stop guessing
+    if (s.shaped && !s.deep && shapedMisses >= 2) continue; // not Shopify-shaped after all — stop guessing (deep people-pages exempt: a missing /pages/team isn't evidence of shape)
     if (DELAY_MS) await sleep(DELAY_MS + Math.floor(Math.random() * DELAY_MS));
     const r = await grab(s.path);
     if (throttled(r)) { rateLimited = true; break; }  // stop; keep what we have, don't record a verdict
     if (!r || r.status < 200 || r.status >= 300) {
       // Only a real "no such page" is evidence about the store's shape. A 429 or a network null
       // says nothing, and counting it abandoned the Shopify paths on perfectly Shopify stores.
-      if (s.shaped && r && (r.status === 404 || r.status === 410)) shapedMisses++;
+      if (s.shaped && !s.deep && r && (r.status === 404 || r.status === 410)) shapedMisses++;
       continue;
     }
     reachable = true;

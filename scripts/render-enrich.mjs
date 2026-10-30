@@ -93,7 +93,10 @@ async function hasCol(sql, c) {
 }
 
 async function renderOne(browser, domain) {
-  const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-ZA" });
+  // Many SA giants serve a cert whose CN doesn't match the apex/www host we try (faithful-to-nature,
+  // etc.). We only READ these homepages (never send credentials), so ignoring cert mismatches recovers
+  // that tail at no meaningful risk. User-authorised 2026-10-30.
+  const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-ZA", ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   const hosts = new Set();
   page.on("request", (r) => { try { hosts.add(new URL(r.url()).host.toLowerCase()); } catch { /* data: etc */ } });
