@@ -55,30 +55,40 @@ export function usdSqlExpr(): string {
 // "New" is the no-data floor: a freshly discovered store has no revenue signal yet, so instead of a
 // blank "—" (or a fabricated estimate) we band it "New" and DISPLAY it as the honest "up to $10k /
 // R0–R150k"-ish range (see bandDisplay). Listed last — it's the unknown floor, below <$100.
-export const REVENUE_BANDS = ["$100K+", "$25K–100K", "$5K–25K", "$1K–5K", "$100–1K", "<$100", "New"] as const;
+// ZAR-native monthly-GMV bands (set by Joel 2026-10-30). SA is the home market and merchants think
+// in rands, so the canonical scale is ZAR, not USD. revenueBand() receives a USD-converted value, so
+// the thresholds are the USD equivalents of each rand boundary (× FX.ZAR = 0.054); bandSqlExpr uses
+// the same cuts on the SQL USD expression. Headroom to R25m+/mo so enterprise retailers band honestly.
+export const REVENUE_BANDS = ["R25m+", "R10m–R25m", "R5m–R10m", "R2.5m–R5m", "R1m–R2.5m", "R500k–R1m", "R250k–R500k", "R100k–R250k", "R0–R100k", "New"] as const;
 export type RevenueBand = (typeof REVENUE_BANDS)[number] | "—";
 
 export function revenueBand(n: number | null): RevenueBand {
-  if (n == null) return "New";
-  if (n >= 1e5) return "$100K+";
-  if (n >= 25e3) return "$25K–100K";
-  if (n >= 5e3) return "$5K–25K";
-  if (n >= 1e3) return "$1K–5K";
-  if (n >= 100) return "$100–1K";
-  return "<$100";
+  if (n == null) return "New";       // n is monthly GMV in USD; thresholds = rand boundary × 0.054
+  if (n >= 1_350_000) return "R25m+";
+  if (n >= 540_000) return "R10m–R25m";
+  if (n >= 270_000) return "R5m–R10m";
+  if (n >= 135_000) return "R2.5m–R5m";
+  if (n >= 54_000) return "R1m–R2.5m";
+  if (n >= 27_000) return "R500k–R1m";
+  if (n >= 13_500) return "R250k–R500k";
+  if (n >= 5_400) return "R100k–R250k";
+  return "R0–R100k";
 }
 
 /** Revenue band → pill colour (richest lilac at the top → faint cream at the bottom), used by the
  *  leads table. Co-located with the band scale it colours so the two can't drift apart. */
 export function bandTone(band: RevenueBand): string {
   switch (band) {
-    case "$100K+": return "bg-lilac/25 text-lilac border-lilac/40";
-    case "$25K–100K": return "bg-cyan/15 text-cyan border-cyan/30";
-    case "$5K–25K": return "bg-mint/15 text-mint border-mint/30";
-    case "$1K–5K": return "bg-orange/15 text-orange border-orange/30";
-    case "$100–1K": return "bg-cream/10 text-cream/50 border-cream/15";
+    case "R25m+": return "bg-lilac/40 text-lilac border-lilac/60";
+    case "R10m–R25m": return "bg-lilac/30 text-lilac border-lilac/50";
+    case "R5m–R10m": return "bg-lilac/25 text-lilac border-lilac/40";
+    case "R2.5m–R5m": return "bg-cyan/20 text-cyan border-cyan/35";
+    case "R1m–R2.5m": return "bg-cyan/15 text-cyan border-cyan/30";
+    case "R500k–R1m": return "bg-mint/15 text-mint border-mint/30";
+    case "R250k–R500k": return "bg-orange/15 text-orange border-orange/30";
+    case "R100k–R250k": return "bg-cream/10 text-cream/50 border-cream/15";
     case "New": return "bg-mint/20 text-mint border-mint/40";   // fresh discovery — the primary driver
-    default: return "bg-cream/5 text-cream/30 border-cream/10";
+    default: return "bg-cream/5 text-cream/30 border-cream/10";  // R0–R100k + fallback
   }
 }
 
@@ -86,20 +96,23 @@ export function bandTone(band: RevenueBand): string {
 export function bandSqlExpr(): string {
   const usd = usdSqlExpr();
   return `CASE WHEN estimated_monthly_sales IS NULL THEN 'New'
-    WHEN ${usd} >= 100000 THEN '$100K+'
-    WHEN ${usd} >= 25000  THEN '$25K–100K'
-    WHEN ${usd} >= 5000   THEN '$5K–25K'
-    WHEN ${usd} >= 1000   THEN '$1K–5K'
-    WHEN ${usd} >= 100    THEN '$100–1K'
-    ELSE '<$100' END`;
+    WHEN ${usd} >= 1350000 THEN 'R25m+'
+    WHEN ${usd} >= 540000  THEN 'R10m–R25m'
+    WHEN ${usd} >= 270000  THEN 'R5m–R10m'
+    WHEN ${usd} >= 135000  THEN 'R2.5m–R5m'
+    WHEN ${usd} >= 54000   THEN 'R1m–R2.5m'
+    WHEN ${usd} >= 27000   THEN 'R500k–R1m'
+    WHEN ${usd} >= 13500   THEN 'R250k–R500k'
+    WHEN ${usd} >= 5400    THEN 'R100k–R250k'
+    ELSE 'R0–R100k' END`;
 }
 
-/** USD monthly-GMV edges per band ([min, max]; max null = open-ended). "New" is the no-data floor —
- *  an honest "up to $10k, probably early-stage" range, not a fabricated point estimate. */
-const BAND_USD: Record<RevenueBand, [number, number | null]> = {
-  "$100K+": [100000, null], "$25K–100K": [25000, 100000], "$5K–25K": [5000, 25000],
-  "$1K–5K": [1000, 5000], "$100–1K": [100, 1000], "<$100": [0, 100],
-  "New": [0, 10000], "—": [0, 0],
+/** ZAR monthly-GMV edges per band ([min, max] in rand; max null = open-ended). The canonical scale is
+ *  ZAR; bandDisplay converts to the store's local currency for non-ZA rows. "New" = no-data floor. */
+const BAND_ZAR: Record<RevenueBand, [number, number | null]> = {
+  "R25m+": [25e6, null], "R10m–R25m": [10e6, 25e6], "R5m–R10m": [5e6, 10e6], "R2.5m–R5m": [2.5e6, 5e6],
+  "R1m–R2.5m": [1e6, 2.5e6], "R500k–R1m": [5e5, 1e6], "R250k–R500k": [25e4, 5e5],
+  "R100k–R250k": [1e5, 25e4], "R0–R100k": [0, 1e5], "New": [0, 1e5], "—": [0, 0],
 };
 const CCY_SYMBOL: Record<string, string> = { USD: "$", ZAR: "R", NGN: "₦", KES: "KSh" };
 
@@ -116,13 +129,14 @@ function compact(n: number): string {
  *  $1K–5K store in ZA → { local: "R19k–R93k", usd: "$1k–5k" }. We band in USD (one scale across
  *  markets) but merchants think in rands/naira/shillings, so the row shows local first, USD second. */
 export function bandDisplay(band: RevenueBand, country: string | null): { local: string; usd: string } {
-  const [lo, hi] = BAND_USD[band] ?? [0, 0];
-  const ccy = CCY_BY_COUNTRY[(country ?? "").toUpperCase()] ?? "USD";
-  const sym = CCY_SYMBOL[ccy] ?? "$";
-  const rate = FX[ccy] ?? 1;                 // USD per 1 local unit
+  const [loZ, hiZ] = BAND_ZAR[band] ?? [0, 0];
+  const ccy = CCY_BY_COUNTRY[(country ?? "").toUpperCase()] ?? "ZAR";
+  const sym = CCY_SYMBOL[ccy] ?? "R";
+  const rate = FX[ccy] ?? FX.ZAR;            // USD per 1 local unit
+  const toLocal = (z: number) => (z * FX.ZAR) / rate;   // ZAR → USD → local (ZA: unchanged)
   const fmt = (s: string, a: number, b: number | null) => (b == null ? `${s}${compact(a)}+` : `${s}${compact(a)}–${s}${compact(b)}`);
   return {
-    local: ccy === "USD" ? fmt("$", lo, hi) : fmt(sym, lo / rate, hi == null ? null : hi / rate),
-    usd: fmt("$", lo, hi),
+    local: fmt(sym, toLocal(loZ), hiZ == null ? null : toLocal(hiZ)),
+    usd: fmt("$", loZ * FX.ZAR, hiZ == null ? null : hiZ * FX.ZAR),
   };
 }
