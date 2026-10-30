@@ -88,7 +88,14 @@ async function fetchMonth(cc, month, mine) {
 }
 
 async function main() {
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4, idle_timeout: 20 });
+  // --promote is one big UPDATE (every matched store's crux_rank_month changes with a new month, so
+  // it can touch ~1M rows). The role-default statement_timeout is far shorter than that and silently
+  // kills it (cf. revenue-ballpark step 2). Give this connection a real budget, bound lock waits, and
+  // never let a wedged txn linger (per the DB-contention playbook).
+  const sql = postgres(process.env.DATABASE_URL, {
+    prepare: false, max: 4, idle_timeout: 20,
+    connection: { statement_timeout: 600000, lock_timeout: 4000, idle_in_transaction_session_timeout: 120000 },
+  });
   try {
     // New table — CREATE is cheap and takes no lock on imported_stores.
     await sql`CREATE TABLE IF NOT EXISTS crux_ranks (

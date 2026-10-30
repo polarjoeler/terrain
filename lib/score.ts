@@ -21,10 +21,10 @@
  *  a linked social profile (free off the homepage) plus follower counts where known, catalog depth,
  *  Shopify Plus, basket size (AOV), and recency of discovery.
  */
-import { usdExpr } from "./fx.ts";
+import { usdExpr, revExpr } from "./fx.ts";
 
 export function scoreExpr(): string {
-  const usd = usdExpr("estimated_monthly_sales");
+  const usd = revExpr();   // ballpark-first (modeled CrUX ladder), vendor estimate as fallback
   const aov = usdExpr("avg_product_price");
   return `LEAST(100, GREATEST(1, (
       GREATEST(

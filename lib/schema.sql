@@ -98,6 +98,12 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 -- rows per query and time out under worker write-load. (Added live 2026-09; kept here to persist.)
 CREATE INDEX IF NOT EXISTS idx_is_live_universe    ON imported_stores (country, platform, live_status) WHERE published;
 CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_checked_at DESC NULLS LAST);
+-- The customer-facing visibility gate (published AND real store), by country. The Explorer filters
+-- a PLAIN country=ANY(...) while insights/getHomeStats go through upper(country); both need an index
+-- or they fall to a 2.8M-row parallel seq scan (6.5-8s) that freezes the browse-cache warm job and
+-- takes the dashboard down (see the 2026-10-30 outage). Two partial indexes, one per casing path.
+CREATE INDEX IF NOT EXISTS idx_is_browse_country   ON imported_stores (country)        WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
+CREATE INDEX IF NOT EXISTS idx_is_browse_upper     ON imported_stores (upper(country)) WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
 -- Recent-activity reads for the /fleet live monitor (partial: only rows that have been touched),
 -- so "newest N enriched / hosting-resolved" is an index scan, not a 2.8M-row full scan.
 CREATE INDEX IF NOT EXISTS idx_is_ai_enriched      ON imported_stores (ai_enriched_at DESC) WHERE ai_enriched_at IS NOT NULL;

@@ -111,6 +111,17 @@ const confFor = (cc, b, grounded) => {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4, idle_timeout: 20 });
   try {
+    // A hand-entered revenue is ground truth and must never be clobbered by the model — a human who
+    // typed a figure in the admin drawer knows something the traffic ladder can't (e.g. Amazon.co.za
+    // is rank ~#1, far above its top-1k bucket median). Every such edit lands a store_edits audit row,
+    // so that table is the authoritative "manual revenue" signal. We exclude these domains from every
+    // pricing UPDATE below and null any model price a prior run left on them, so the displayed band
+    // falls back to their hand-set estimated_monthly_sales (see revExpr/COALESCE in lib/fx.ts).
+    const manualRows = await sql`SELECT DISTINCT domain FROM store_edits WHERE field = 'estimated_monthly_sales'`;
+    const manualRev = manualRows.map((r) => r.domain);
+    const notManual = manualRev.length ? sql`AND domain <> ALL(${manualRev})` : sql``;
+    if (manualRev.length) console.log(`honouring ${manualRev.length} manual revenue override(s): ${manualRev.join(", ")}\n`);
+
     // ZA ladder: anchor-calibrated (validated against 25 merchant anchors — top-1k lands R13m
     // against his stated R13.5m). This is the ONLY market where the level is grounded.
     const za = await shapeFor(sql, "ZA");
@@ -142,15 +153,31 @@ async function main() {
       const zar = usd * ZAR_PER_USD;
       const conf = b === 1000 ? "good" : (b === 5000 || b === 10000) ? "medium" : "low";
       const where = b === "un" ? sql`crux_rank IS NULL` : sql`crux_rank = ${b}`;
+      // A CrUX rank IS the evidence the site is a real, high-traffic storefront, so a RANKED store is
+      // priced whatever its platform — this is how the custom-platform / marketplace giants (Takealot,
+      // Superbalist on Spree, etc.) get a figure instead of "New". The platform gate stays ONLY on the
+      // unranked floor bucket, so a random published non-commerce page with no traffic isn't invented a
+      // revenue it doesn't warrant.
+      const platGate = b === "un" ? sql`AND platform = ANY(${COMMERCE})` : sql``;
       const r = await sql`UPDATE imported_stores SET
           revenue_ballpark_usd = ${usd}, revenue_low_usd = ${Math.round(usd / BAND_K)},
           revenue_high_usd = ${Math.round(usd * BAND_K)}, revenue_ballpark_zar = ${Math.round(zar)},
           revenue_band = ${`${fmtZ(zar / BAND_K)}-${fmtZ(zar * BAND_K)}`},
           revenue_model = ${MODEL}, revenue_confidence = ${conf}
-        WHERE UPPER(country) = 'ZA' AND ${where} AND published AND platform = ANY(${COMMERCE}) RETURNING 1`;
+        WHERE UPPER(country) = 'ZA' AND ${where} AND published ${platGate} ${notManual} RETURNING 1`;
       za_n += r.length;
     }
     console.log(`ZA (calibrated ladder): ${za_n}`);
+
+    // Strip any model price a prior run left on a manual-override store, so the band reads its
+    // hand-set estimated_monthly_sales. revenue_model='manual' marks it and keeps it excluded hereafter.
+    if (manualRev.length) {
+      const m = await sql`UPDATE imported_stores SET
+          revenue_ballpark_usd = NULL, revenue_ballpark_zar = NULL, revenue_low_usd = NULL, revenue_high_usd = NULL,
+          revenue_band = NULL, revenue_model = 'manual', revenue_confidence = 'good'
+        WHERE domain = ANY(${manualRev}) AND revenue_model IS DISTINCT FROM 'manual' RETURNING 1`;
+      console.log(`manual overrides cleared of model price: ${m.length}`);
+    }
 
     // 2) Everywhere else WITH a vendor estimate — use it directly, no scaling invented.
     const v = await sql`UPDATE imported_stores SET
@@ -161,7 +188,7 @@ async function main() {
         revenue_band = '$' || round(estimated_monthly_sales / ${BAND_K} / 1000) || 'k-$' || round(estimated_monthly_sales * ${BAND_K} / 1000) || 'k',
         revenue_model = ${MODEL}, revenue_confidence = 'low'
       WHERE UPPER(country) <> 'ZA' AND estimated_monthly_sales > 0
-        AND published AND platform = ANY(${COMMERCE}) RETURNING 1`;
+        AND published AND platform = ANY(${COMMERCE}) ${notManual} RETURNING 1`;
     console.log(`non-ZA from the vendor estimate: ${v.length}`);
 
     // 3) Still blank: fall back to that market's OWN unscaled vendor median for its bucket, so a
@@ -175,13 +202,14 @@ async function main() {
       for (const b of [...BUCKETS, "un"]) {
         const usd = Math.round(shape[b]); if (!usd) continue;
         const where = b === "un" ? sql`crux_rank IS NULL` : sql`crux_rank = ${b}`;
+        const platGate = b === "un" ? sql`AND platform = ANY(${COMMERCE})` : sql``;   // ranked = priced regardless of platform (see ZA note above)
         const r = await sql`UPDATE imported_stores SET
             revenue_ballpark_usd = ${usd}, revenue_low_usd = ${Math.round(usd / BAND_K)},
             revenue_high_usd = ${Math.round(usd * BAND_K)},
             revenue_band = ${`$${Math.round(usd / BAND_K / 1000)}k-$${Math.round(usd * BAND_K / 1000)}k`},
             revenue_model = ${MODEL}, revenue_confidence = 'low'
-          WHERE UPPER(country) = ${c} AND ${where} AND published AND platform = ANY(${COMMERCE})
-            AND revenue_model IS NULL RETURNING 1`;
+          WHERE UPPER(country) = ${c} AND ${where} AND published ${platGate}
+            AND revenue_model IS NULL ${notManual} RETURNING 1`;
         f_n += r.length;
       }
     }

@@ -43,9 +43,20 @@ export function usdExpr(col: string): string {
       ${fx} ELSE 1 END)::numeric)`;
 }
 
-/** Estimated monthly sales in USD. */
+/** The monthly-revenue signal in USD, preferring the MODELED ballpark (`revenue_ballpark_usd` —
+ *  written for every published commerce store across the focus markets: ZA on the anchor-calibrated
+ *  CrUX ladder, elsewhere the vendor estimate / peer median; see revenue-ballpark.mjs) and falling
+ *  back to the raw vendor estimate converted from local currency. The ballpark is already USD, so it
+ *  needs no FX. The bands, the revenue sort and the displayed figure all read THIS:
+ *  `estimated_monthly_sales` alone sat on <45% of rows and banded most stores "New". */
+export function revExpr(): string {
+  return `COALESCE(revenue_ballpark_usd, ${usdExpr("estimated_monthly_sales")})`;
+}
+
+/** Estimated monthly sales in USD. Alias of {@link revExpr} kept for callers that predate the
+ *  ballpark column; both resolve to the ballpark-first expression. */
 export function usdSqlExpr(): string {
-  return usdExpr("estimated_monthly_sales");
+  return revExpr();
 }
 
 /** Revenue bands, recalibrated to the actual distribution of this market.
@@ -95,7 +106,7 @@ export function bandTone(band: RevenueBand): string {
 /** Band as a SQL expression, for GROUP BY facet counts. */
 export function bandSqlExpr(): string {
   const usd = usdSqlExpr();
-  return `CASE WHEN estimated_monthly_sales IS NULL THEN 'New'
+  return `CASE WHEN ${usd} IS NULL THEN 'New'
     WHEN ${usd} >= 1350000 THEN 'R25m+'
     WHEN ${usd} >= 540000  THEN 'R10m–R25m'
     WHEN ${usd} >= 270000  THEN 'R5m–R10m'
