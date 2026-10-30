@@ -24,6 +24,9 @@ const CONC = Number(arg("--concurrency", 8));
 const REPROBE_DAYS = Number(arg("--reprobe-days", 90));
 const cArg = arg("--country", null);
 const platArg = (arg("--platform", null) || "").toLowerCase() || null;
+// Targeted re-scrape of a named set (e.g. the marquee giants), bypassing the platform/country/reprobe
+// gates — it fetches exactly these domains whatever their platform or last-enriched date.
+const DOMAINS = (arg("--domains", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MARKETS;
 
@@ -125,7 +128,11 @@ async function main() {
     // vs ~1.8k for every other CMS combined) keeps jumping the queue with fresh discoveries and starves the
     // small platforms (Wix/Magento/Ecwid/…) for days. The candidate set is already filtered to published
     // non-Shopify (~14k rows), so the window-sort is cheap.
-    const rows = platArg
+    const rows = DOMAINS.length
+      ? await sql`
+          SELECT domain, platform, theme, plugins, technologies, subscription_tools
+          FROM imported_stores WHERE domain = ANY(${DOMAINS})`
+      : platArg
       ? await sql`
           SELECT domain, platform, theme, plugins, technologies, subscription_tools
           FROM imported_stores WHERE ${whereCond}
