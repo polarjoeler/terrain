@@ -8,6 +8,7 @@
 
 import Stripe from "stripe";
 import { TRIAL_DAYS, type PlanKey, type Status } from "./subscriptions";
+import { resolvePlan } from "./plans.ts";
 
 let _stripe: Stripe | null = null;
 
@@ -20,16 +21,37 @@ export function stripe(): Stripe {
   return _stripe;
 }
 
-export function priceIdFor(plan: PlanKey): string | undefined {
-  return plan === "pro"
-    ? process.env.STRIPE_PRICE_PRO
-    : process.env.STRIPE_PRICE_STARTER;
+/** Stripe price id per plan and billing period. Env-driven so the same code runs against
+ *  test and live keys. Annual exists only for Intelligence and Partner — the 2027 promo
+ *  (4 months free); Leads is monthly-only on purpose. */
+const PRICE_ENV: Record<PlanKey, { month: string; year?: string }> = {
+  leads: { month: "STRIPE_PRICE_LEADS" },
+  intelligence: { month: "STRIPE_PRICE_INTELLIGENCE", year: "STRIPE_PRICE_INTELLIGENCE_YEAR" },
+  partner: { month: "STRIPE_PRICE_PARTNER", year: "STRIPE_PRICE_PARTNER_YEAR" },
+};
+
+export type Period = "month" | "year";
+
+export function priceIdFor(plan: PlanKey, period: Period = "month"): string | undefined {
+  const map = PRICE_ENV[plan];
+  const name = period === "year" ? map.year : map.month;
+  if (!name) return undefined;
+  const id = process.env[name];
+  if (id) return id;
+  // Transitional: the first two price ids were created as STARTER/PRO before the tiers
+  // were renamed. Fall back so a half-migrated environment still checks out rather than
+  // 500ing, and so the rename can ship ahead of creating the new Stripe objects.
+  if (period === "month" && plan === "leads") return process.env.STRIPE_PRICE_STARTER;
+  if (period === "month" && plan === "intelligence") return process.env.STRIPE_PRICE_PRO;
+  return undefined;
 }
 
 /** Hosted Checkout URL for a subscription with a card-required 7-day trial. */
 export async function createCheckoutSession(opts: {
   email: string;
   plan: PlanKey;
+  /** month (default) or the 2027 annual price, where the plan offers one. */
+  period?: Period;
   origin: string;
 }): Promise<string> {
   const price = priceIdFor(opts.plan);
@@ -101,5 +123,7 @@ export function mapStatus(s: Stripe.Subscription.Status): Status {
 }
 
 export function planFromMetadata(meta: Stripe.Metadata | null | undefined): PlanKey {
-  return meta?.plan === "pro" ? "pro" : "starter";
+  // resolvePlan maps legacy starter/pro metadata on subscriptions created before the
+  // rename, so existing Stripe objects keep resolving to the right entitlements.
+  return resolvePlan(meta?.plan);
 }

@@ -1,9 +1,16 @@
 "use client";
 
+import { PLANS, PLAN_ORDER, resolvePlan, type PlanKey } from "@/lib/plans";
+
+/** Next tier in the ladder, wrapping at the top. */
+const nextPlan = (raw: string | null | undefined): PlanKey =>
+  PLAN_ORDER[(PLAN_ORDER.indexOf(resolvePlan(raw)) + 1) % PLAN_ORDER.length];
+
 import { useMemo, useState } from "react";
 import type { Subscriber } from "@/lib/subscriptions";
 
-type Action = "trial" | "activate" | "cancel" | "makePro" | "makeStarter";
+// Mirrors lib/subscriptions SubscriberAction; setPlan:<key> replaced makePro/makeStarter.
+type Action = "trial" | "activate" | "cancel" | `setPlan:${PlanKey}`;
 
 const STATUS_STYLE: Record<string, string> = {
   active: "bg-mint/20 text-mint",
@@ -121,8 +128,10 @@ export function SubscribersTable({ initial }: { initial: Subscriber[] }) {
                     <button onClick={() => run(s.email, "activate")} disabled={busy !== null} className={btn}>
                       Activate
                     </button>
-                    <button onClick={() => run(s.email, s.plan === "pro" ? "makeStarter" : "makePro")} disabled={busy !== null} className={btn}>
-                      {s.plan === "pro" ? "→ Starter" : "→ Pro"}
+                    {/* Cycle through the tiers — one button rather than a pair, so a new
+                        plan needs no new control. */}
+                    <button onClick={() => run(s.email, `setPlan:${nextPlan(s.plan)}`)} disabled={busy !== null} className={btn}>
+                      → {PLANS[nextPlan(s.plan)].label}
                     </button>
                     <button onClick={() => run(s.email, "cancel")} disabled={busy !== null} className={`${btn} hover:border-orange/60 hover:text-orange`}>
                       Cancel
