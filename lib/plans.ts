@@ -65,6 +65,15 @@ export const PLANS: Record<PlanKey, Plan> = {
 
 export const PLAN_ORDER: PlanKey[] = ["leads", "intelligence", "partner"];
 
+/** Add-ons, per month on top of any plan. Radar + Partners is sold as one bundle
+ *  (decided 2026-10-29). Not to be confused with the standalone Radar monitoring
+ *  product sold to brands at R199/mo — different buyer, different Stripe product. */
+export const ADDON_RADAR_PARTNERS_USD = 100;
+
+/** Every plan charges the same for an extra seat; asserted here so the Stripe setup
+ *  script can create ONE seat price rather than one per plan. */
+export const EXTRA_SEAT_USD = 30;
+
 /** Unmetered plans are still COUNTED — we just don't refuse. Crossing this in a month
  *  notifies us to look, rather than blocking a legitimate BD team mid-quarter. One month
  *  of Intelligence is otherwise the whole Shopify base (40,922 rows). */

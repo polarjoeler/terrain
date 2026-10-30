@@ -2,7 +2,7 @@
  *  Returns the hosted Stripe Checkout URL for the client to redirect to. */
 
 import { NextResponse } from "next/server";
-import { resolvePlan } from "@/lib/plans";
+import { PLANS, resolvePlan } from "@/lib/plans";
 import type { Period } from "@/lib/stripe";
 import { currentUser } from "@/lib/auth";
 import { createCheckoutSession } from "@/lib/stripe";
@@ -33,6 +33,14 @@ export async function POST(req: Request) {
   // client that has not reloaded.
   const plan: PlanKey = resolvePlan(body.plan);
   const period: Period = body.period === "year" ? "year" : "month";
+  // Leads is monthly-only by design. Without this the missing price surfaces as a 502,
+  // which reads as "our Stripe is broken" rather than "that plan has no annual option".
+  if (period === "year" && PLANS[plan].annualUsd == null) {
+    return NextResponse.json(
+      { error: `${PLANS[plan].label} is billed monthly only.` },
+      { status: 400 },
+    );
+  }
   const origin = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
 
   try {
