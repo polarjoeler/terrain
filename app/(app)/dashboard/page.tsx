@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { currentUser, isAdmin } from "@/lib/auth";
+import { getSubscriber, usageFor } from "@/lib/subscriptions";
+import { platformsFor } from "@/lib/plans";
 import { getHomeStats } from "@/lib/insights";
 import { FreshnessStamp } from "@/app/components/freshness";
 import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
@@ -145,6 +147,18 @@ export default async function Dashboard({
 // Explorer refetches through browse() as filters change. Was ~7MB of leads to the browser; now tens of
 // KB. Runs inside Suspense, off the page's critical path.
 async function BrowseSection({ initial }: { initial?: import("@/app/admin/explore/explorer").ExploreInitial }) {
+  // Plan scope is resolved HERE, server-side, not passed in — so no query string or client
+  // can widen it. Admins read unscoped. Partner sees Shopify + WooCommerce; everyone else
+  // Shopify only, which is the paid boundary (Woo is 32,027 of the 75,877 published rows,
+  // and the richer half: 91% tech coverage, 48% contactable email).
+  const viewer = await currentUser();
+  const admin = isAdmin(viewer);
+  const sub = admin ? null : await getSubscriber(viewer ?? "").catch(() => null);
+  const planPlatforms = admin ? undefined : platformsFor(sub?.plan);
+  // Export allowance travels with the first paint, so the Explorer can show what's left
+  // before the customer clicks. Admins are unmetered, so they get nothing to show.
+  const u = admin ? null : usageFor(sub);
+  const usage = u ? { used: u.used, limit: u.limit, remaining: u.remaining, planLabel: u.plan.label } : undefined;
   const RMAP: Record<string, number> = { "7d": 7, "30d": 30, "365d": 365 };
   const LMAP: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
   const filters: BrowseFilters = {
@@ -158,11 +172,12 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
     sort: initial?.sort as BrowseFilters["sort"],
+    planPlatforms,
     limit: 60,
   };
   const data = await browseQuery(filters).catch(() => null);
   if (!data || data.universe === 0) return <p className="py-10 text-center text-cream/40">No stores to browse yet.</p>;
-  return <Explorer initialData={data} initial={initial} showStats />;
+  return <Explorer initialData={data} initial={initial} showStats usage={usage} />;
 }
 
 function BrowseSkeleton() {

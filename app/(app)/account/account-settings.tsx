@@ -10,7 +10,7 @@ type Props = {
   account: AccountInfo;
   members: Member[];
   invites: Invite[];
-  plan: { label: string; status: string } | null;
+  plan: { label: string; status: string; used: number; limit: number | null; remaining: number | null } | null;
 };
 
 const inputCls = "w-full rounded-xl border border-cream/15 bg-cream/[0.03] px-4 py-2.5 text-sm text-cream placeholder:text-cream/30 outline-none transition focus:border-mint/60 focus:bg-cream/[0.05]";
@@ -120,6 +120,24 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
           {account.domain && (
             <Field label="Domain" hint="Teammates with this email domain join this workspace automatically.">
               <input className={`${inputCls} cursor-not-allowed opacity-70`} value={account.domain} readOnly />
+            </Field>
+          )}
+          {plan && (
+            <Field label="Exports this month" hint="Counts every lead row downloaded as CSV or sent to Google Sheets. Resets on the 1st.">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-lg font-semibold text-cream">{plan.used.toLocaleString()}</span>
+                <span className="text-sm text-cream/50">
+                  {plan.limit == null
+                    ? `leads exported · unlimited on ${plan.label}`
+                    : `of ${plan.limit.toLocaleString()} leads · ${(plan.remaining ?? 0).toLocaleString()} left on ${plan.label}`}
+                </span>
+              </div>
+              {plan.limit != null && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-cream/10">
+                  <div className="h-full rounded-full bg-mint transition-all"
+                    style={{ width: `${Math.min(100, Math.round((plan.used / plan.limit) * 100))}%` }} />
+                </div>
+              )}
             </Field>
           )}
           <div className="flex flex-wrap items-center gap-3">
