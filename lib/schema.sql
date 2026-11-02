@@ -126,10 +126,14 @@ CREATE TABLE IF NOT EXISTS insights_cache (
 );
 -- Generic pre-aggregation cache (lib/agg-cache.ts) — /ops, /insights/africa, provider pages.
 CREATE TABLE IF NOT EXISTS agg_cache (
-  key         TEXT PRIMARY KEY,
-  data        JSONB NOT NULL,
-  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  key           TEXT PRIMARY KEY,
+  data          JSONB NOT NULL,
+  computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Single-flight lease: set while one instance refreshes this key, so other instances serve stale
+  -- instead of launching duplicate full-corpus scans. NULL = free. See lib/agg-cache.ts.
+  refreshing_at TIMESTAMPTZ
 );
+ALTER TABLE agg_cache ADD COLUMN IF NOT EXISTS refreshing_at TIMESTAMPTZ;
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.
