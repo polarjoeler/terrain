@@ -11,6 +11,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
+import { applySchema } from "./ensure-schema";
 import { db } from "./db";
 import type { Subscriber } from "./subscriptions";
 
@@ -31,7 +32,7 @@ function makePostgresStore(): Store {
   const ensure = () => {
     if (!ready) {
       const ddl = readFileSync(join(process.cwd(), "lib", "schema.sql"), "utf8");
-      ready = sql.unsafe(ddl).then(() => undefined);
+      ready = applySchema(sql, ddl).then(() => undefined);
     }
     return ready;
   };
