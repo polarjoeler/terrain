@@ -52,7 +52,15 @@ async function certDate(domain) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 4), idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ`;
+    // A no-op `ADD COLUMN IF NOT EXISTS` still takes ACCESS EXCLUSIVE on imported_stores. On a table
+    // under constant long scans that request has to QUEUE — and every lock requested after it queues
+    // behind it, including ordinary reads and writes, so a startup schema check that changes nothing
+    // can freeze the whole table. Observed doing exactly that. Read the catalog first (no table lock)
+    // and only ALTER when the column is genuinely missing.
+    const [{ present }] = await sql`SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'imported_stores' AND column_name = 'cert_checked_at') AS present`;
+    if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ`;
     // ALL platforms, not just Shopify: WooCommerce stores never get a product-based launch date
     // (the Woo probe reads no catalog timestamps), so crt.sh is their ONLY launch-dating path and
     // this is what lights up the Woo trajectory on the combined growth chart. Stores with NO usable
