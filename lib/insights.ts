@@ -146,7 +146,7 @@ const cohortFilter = (tag?: string) =>
   !tag
     ? db()``
     : tag === "new"
-      ? db()`AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
+      ? db()`AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
       : db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})`;
 
 // Published live stores for a market — the universe the insights describe.
@@ -628,10 +628,10 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // so a bulk import or a payment-data backfill of historically-launched stores never inflates
   // the current period — it lands in each store's real launch period instead.
   const adoptRows = await sql<{ launch: Date | null; payments: string }[]>`
-    SELECT COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch, payments
+    SELECT COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launch, payments
     FROM imported_stores
     WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 365`;
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - 365`;
   const adoptChanges = await sql<{ changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
     SELECT pc.changed_at, pc.added, pc.removed FROM payment_changes pc
     JOIN imported_stores i ON i.domain = pc.domain
@@ -913,7 +913,7 @@ async function getHomeStatsUncached(country = "ZA", platform: PlatformSel = "sho
   const [t] = await sql`
     SELECT
       COUNT(*)::int                                                                       AS stores,
-      COUNT(*) FILTER (WHERE COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 7)::int AS new_week,
+      COUNT(*) FILTER (WHERE COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - 7)::int AS new_week,
       COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int                       AS with_email,
       COUNT(*) FILTER (WHERE plus)::int                                                    AS plus
     FROM imported_stores
@@ -1080,7 +1080,7 @@ export async function providerAdoptionSeries(country = "ZA", platform: PlatformS
   // timeout. unnest the gateway list, collapse the known sub-brand rails (Paystack Onsite → Paystack,
   // WigWag → Stitch) in SQL, and COUNT(DISTINCT domain) so a store carrying both rails counts once.
   // Everything else stays a raw token for canonicalProvider() to clean/merge/drop in JS.
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql<{ yr: number; prov: string; n: number }[]>`
     SELECT yr, prov, COUNT(DISTINCT domain)::int AS n FROM (
       SELECT i.domain, EXTRACT(YEAR FROM ${LAUNCH})::int AS yr,
@@ -1191,8 +1191,8 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ${cc} AND payments IS NOT NULL AND payments <> ''  -- country stored uppercase; UPPER() defeated the index (~2s scan)
       ${platformClause(sql, platform)}
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) > ${winStart}::date
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) <= ${vIso}::date`.catch(() => []);
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) > ${winStart}::date
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) <= ${vIso}::date`.catch(() => []);
   const newBy = new Map<string, number>();
   for (const r of newRows) {
     const seen = new Set<string>();
@@ -1238,7 +1238,7 @@ export async function sectionReport(section: string, country = "ZA", period: Per
   // past launches), never an artefact of enrichment catching up on the existing base.
   const rows = await sql<{ val: string; launch_date: Date | null }[]>`
     SELECT ${sql(cfg.column)} AS val,
-      COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch_date
+      COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launch_date
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}

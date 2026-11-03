@@ -128,7 +128,7 @@ const d = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 10
 function buildWhere(f: BrowseFilters) {
   const sql = db();
   const launchExpr = sql.unsafe(
-    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`,
+    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`,
   );
   const conds = [
     sql`published`,
@@ -273,7 +273,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   // so compute it ONLY then; otherwise return an empty facet and skip the scan.
   const wantApps = f.platform?.some((p) => p.toLowerCase() === "shopify") ?? false;
   const launchSel = sql.unsafe(
-    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on`,
+    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
   );
   const limit = Math.min(f.limit ?? 50, 1000);
   const offset = f.offset ?? 0;
@@ -325,7 +325,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
-             COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on,
+             COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at
       FROM imported_stores WHERE ${where}
     )
