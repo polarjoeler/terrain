@@ -12,6 +12,7 @@
  * snapchat}) + social_checked_at (marks the attempt; net fails retry).
  */
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "800"), 10);
@@ -66,8 +67,8 @@ async function get(url) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS socials JSONB`;
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS social_checked_at TIMESTAMPTZ`;
+    await ensureColumns(sql, "imported_stores",
+      { socials: "JSONB", social_checked_at: "TIMESTAMPTZ" });
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))

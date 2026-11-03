@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
 const cachePath = process.argv.slice(2).find((a) => !a.startsWith("--")) || join(homedir(), "shopify-radar", "checkout_cache.json");
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
@@ -102,19 +103,22 @@ async function main() {
   // (42P07 "already exists") — swallow that so an overlap never aborts the run.
   const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
   try {
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`);
-    // When we last verified checkout — lets the queue re-surface stale stores for a
-    // re-probe (so provider switches get caught), instead of probe-once-forever.
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plus_signal TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plan_exact TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_id BIGINT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_country TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_city TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_province TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shop_currency TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS myshopify_domain TEXT`);
+    // One catalog read instead of 11 ACCESS EXCLUSIVE lock requests. payments_checked_at records
+    // when we last verified checkout, so the queue can re-surface stale stores for a re-probe
+    // (catching provider switches) instead of probe-once-forever.
+    await ensureColumns(sql, "imported_stores", {
+      shipping_providers: "TEXT",
+      free_shipping: "BOOLEAN",
+      payments_checked_at: "TIMESTAMPTZ",
+      plus_signal: "TEXT",
+      plan_exact: "TEXT",
+      shop_id: "BIGINT",
+      shop_country: "TEXT",
+      shop_city: "TEXT",
+      shop_province: "TEXT",
+      shop_currency: "TEXT",
+      myshopify_domain: "TEXT",
+    });
     // shop_id is the dedupe key for the www/apex and generic-TLD rows; not unique by design
     // (expansion stores aside, one shop legitimately answers on several of our domain rows).
     await ddl(sql`CREATE INDEX IF NOT EXISTS idx_imported_shop_id ON imported_stores (shop_id)`);

@@ -46,15 +46,19 @@ BATCH=6000                                   # rows per ai-enrich invocation
 DEADLINE=$(( $(date +%s) + 13800 ))          # ~3h50m — finish before the next 4h fire
 FLOOR=500                                    # stop draining a scope once it's within this of empty
 
-# remaining rows missing category/description. arg1="focus" scopes to FOCUS countries; else global.
+# Rows missing category/description, counted only up to FLOOR+1. REMAIN is used for nothing but the
+# "< FLOOR" drained test, so an exact census is wasted work: the unbounded count(*) was a 13s scan of
+# the whole published slice per loop iteration (10.7% of the DB's total disk reads). LIMIT stops early.
+# arg1="focus" scopes to FOCUS countries; else global.
 remaining() {
   local scope="$1"
-  FOCUS="$FOCUS" SCOPE="$scope" node --env-file=.env.local -e "
+  FOCUS="$FOCUS" SCOPE="$scope" PROBE=$(( FLOOR + 1 )) node --env-file=.env.local -e "
     import('postgres').then(({default:p})=>{const s=p(process.env.DATABASE_URL,{prepare:false,max:1});
     const base=\"from imported_stores where published and ai_enriched_at is null and (live_status is null or live_status not in ('dead','migrated')) and (coalesce(category,'')='' or coalesce(description,'')='')\";
+    const lim=' limit '+Number(process.env.PROBE);
     const q = process.env.SCOPE==='focus'
-      ? s.unsafe('select count(*)::int n '+base+' and upper(country)=any(string_to_array(\$1,\\',\\'))',[process.env.FOCUS])
-      : s.unsafe('select count(*)::int n '+base);
+      ? s.unsafe('select count(*)::int n from (select 1 '+base+' and upper(country)=any(string_to_array(\$1,\\',\\')) '+lim+') t',[process.env.FOCUS])
+      : s.unsafe('select count(*)::int n from (select 1 '+base+lim+') t');
     q.then(r=>{console.log(r[0].n);s.end()}).catch(()=>{console.log(-1);s.end()})})" 2>/dev/null
 }
 
@@ -69,7 +73,7 @@ export SKIP_SCHEMA_ENSURE=1
 # ---- Phase 1: drain FOCUS (Africa + Middle East + JP) ----
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   REMAIN=$(remaining focus)
-  echo "focus remaining missing cat/desc: ${REMAIN:-?}"
+  echo "focus backlog (probe capped at $(( FLOOR + 1 ))): ${REMAIN:-?}"
   [ "${REMAIN:-0}" -ge 0 ] && [ "${REMAIN:-0}" -lt "$FLOOR" ] && { echo "→ focus drained"; break; }
   node --env-file=.env.local scripts/ai-enrich.mjs --all --country "$FOCUS" --limit "$BATCH" || { echo "!! focus batch failed"; sleep 30; }
 done
@@ -77,7 +81,7 @@ done
 # ---- Phase 2: spend remaining time budget on GLOBAL gaps ----
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   REMAIN=$(remaining global)
-  echo "global remaining missing cat/desc: ${REMAIN:-?}"
+  echo "global backlog (probe capped at $(( FLOOR + 1 ))): ${REMAIN:-?}"
   [ "${REMAIN:-0}" -ge 0 ] && [ "${REMAIN:-0}" -lt "$FLOOR" ] && { echo "→ global drained"; break; }
   node --env-file=.env.local scripts/ai-enrich.mjs --all --limit "$BATCH" || { echo "!! global batch failed"; sleep 30; }
 done

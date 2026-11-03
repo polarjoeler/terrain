@@ -11,6 +11,7 @@
  *  Defaults to a dry run.
  */
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 import { createReadStream, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
@@ -78,7 +79,7 @@ if (!WRITE) { console.log("\nDRY RUN — nothing written. Re-run with --write.")
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
 try {
   await sql`SET lock_timeout = '4s'`;
-  await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plan_exact TEXT`;
+  await ensureColumns(sql, "imported_stores", { plan_exact: "TEXT" });
   let n = 0;
   // one statement per store (13-ish rows); the www/apex pair is matched like the payment sync
   for (const [d, tier] of found) {
