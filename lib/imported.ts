@@ -7,6 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { applySchema } from "./ensure-schema";
 import { db as sharedDb } from "./db";
 import type { Lead } from "./leads";
 import { cleanPayments } from "./payments-taxonomy";
@@ -20,7 +21,9 @@ function db() {
 function ensure() {
   if (!_ready) {
     const ddl = readFileSync(join(process.cwd(), "lib", "schema.sql"), "utf8");
-    _ready = db().unsafe(ddl).then(() => undefined);
+    // Guarded: _ready is per lambda instance, so a cold start would otherwise replay every
+    // ALTER/CREATE in schema.sql and stall the hot table while a visitor waits on the page.
+    _ready = applySchema(db(), ddl).then(() => undefined);
   }
   return _ready;
 }
