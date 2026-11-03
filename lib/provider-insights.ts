@@ -9,6 +9,7 @@
  *  real positions, not guesses. Trends over time come from provider_snapshots
  *  (see snapshotProviders), not from this point-in-time read. */
 
+import { cachedAgg } from "./agg-cache";
 import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
 import { realPaymentsClause, platformClause } from "./insights";
@@ -507,7 +508,15 @@ export type MomentumPeriodKey = "day" | "week" | "month" | "quarter" | "year";
  *  in the PRIOR P days (the two windows compared). Launch-keyed (real launch date, not discovered_at)
  *  so it's consistent with the rest of insights and backfilling old stores can't move it. One
  *  2-year fetch, bucketed in JS per period. */
-export async function providerMomentumByPeriod(country = "ALL"): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+export function providerMomentumByPeriod(country = "ALL"): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+  // Cached: this pulls TWO YEARS of launch+payments rows into JS to bucket them (~12s measured on
+  // ZA) and the result is viewer-agnostic. 30 minutes of freshness is safe even for the "day"
+  // window — a half-hour-old 24h adoption share is not a different answer.
+  return cachedAgg(`provmomentum:v1:${country.toUpperCase()}`, 30 * 60 * 1000,
+    () => computeProviderMomentumByPeriod(country));
+}
+
+async function computeProviderMomentumByPeriod(country: string): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
   const sql = db();
   const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;

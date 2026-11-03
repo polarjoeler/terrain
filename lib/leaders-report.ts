@@ -12,6 +12,7 @@
  *  The gap between the two (custom owns the traffic head, but we hold $ only on the Shopify set) is
  *  itself the signal — the enrichment frontier — surfaced as "most interesting platform".
  */
+import { cachedAgg } from "./agg-cache";
 import { db as sharedDb } from "./db";
 import { usdSqlExpr } from "./fx";
 
@@ -43,7 +44,18 @@ export type LeadersReport = {
 
 const bkt = (p: string | null): string => (p && p.trim() ? p.trim().toLowerCase() : "unknown");
 
-export async function leadersReport(country: string, cohort = 100): Promise<LeadersReport> {
+/** Cached entry point. The report is viewer-agnostic (market + cohort only), so it belongs in the
+ *  shared agg_cache rather than being recomputed per page view: the `overall` platform mix alone is
+ *  a 71k-row aggregate on ZA, and the whole report measured ~13s. One hour of freshness is ample —
+ *  a market's platform leadership does not move by the minute — and a stale row is served instantly
+ *  while it refreshes behind the response. */
+export function leadersReport(country: string, cohort = 100): Promise<LeadersReport> {
+  const C = country.toUpperCase();
+  const N = cohort === 500 ? 500 : 100;
+  return cachedAgg(`leaders:v1:${C}:${N}`, 60 * 60 * 1000, () => computeLeadersReport(C, N));
+}
+
+async function computeLeadersReport(country: string, cohort: number): Promise<LeadersReport> {
   const sql = db();
   const C = country.toUpperCase();
   const N = cohort === 500 ? 500 : 100;
@@ -101,8 +113,15 @@ export async function leadersReport(country: string, cohort = 100): Promise<Lead
   };
 }
 
-/** Markets that actually have CrUX-ranked stores (for the picker). */
-export async function leadersMarkets(min = 20): Promise<{ country: string; stores: number }[]> {
+/** Markets that actually have CrUX-ranked stores (for the picker). Cached for a day: this is the
+ *  picker list, which changes on the timescale of a CrUX rank refresh, not a page view. It reads
+ *  every crux-ranked row (~399k) and must visit the heap for the live/activity filter, so it costs
+ *  ~20s to build — fine in the background, never in front of a viewer. */
+export function leadersMarkets(min = 20): Promise<{ country: string; stores: number }[]> {
+  return cachedAgg(`leaders:markets:v1:${min}`, 24 * 60 * 60 * 1000, () => computeLeadersMarkets(min));
+}
+
+async function computeLeadersMarkets(min: number): Promise<{ country: string; stores: number }[]> {
   const sql = db();
   const rows = await sql<{ c: string; n: number }[]>`
     SELECT UPPER(country) c, COUNT(*)::int n FROM imported_stores
