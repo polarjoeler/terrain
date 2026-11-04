@@ -8,6 +8,7 @@
  *   node … scripts/catalog-enrich.mjs --recheck --all   # re-enrich rows the old (buggy) pass got wrong
  */
 import postgres from "postgres";
+import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
 
 const ALL = process.argv.includes("--all");
 // --recheck re-runs stores the first pass measured with the two known bugs: product_count pinned at
@@ -26,11 +27,20 @@ const COUNTRIES = ci > -1 ? process.argv[ci + 1].split(",").map((c) => c.trim().
 // Override with --concurrency N / --pause MS.
 const flagNum = (name, dflt) => { const i = process.argv.indexOf(name); return i > -1 ? Number(process.argv[i + 1]) : dflt; };
 const POOL = 6;
+// Webshare fan-out: when STORE_PROBE_PROXY_FILE points at the fleet, every products.json fetch goes
+// out on a RANDOM proxy (one of ~100 IPs), so we're no longer pinned to this machine's single
+// Shopify-edge rate budget (see memory: residential-ip-rate-budget / shopify-crawl-rate-ceiling).
+// That is the whole point of this lane — it lets us raise concurrency and drop the pause. With NO
+// proxy file the pool is empty and behaviour is identical to the old single-IP direct path.
+//   STORE_PROBE_PROXY_FILE=~/shopify-radar/proxies.txt node … scripts/catalog-enrich.mjs --country ZA
+const PROXIES = loadProxies();
+const PROXIED = PROXIES.length > 0;
 // --recheck re-probes large-catalogue stores (it selects on product_count>=250), so it paginates
-// heavily; concurrent workers then never let the shared IP's Shopify-edge throttle recover and nearly
-// everything 429s. So recheck runs SEQUENTIALLY by default — one request at a time with spacing.
-const CONCURRENCY = flagNum("--concurrency", RECHECK ? 1 : 4);
-const PAUSE_MS = flagNum("--pause", RECHECK ? 600 : 250);
+// heavily; direct, concurrent workers never let the shared IP's Shopify-edge throttle recover and
+// nearly everything 429s — so DIRECT recheck runs sequentially. Fanned across the fleet, each request
+// is a different IP, so concurrency is safe and the pause is just politeness per store.
+const CONCURRENCY = flagNum("--concurrency", RECHECK ? (PROXIED ? 8 : 1) : (PROXIED ? 24 : 4));
+const PAUSE_MS = flagNum("--pause", PROXIED ? 50 : (RECHECK ? 600 : 250));
 // Pagination cap: up to 3,000 products/store. Only stores with a full first page ever fetch a
 // second, so this adds requests for large catalogues only — keeps the shared IP's Shopify-edge
 // rate budget intact (see memory: residential-ip-rate-budget).
@@ -63,16 +73,27 @@ function catalogAov(products) {
 
 // note = null on success; retriable=true means don't mark it done (try again next run:
 // rate-limits and transient errors clear), false means terminal (not Shopify / gone).
-// Fetch one page, backing off IN PLACE on 429/5xx. The shared IP's throttle clears in seconds, so a
-// short wait-and-retry recovers the page instead of discarding the whole (often multi-page) store.
+// Fetch one page as {status, json}; json is parsed (null if unparseable / non-JSON), status 0 = a
+// network / proxy-level failure. Backs off IN PLACE on 429/5xx (or a dead proxy) so a transient
+// throttle doesn't discard the whole (often multi-page) store. maxBytes is generous because a rich
+// 250-product page can be a few MB — the helper's default 700KB cap would truncate it into bad JSON.
 async function fetchPage(domain, page) {
+  const url = `https://${domain}/products.json?limit=250&page=${page}`;
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`https://${domain}/products.json?limit=250&page=${page}`, {
+    if (PROXIED) {
+      const r = await fetchText(url, { proxy: pickProxy(PROXIES), timeoutMs: 15000, maxBytes: 8_000_000, ua: UA, redirects: 3 });
+      const status = r ? r.status : 0;   // null => DNS/TLS/timeout/dead proxy
+      if ((status === 0 || status === 429 || status >= 500) && attempt < 3) { await sleep(1200 * (attempt + 1)); continue; }
+      let json = null; if (r) { try { json = JSON.parse(r.text); } catch { /* non-JSON */ } }
+      return { status, json };
+    }
+    const res = await fetch(url, {
       headers: { "User-Agent": UA, Accept: "application/json" },
       signal: AbortSignal.timeout(15000), redirect: "follow",
     });
     if ((res.status === 429 || res.status >= 500) && attempt < 3) { await sleep(1500 * (attempt + 1)); continue; }
-    return res;
+    const json = res.ok ? await res.json().catch(() => null) : null;
+    return { status: res.status, json };
   }
 }
 
@@ -81,17 +102,16 @@ async function fetchCatalog(domain) {
   const seen = new Set();       // dedupe by product id — robust even if a store ignores ?page
   try {
     for (let page = 1; page <= MAX_PAGES; page++) {
-      const res = await fetchPage(domain, page);
-      // still throttled after retries — redo the whole store next run rather than bank a short count
-      if (res.status === 429 || res.status >= 500) return { note: `http_${res.status}`, retriable: true };
-      if (!res.ok) { if (page === 1) return { note: `http_${res.status}`, retriable: false }; break; }
-      const j = await res.json().catch(() => null);
-      if (!j || !Array.isArray(j.products)) { if (page === 1) return { note: "not_shopify_json", retriable: false }; break; }
+      const { status, json } = await fetchPage(domain, page);
+      // still throttled/unreachable after retries — redo the whole store next run rather than bank a short count
+      if (status === 0 || status === 429 || status >= 500) return { note: `http_${status}`, retriable: true };
+      if (status < 200 || status >= 300) { if (page === 1) return { note: `http_${status}`, retriable: false }; break; }
+      if (!json || !Array.isArray(json.products)) { if (page === 1) return { note: "not_shopify_json", retriable: false }; break; }
       let added = 0;
-      for (const p of j.products) if (!seen.has(p.id)) { seen.add(p.id); all.push(p); added++; }
+      for (const p of json.products) if (!seen.has(p.id)) { seen.add(p.id); all.push(p); added++; }
       // Stop unless this was a full page of NEW products. added===0 means ?page was ignored
       // (same 250 returned) → we already have them all; a short page means the real last page.
-      if (j.products.length < 250 || added === 0) break;
+      if (json.products.length < 250 || added === 0) break;
       await sleep(PAUSE_MS);
     }
     // Own-sourced launch date: the earliest product's publish date ≈ when the store went live.
@@ -106,7 +126,11 @@ async function fetchCatalog(domain) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: POOL, idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS catalog_checked_at TIMESTAMPTZ`;
+    // Guarded ALTER: a bare ADD COLUMN IF NOT EXISTS still grabs ACCESS EXCLUSIVE on every run, and
+    // under lane contention that can jam the hot table (memory: postgres-schema-check-lock). Only lock
+    // if the column is genuinely absent.
+    const [col] = await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'imported_stores' AND column_name = 'catalog_checked_at'`;
+    if (!col) await sql`ALTER TABLE imported_stores ADD COLUMN catalog_checked_at TIMESTAMPTZ`;
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
@@ -121,10 +145,13 @@ async function main() {
       -- moves the "new stores launched" count. Confirmed Shopify before unconfirmed (platform NULL),
       -- because the NULL bucket is mostly banked ccTLD certs that aren't stores (they time out and
       -- tank throughput). Recent discoveries first within each group.
-      ORDER BY (launched_at IS NULL) DESC, (platform = 'Shopify') DESC,
+      -- ZA-first: the focus markets we sell into lead (the launch metric is per-country and this is
+      -- where coverage matters), then stores missing a launch date, then confirmed Shopify before the
+      -- unconfirmed NULL bucket (banked ccTLD certs that time out and tank throughput).
+      ORDER BY (upper(country) = ANY(ARRAY['ZA','KE','NG'])) DESC, (launched_at IS NULL) DESC, (platform = 'Shopify') DESC,
                discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
-    console.log(`Catalog-enriching ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY})…`);
+    console.log(`Catalog-enriching ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY}${PROXIED ? `, fanned across ${PROXIES.length} proxies` : ", DIRECT single-IP"})…`);
 
     let i = 0, ok = 0, done = 0;
     async function worker() {
@@ -153,6 +180,7 @@ async function main() {
     console.log(`\n✓ Done. ${ok}/${rows.length} returned a product catalogue.`);
   } finally {
     await sql.end();
+    closeAgents();   // keep-alive proxy sockets would otherwise hold the process open
   }
 }
 main().catch((e) => { console.error(e); process.exit(1); });
