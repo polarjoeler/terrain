@@ -44,7 +44,7 @@ export async function platformReport(opts: { region?: string; country?: string; 
     const cmsClause = cms ? sql`AND (CASE WHEN platform IS NULL OR lower(platform)='shopify' THEN 'shopify' ELSE lower(platform) END) = ${cms}` : sql``;
 
     return await sql.begin(async (t) => {
-      await t`SET LOCAL statement_timeout = '30s'`;
+      await t`SET LOCAL statement_timeout = '55s'`;
 
       // 1 · CMS market share (live), with this-week vs prior-week new launches.
       const shareRows = await t<{ cms: string; live: number; new_w: number; new_pw: number }[]>`

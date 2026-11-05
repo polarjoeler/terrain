@@ -8,6 +8,10 @@ import { LaunchTrend } from "@/app/components/command";
 import { PlatformFilters } from "./platforms-filters";
 
 export const dynamic = "force-dynamic";
+// The report runs several full-scope aggregates; a cold scope can take ~20-30s. Allow the function
+// enough time to finish and cache it (SWR) instead of the request being killed mid-compute, which
+// made the country selector look broken (it fell back to an empty report).
+export const maxDuration = 60;
 export const metadata = { title: "Terrain — Platform share & growth" };
 
 const cleanMarket = (iso: string) => marketLabel(iso).replace(/^[^\p{L}]+/u, "");
