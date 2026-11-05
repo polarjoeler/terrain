@@ -149,12 +149,13 @@ export default async function Dashboard({
 async function BrowseSection({ initial }: { initial?: import("@/app/admin/explore/explorer").ExploreInitial }) {
   // Plan scope is resolved HERE, server-side, not passed in — so no query string or client
   // can widen it. Admins read unscoped. Partner sees Shopify + WooCommerce; everyone else
-  // Shopify only, which is the paid boundary (Woo is 32,027 of the 75,877 published rows,
-  // and the richer half: 91% tech coverage, 48% contactable email).
+  // The plan's platform ceiling. Leads/Intelligence are Shopify-only; Partner is unrestricted and
+  // returns null, which must become `undefined` here — browseQuery reads `planPlatforms?.length`,
+  // so absent means "no filter" while an empty array would also mean no filter but types badly.
   const viewer = await currentUser();
   const admin = isAdmin(viewer);
   const sub = admin ? null : await getSubscriber(viewer ?? "").catch(() => null);
-  const planPlatforms = admin ? undefined : platformsFor(sub?.plan);
+  const planPlatforms = admin ? undefined : (platformsFor(sub?.plan) ?? undefined);
   // Export allowance travels with the first paint, so the Explorer can show what's left
   // before the customer clicks. Admins are unmetered, so they get nothing to show.
   const u = admin ? null : usageFor(sub);

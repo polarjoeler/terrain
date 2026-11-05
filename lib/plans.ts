@@ -25,9 +25,11 @@ export type Plan = {
   /** 2027 promotional annual = 4 months free. Null where annual isn't offered (Leads —
    *  the cash isn't worth the support load). */
   annualUsd: number | null;
-  /** Canonical `imported_stores.platform` values this plan may see. Enforced server-side
-   *  in browseQuery AND export; a client-side filter would be decorative. */
-  platforms: string[];
+  /** Canonical `imported_stores.platform` values this plan may see, or NULL for every platform
+   *  we track. Enforced server-side in browseQuery AND export; a client-side filter would be
+   *  decorative. null is the same "unrestricted" sentinel admins already use — see scopeFilters
+   *  in lib/export-gate, which simply omits the filter when the scope is null. */
+  platforms: string[] | null;
   /** Rows per calendar month. null = unmetered (matching Store Leads, which gates export
    *  by plan rather than capping it). See USAGE_ALERT_ROWS for the unadvertised backstop. */
   exportLimit: number | null;
@@ -56,7 +58,12 @@ export const PLANS: Record<PlanKey, Plan> = {
   partner: {
     key: "partner", label: "Partner",
     monthlyUsd: 399, annualUsd: 3192,        // 399 x 8
-    platforms: ["Shopify", "WooCommerce"],
+    // EVERY platform, not a list. Woo is the biggest single addition but it was never the whole
+    // offer: in the visible markets there are 10,363 published non-Shopify/non-Woo stores — 6,452
+    // Selar, 1,435 Wix, 677 ShopStar, 583 PrestaShop, 325 Magento and a long tail — and naming two
+    // platforms both undersold the tier and, because this list is the server-side whitelist, really
+    // did hide the rest from paying Partner customers.
+    platforms: null,
     exportLimit: null,
     seats: 3, extraSeatUsd: 30,
     reportTiers: ["core", "team", "pro"],    // 'pro' = the provider-specific reports
@@ -92,8 +99,9 @@ export function resolvePlan(raw: string | null | undefined): PlanKey {
 
 export const planOf = (raw: string | null | undefined): Plan => PLANS[resolvePlan(raw)];
 
-/** Platforms this plan may see. Used to scope BOTH the browse query and the export. */
-export const platformsFor = (raw: string | null | undefined): string[] => planOf(raw).platforms;
+/** Platforms this plan may see, or null for unrestricted. Used to scope BOTH the browse query and
+ *  the export — callers must treat null as "no platform filter", not as "nothing". */
+export const platformsFor = (raw: string | null | undefined): string[] | null => planOf(raw).platforms;
 
 /** Rows/month, or null for unmetered. */
 export const exportLimitFor = (raw: string | null | undefined): number | null => planOf(raw).exportLimit;

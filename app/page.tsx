@@ -89,7 +89,12 @@ export default async function Home() {
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 border-t border-cream/12 pt-8 text-sm text-cream/45 md:flex-row">
           <Link href="/" className="text-cream/80"><Wordmark size="text-base" /></Link>
           <span>Africa &amp; global{showJapan && <> · <Link href="/japan" className="text-cream/70 hover:text-cream">日本 (JP/EN)</Link></>} · a Tembo Commerce product</span>
-          <a href="mailto:hello@heyterrain.com" className="underline">hello@heyterrain.com</a>
+          {/* Existing customers had no way in from the marketing site — the nav only offers
+              "Join the list", so the sign-in page was reachable only by typing /login. */}
+          <div className="flex items-center gap-4">
+            <Link href="/login" className="text-cream/70 transition hover:text-cream">Log in</Link>
+            <a href="mailto:hello@heyterrain.com" className="underline">hello@heyterrain.com</a>
+          </div>
         </div>
       </footer>
     </main>

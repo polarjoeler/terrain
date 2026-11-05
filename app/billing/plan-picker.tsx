@@ -65,8 +65,9 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
           const annual = period === "year" && plan.annualUsd != null;
           const amount = annual ? plan.annualUsd! : plan.monthlyUsd;
           const isCurrent = currentPlan === key;
-          // Partner is the only tier with WooCommerce, which is the spine of the ladder —
-          // worth calling out rather than inventing a "most popular" we can't support.
+          // Partner is the only tier without a platform ceiling — the spine of the ladder is
+          // platform SCOPE, so that is what the badge says. Worth calling out rather than
+          // inventing a "most popular" we can't support.
           const feature = key === "partner";
 
           return (
@@ -74,7 +75,7 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
               className={`flex flex-col rounded-[2rem] p-7 ${feature ? "bg-paper text-ink ring-2 ring-mint" : "bg-paper text-ink"}`}>
               <div className="flex items-baseline justify-between">
                 <div className="text-sm font-semibold uppercase tracking-wide opacity-55">{plan.label}</div>
-                {feature && <span className="rounded-full bg-mint/25 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink/70">+ WooCommerce</span>}
+                {feature && <span className="rounded-full bg-mint/25 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink/70">Every platform</span>}
               </div>
 
               <div className="mt-2 font-display text-4xl">
@@ -90,7 +91,7 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
               </div>
 
               <ul className="mt-5 space-y-2 text-sm text-ink/70">
-                <li>{plan.platforms.join(" + ")}</li>
+                <li>{plan.platforms ? plan.platforms.join(" + ") : "Every platform we track"}</li>
                 <li>{plan.exportLimit == null ? "Unlimited lead exports" : `${plan.exportLimit.toLocaleString()} lead exports/month`}</li>
                 <li>{plan.seats} seat{plan.seats === 1 ? "" : "s"} · ${plan.extraSeatUsd}/mo each after</li>
                 <li>{INSIGHTS_COPY[key]}</li>
