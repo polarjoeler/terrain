@@ -10,7 +10,7 @@ type Series = { granularity: Grain; buckets: string[]; providers: Provider[]; st
 const PALETTE = ["var(--color-cyan)", "var(--color-orange)", "var(--color-mint)", "var(--color-lilac)", "#e8c468", "#e88fb0"];
 const GRAINS = [["year", "Year"], ["quarter", "Quarter"], ["month", "Month"]] as const;
 // PSPs we always surface on the main chart even if they're not in the volume top-N (Joel, 2026-11-05).
-const PSP_PINS = ["Peach Payments", "PayGate", "PayU"];
+const PSP_PINS = ["Peach Payments", "PayGate", "Paystack"];
 const MAX_LINES = 6;
 
 function fmtBucket(iso: string, g: Grain, first: boolean): string {
@@ -150,7 +150,7 @@ function AdoptionPanel({
   );
 }
 
-/** Payment-provider adoption over ~10 years, bucketable by Month / Quarter / Year — a best estimate
+/** Payment-provider adoption over ~5 years, bucketable by Month / Quarter / Year — a best estimate
  *  of when each currently-live store chose its provider (credited to its launch bucket). Split into
  *  three panels so each gateway type reads on its own scale: gateways (PSP), BNPL, and alt-methods
  *  (APM). Cumulative = installed base captured; Per-period = how each provider did in that bucket
@@ -193,7 +193,7 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
     <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-7">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-semibold">Payment provider adoption — last 10 years</h3>
+          <h3 className="text-lg font-semibold">Payment provider adoption — last 5 years</h3>
           <p className="mt-1 text-sm text-cream/45">
             {view === "cumulative"
               ? (metric === "share"
@@ -220,7 +220,7 @@ export function ProviderAdoptionChart({ country, platform }: { country: string; 
           <div className="grid h-64 place-items-center text-sm text-orange">{err}</div>
         ) : (
           <div className="space-y-5">
-            <AdoptionPanel series={data} type="PSP" title="Payment gateways · PSP" hint="The acquirers/gateways — Peach Payments, PayGate and PayU are always shown." metric={metric} view={view} pins={PSP_PINS} />
+            <AdoptionPanel series={data} type="PSP" title="Payment gateways · PSP" hint="The acquirers/gateways — Peach Payments, PayGate and Paystack are always shown." metric={metric} view={view} pins={PSP_PINS} />
             <div className="grid gap-5 lg:grid-cols-2">
               <AdoptionPanel series={data} type="BNPL" title="Buy-now-pay-later · BNPL" hint="Instalment credit (Payflex, PayJustNow, Mobicred…)." metric={metric} view={view} />
               <AdoptionPanel series={data} type="APM" title="Alt. methods · APM" hint="Wallets, EFT & rails (Ozow, SnapScan, Apple Pay…)." metric={metric} view={view} />

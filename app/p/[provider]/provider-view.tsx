@@ -24,14 +24,22 @@ const fmtMon = (iso: string) => {
   return `${dt.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })} ’${String(dt.getUTCFullYear()).slice(2)}`;
 };
 
-/** Market share over time, by LAUNCH COHORT — the catch-up-proof view. Monthly cumulative share of
- *  checkout-verified stores on this provider (a newly-found old store credits to its launch month, so
- *  catching up on discovery doesn't spike today's number). Windowable to the last 1Y / 3Y / all. */
-function MarketShareChart({ launchShare, provider, scope }: { launchShare: ProviderLaunchShare; provider: string; scope: string }) {
+/** Market share over time, with a toggle:
+ *   • CUMULATIVE — of all live checkout-verified stores launched by each month, the % on this provider
+ *     (catch-up-proof: a newly-found old store credits to its launch month, so discovery doesn't spike
+ *     today's number).
+ *   • % OF NEWLY LAUNCHED — of the stores that launched in each month, the % that chose it (acquisition).
+ *  Windowable to the last 1Y / 3Y / all. */
+function MarketShareChart({ launchShare, newMonthly, provider, scope }: { launchShare: ProviderLaunchShare; newMonthly: NewShareBucket[]; provider: string; scope: string }) {
   const [win, setWin] = useState<Win>("3Y");
+  const [mode, setMode] = useState<"cumulative" | "new">("cumulative");
   const [hover, setHover] = useState<number | null>(null);
-  const all = launchShare.months.map((m, i) => ({ m, share: launchShare.share[i] ?? 0, mine: launchShare.providerCum[i] ?? 0, base: launchShare.baseCum[i] ?? 0 }));
+  const cumAll = launchShare.months.map((m, i) => ({ m, share: launchShare.share[i] ?? 0, mine: launchShare.providerCum[i] ?? 0, base: launchShare.baseCum[i] ?? 0 }));
+  const newAll = newMonthly.map((b) => ({ m: b.date, share: b.share, mine: b.mine, base: b.total }));
+  const all = mode === "cumulative" ? cumAll : newAll;
   const pts = WIN_MONTHS[win] === Infinity ? all : all.slice(Math.max(0, all.length - WIN_MONTHS[win]));
+  const headline = mode === "cumulative" ? Math.round(launchShare.currentShare) : (newAll.length ? newAll[newAll.length - 1].share : 0);
+  const color = mode === "cumulative" ? "var(--color-cyan)" : "var(--color-mint)";
 
   const w = 720, h = 200, padL = 34, padB = 22, padT = 12;
   const maxY = Math.max(1, ...pts.map((p) => p.share)) * 1.15;
@@ -49,20 +57,32 @@ function MarketShareChart({ launchShare, provider, scope }: { launchShare: Provi
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
-          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider}, by launch cohort · <span className="text-cream/70">{scope}</span></p>
+          <p className="mt-1 text-xs text-cream/45">
+            {mode === "cumulative"
+              ? <>Share of checkout-verified stores using {provider}, by launch cohort · <span className="text-cream/70">{scope}</span></>
+              : <>Of stores that <b className="text-cream/70">launched</b> each month, the % that chose {provider} · <span className="text-cream/70">{scope}</span></>}
+          </p>
           <div className="mt-3 flex items-baseline gap-2">
-            <CountUp value={Math.round(launchShare.currentShare)} className="font-display text-5xl leading-none text-cream" />
+            <CountUp value={headline} className="font-display text-5xl leading-none text-cream" />
             <span className="font-display text-2xl text-cream/60">%</span>
-            <span className="ml-1 text-xs text-cream/40">today</span>
+            <span className="ml-1 text-xs text-cream/40">{mode === "cumulative" ? "today" : "latest month"}</span>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {WINS.map((r) => (
-            <button key={r} onClick={() => setWin(r)}
-              className={`rounded-full px-3 py-1 text-xs transition ${win === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
-              {r === "All" ? "All time" : `Last ${r}`}
-            </button>
-          ))}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex gap-1 rounded-full border border-cream/12 p-1" title="running installed base vs. what each month's new stores chose">
+            {([["cumulative", "Cumulative"], ["new", "% of new"]] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setMode(k)}
+                className={`rounded-full px-3 py-1 text-xs transition ${mode === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {WINS.map((r) => (
+              <button key={r} onClick={() => setWin(r)}
+                className={`rounded-full px-3 py-1 text-xs transition ${win === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
+                {r === "All" ? "All time" : `Last ${r}`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -75,10 +95,10 @@ function MarketShareChart({ launchShare, provider, scope }: { launchShare: Provi
                 <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
               </g>
             ))}
-            <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
-            <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
+            <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill={color} opacity="0.1" />
+            <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
             {hover != null && <line x1={x(hover)} x2={x(hover)} y1={padT} y2={h - padB} stroke="var(--color-cream)" strokeOpacity="0.25" />}
-            {pts.map((p, i) => (i % labelEvery === 0 || i === pts.length - 1) ? <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 2.5} fill="var(--color-cyan)" opacity={hover == null || hover === i ? 1 : 0.5} /> : null)}
+            {pts.map((p, i) => (i % labelEvery === 0 || i === pts.length - 1) ? <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 2.5} fill={color} opacity={hover == null || hover === i ? 1 : 0.5} /> : null)}
             {pts.map((p, i) => (i % labelEvery === 0 ? (
               <text key={`l${i}`} x={x(i)} y={h - 6} textAnchor="middle" className="fill-cream/40" fontSize="9">{fmtMon(p.m)}</text>
             ) : null))}
@@ -88,17 +108,19 @@ function MarketShareChart({ launchShare, provider, scope }: { launchShare: Provi
               style={{ left: `${Math.min(86, Math.max(14, (x(hover) / w) * 100))}%`, top: 0 }}>
               <div className="font-semibold text-cream">{fmtMon(pts[hover].m)}</div>
               <div className="mt-0.5 flex items-center gap-1.5 text-cream/75">
-                <span className="inline-block h-2 w-2 rounded-sm bg-cyan" />
+                <span className="inline-block h-2 w-2 rounded-sm" style={{ background: color }} />
                 <span>{provider}</span>
                 <span className="ml-auto pl-3 font-medium text-cream tabular-nums">{pts[hover].share}%</span>
               </div>
-              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].mine.toLocaleString()} of {pts[hover].base.toLocaleString()} verified · launched by then</div>
+              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].mine.toLocaleString()} of {pts[hover].base.toLocaleString()} {mode === "cumulative" ? "verified · launched by then" : "launched that month"}</div>
             </div>
           )}
         </div>
       ) : (
         <div className="mt-5 grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-center text-sm text-cream/45">
-          Not enough launch-dated, checkout-verified stores to chart yet — it fills in as dating + checkout coverage grow.
+          {mode === "cumulative"
+            ? "Not enough launch-dated, checkout-verified stores to chart yet — it fills in as dating + checkout coverage grow."
+            : "Not enough newly-launched stores with payment data yet — it fills in as launch-dating + checkout coverage grow."}
         </div>
       )}
     </div>
@@ -374,7 +396,7 @@ export function ProviderView({
 
         {/* market share over time — the holistic view */}
         <div className="mt-6">
-          <MarketShareChart launchShare={launchShare} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
+          <MarketShareChart launchShare={launchShare} newMonthly={newShare.month ?? []} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
         </div>
 
         {/* share of NEW stores over time — the acquisition curve, D/W/M/Q/Y */}

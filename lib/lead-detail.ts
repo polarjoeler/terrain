@@ -18,6 +18,11 @@ export type LeadDetail = {
   product_count: number | null; avg_product_price: string | null;
   estimated_monthly_sales: string | null; est_revenue_usd: string | null; currency: string | null;
   email: string | null; contact_email: string | null; contact_phone: string | null;
+  /** The person behind the store (name/role) + the best-guess personal email and its status —
+   *  shown and admin-editable in the drawer. contact_email is the VERIFIED/known address; the guess
+   *  is our inferred first@domain for a named decision-maker (kept separate so it never masquerades). */
+  contact_name: string | null; contact_role: string | null;
+  contact_email_guess: string | null; contact_guess_status: string | null; contact_mx_ok: boolean | null;
   instagram: string | null; facebook: string | null; tiktok: string | null;
   instagram_followers: number | null; facebook_followers: number | null;
   launched_at: string | null; launched_source: string | null;

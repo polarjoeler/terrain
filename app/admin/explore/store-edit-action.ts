@@ -13,10 +13,16 @@ export type StorePatch = {
   published?: boolean;
   name?: string | null;
   estimated_monthly_sales?: string | null;
+  // Contact — admin-entered, authoritative. The email a person at the store, e.g. luca@tekkietown.co.za,
+  // goes in contact_email (the VERIFIED field), never the guess column.
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_role?: string | null;
   tags?: string[];
 };
 
-const SCALARS = ["country", "platform", "published", "name", "estimated_monthly_sales"] as const;
+const SCALARS = ["country", "platform", "published", "name", "estimated_monthly_sales", "contact_name", "contact_email", "contact_role"] as const;
+const CONTACT_FIELDS = ["contact_name", "contact_email", "contact_role"] as const;
 
 let tablesReady = false;
 async function ensureTables(sql: ReturnType<typeof db>) {
@@ -37,7 +43,7 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   await ensureTables(sql);
 
   const [cur] = await sql<Record<string, unknown>[]>`
-    SELECT country, platform, published, name, estimated_monthly_sales
+    SELECT country, platform, published, name, estimated_monthly_sales, contact_name, contact_email, contact_role
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
   if (!cur) return { error: "not_found" };
 
@@ -62,6 +68,13 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   }
   // A manual country fix must survive re-enrichment: country-enrich skips country_source='manual'.
   if ("country" in set) set.country_source = "manual";
+  // A manual contact edit is authoritative — stamp it so the contact lane treats it as done (and
+  // should skip contact_source='manual'), and mark it "named" so it counts toward "reaches a person".
+  if (CONTACT_FIELDS.some((f) => f in set)) {
+    set.contact_source = "manual";
+    set.contact_checked_at = new Date();
+    if ("contact_name" in set) set.contact_type = set.contact_name ? "named" : null;
+  }
 
   try {
     await sql.begin(async (q) => {

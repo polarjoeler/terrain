@@ -693,8 +693,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                     </td>
                     <td className="px-4 py-2.5"><ScoreRing score={l.score} /></td>
                     <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
-                        {l.email ? <a href={`mailto:${l.email}`} className="text-cyan hover:underline">✉ {l.email.length > 22 ? l.email.slice(0, 22) + "…" : l.email}</a> : <span className="text-cream/25">no email</span>}
+                      <div className="flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                        {l.contactName && <span className="text-cream/70" title={l.contactRole ?? undefined}>👤 {l.contactName}</span>}
+                        {l.email ? <a href={`mailto:${l.email}`} className="text-cyan hover:underline">✉ {l.email.length > 22 ? l.email.slice(0, 22) + "…" : l.email}</a>
+                          : l.contactEmailGuess
+                            ? <span className="inline-flex items-center gap-1"><a href={`mailto:${l.contactEmailGuess}`} className="text-cyan/70 hover:underline">✉ {l.contactEmailGuess.length > 22 ? l.contactEmailGuess.slice(0, 22) + "…" : l.contactEmailGuess}</a><span className="rounded-full bg-orange/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-orange">pending</span></span>
+                            : <span className="text-cream/25">no email</span>}
                         {l.instagram && <a href={`https://instagram.com/${l.instagram.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream">IG</a>}
                         {l.facebook && <span className="text-cream/40">FB</span>}
                         {l.tiktok && <span className="text-cream/40">TT</span>}

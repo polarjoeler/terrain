@@ -109,8 +109,8 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [form, setForm] = useState<{ name: string; country: string; platform: string; published: boolean; revenue: string; tagsText: string }>(
-    { name: "", country: "", platform: "", published: false, revenue: "", tagsText: "" });
+  const [form, setForm] = useState<{ name: string; country: string; platform: string; published: boolean; revenue: string; tagsText: string; contactName: string; contactRole: string; contactEmail: string }>(
+    { name: "", country: "", platform: "", published: false, revenue: "", tagsText: "", contactName: "", contactRole: "", contactEmail: "" });
 
   function beginEdit() {
     if (!data) return;
@@ -118,6 +118,7 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
       name: data.name ?? "", country: data.country ?? "", platform: data.platform ?? "",
       published: Boolean(data.published), revenue: data.estimated_monthly_sales ?? "",
       tagsText: (data.tags ?? []).join(", "),
+      contactName: data.contact_name ?? "", contactRole: data.contact_role ?? "", contactEmail: data.contact_email ?? "",
     });
     setSaveErr(null); setEditing(true);
   }
@@ -128,11 +129,12 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
     const patch: StorePatch = {
       name: form.name || null, country: form.country || null, platform: form.platform || null,
       published: form.published, estimated_monthly_sales: form.revenue || null, tags,
+      contact_name: form.contactName || null, contact_email: form.contactEmail || null, contact_role: form.contactRole || null,
     };
     const res = await updateStore(data.domain, patch);
     setSaving(false);
     if ("error" in res) { setSaveErr(res.error); return; }
-    setData({ ...data, name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags } as LeadDetail);
+    setData({ ...data, name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
     setEditing(false);
   }
 
@@ -163,7 +165,7 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
           <div className="mt-4 rounded-2xl border border-cyan/30 bg-cyan/[0.05] p-4">
             <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-cyan/80">Edit store · admin</div>
             <div className="space-y-2.5 text-sm">
-              {([["name", "Name"], ["country", "Country (ISO2)"], ["platform", "Platform"], ["revenue", "Monthly sales (est.)"], ["tagsText", "Tags (comma-sep)"]] as const).map(([k, label]) => (
+              {([["name", "Name"], ["country", "Country (ISO2)"], ["platform", "Platform"], ["revenue", "Monthly sales (est.)"], ["contactName", "Contact name"], ["contactRole", "Contact role"], ["contactEmail", "Contact email"], ["tagsText", "Tags (comma-sep)"]] as const).map(([k, label]) => (
                 <label key={k} className="flex items-center gap-3">
                   <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-cream/40">{label}</span>
                   <input value={String((form as Record<string, unknown>)[k] ?? "")} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
@@ -258,7 +260,11 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
             </Section>
 
             <Section title="Contact">
+              <Row label="Person" value={data.contact_name ? `${data.contact_name}${data.contact_role ? ` · ${data.contact_role}` : ""}` : null} />
               <Row label="Email" value={bestEmail(data)} />
+              {data.contact_email_guess && !data.contact_email && (
+                <Row label="Email (guess)" value={`${data.contact_email_guess} · pending${data.contact_mx_ok ? " · MX ok" : ""}`} />
+              )}
               <Row label="Phone" value={data.contact_phone} />
             </Section>
 

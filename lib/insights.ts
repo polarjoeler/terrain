@@ -1098,9 +1098,9 @@ function bucketAdd(d: Date, g: AdoptionGranularity, n: number): Date {
 export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", granularity: AdoptionGranularity = "year", cap = 40): Promise<AdoptionSeries> {
   const sql = db();
   const cc = (country || "ZA").toUpperCase();
-  // A ~10-year window bucketed at the chosen grain: year → 10, quarter → 40, month → 120 buckets.
+  // A ~5-year window bucketed at the chosen grain: year → 5, quarter → 20, month → 60 buckets.
   const now = bucketStart(new Date(), granularity);
-  const nBuckets = granularity === "year" ? 10 : granularity === "quarter" ? 40 : 120;
+  const nBuckets = granularity === "year" ? 5 : granularity === "quarter" ? 20 : 60;
   const start = bucketAdd(now, granularity, -(nBuckets - 1));
   const iso = (d: Date) => d.toISOString().slice(0, 10);
   const buckets: string[] = Array.from({ length: nBuckets }, (_, i) => iso(bucketAdd(start, granularity, i)));

@@ -90,7 +90,10 @@ export type BrowseRow = {
   /** `email` is the best address we hold (see bestEmailSql) — not the raw imported column. */
   email: string | null; instagram: string | null; facebook: string | null; tiktok: string | null;
   /** Contact quality, so the table can say WHAT the address is instead of just showing it. */
-  contactType: string | null; contactName: string | null; whatsapp: string | null;
+  contactType: string | null; contactName: string | null; contactRole: string | null; whatsapp: string | null;
+  /** Best-guess personal email for a named decision-maker (first@domain) + its status. Shown tagged
+   *  "pending" until verified — never promoted into `email`/contact_email. */
+  contactEmailGuess: string | null; contactGuessStatus: string | null;
   /** false = the address's domain has no MX and will bounce; null = not checked yet.
    *  sharedCount > 1 = another tracked store uses this same address (agency / head office). */
   contactMxOk: boolean | null; contactSharedCount: number | null;
@@ -376,7 +379,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   const rows = await sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
            activity_tier, ${sql.unsafe(bestEmailSql)} AS email,
-           contact_type, contact_name, whatsapp, contact_mx_ok, contact_shared_count,
+           contact_type, contact_name, contact_role, contact_email_guess, contact_guess_status, whatsapp, contact_mx_ok, contact_shared_count,
            instagram, facebook, tiktok,
            instagram_followers, facebook_followers, product_count, avg_product_price, currency,
            ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
@@ -404,6 +407,8 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         productCount: r.product_count == null ? null : Number(r.product_count), aovUsd: aov,
         email, instagram: (r.instagram as string) ?? null, facebook: (r.facebook as string) ?? null, tiktok: (r.tiktok as string) ?? null,
         contactType: (r.contact_type as string) ?? null, contactName: (r.contact_name as string) ?? null,
+        contactRole: (r.contact_role as string) ?? null,
+        contactEmailGuess: (r.contact_email_guess as string) ?? null, contactGuessStatus: (r.contact_guess_status as string) ?? null,
         whatsapp: (r.whatsapp as string) ?? null,
         contactMxOk: r.contact_mx_ok == null ? null : Boolean(r.contact_mx_ok),
         contactSharedCount: r.contact_shared_count == null ? null : Number(r.contact_shared_count),
