@@ -26,6 +26,14 @@ CREATE INDEX IF NOT EXISTS idx_subscribers_status ON subscribers(status);
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_month TEXT;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS export_used INTEGER NOT NULL DEFAULT 0;
 
+-- Extra seats bought on top of the plan's included count. Mirrors the quantity of the
+-- seat line item on the Stripe subscription; the webhook is what writes it.
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS extra_seats INTEGER NOT NULL DEFAULT 0;
+
+-- A seat holder is resolved from their inviting org's subscription, which means looking a
+-- subscriber up by email DOMAIN rather than by address.
+CREATE INDEX IF NOT EXISTS idx_subscribers_domain ON subscribers (split_part(email, '@', 2));
+
 -- Admin-imported "base" stores. Held in a separate pool until published, so a
 -- messy import can't pollute the live feed.
 CREATE TABLE IF NOT EXISTS imported_stores (

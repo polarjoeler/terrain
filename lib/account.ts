@@ -4,11 +4,16 @@
  *  Adds an editable display name (user_profile.display_name), an editable workspace name
  *  (org_profile.workspace_name), and a lightweight team roster + pending invites (team_invite).
  *
- *  Billing is intentionally untouched: an invite is CAPTURED as pending — nothing is emailed, no seat
- *  is provisioned, no charge is made. Seat provisioning waits on the billing work (deferred).
+ *  An invite now CARRIES A SEAT: lib/seats.ts resolves it to the inviting org's subscription, so an
+ *  invited teammate signing in inherits the plan instead of being bounced to /billing. Invites are
+ *  still not emailed — the owner tells them to sign in — and inviting past the paid seat count is
+ *  refused here rather than silently given away.
  */
 import { db as sharedDb } from "./db";
 import { orgKey } from "./profile";
+import { orgSeats } from "./subscriptions";
+import { seatRoster } from "./seats";
+import { planOf } from "./plans";
 
 function db() { return sharedDb(); }
 
@@ -31,7 +36,9 @@ function ensure(sql: ReturnType<typeof db>): Promise<void> {
     const needName = !(await hasCol("user_profile", "display_name"));
     const needWs = !(await hasCol("org_profile", "workspace_name"));
     const needInvite = !(await hasTable("team_invite"));
-    if (!needName && !needWs && !needInvite) return; // common case: nothing to lock.
+    // Only meaningful on a team_invite that already exists; a fresh one is created with the column.
+    const needAccepted = !needInvite && !(await hasCol("team_invite", "accepted_at"));
+    if (!needName && !needWs && !needInvite && !needAccepted) return; // common case: nothing to lock.
     await sql.begin(async (t) => {
       await t`SET LOCAL lock_timeout = '3s'`; // never block the request behind a long-held lock.
       if (needName) await t`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS display_name text`;
@@ -44,7 +51,9 @@ function ensure(sql: ReturnType<typeof db>): Promise<void> {
         status text NOT NULL DEFAULT 'pending',
         invited_by text,
         created_at timestamptz NOT NULL DEFAULT now(),
+        accepted_at timestamptz,
         UNIQUE (org, email))`;
+      if (needAccepted) await t`ALTER TABLE team_invite ADD COLUMN IF NOT EXISTS accepted_at timestamptz`;
     });
   })().catch((e) => { _ensured = null; throw e; }));
 }
@@ -145,22 +154,38 @@ export async function listMembers(email: string): Promise<Member[]> {
   }));
 }
 
-export type Invite = { id: string; email: string; role: Role; createdAt: string };
+export type Invite = { id: string; email: string; role: Role; status: "pending" | "accepted"; createdAt: string };
 
+/** Every invite holding a seat, accepted ones included.
+ *
+ *  Accepted invites have to be listed, not filtered out: an invitee only gains a `user_profile`
+ *  row once they save a profile or finish onboarding, so one who signed in and skipped both would
+ *  otherwise appear in neither list while still consuming a paid seat. The caller drops the ones
+ *  already showing as members. */
 export async function listInvites(email: string): Promise<Invite[]> {
   const sql = db();
   const org = orgKey(key(email));
   try {
     await ensure(sql);
-    const rows = await sql<{ id: string; email: string; role: Role; created_at: string }[]>`
-      SELECT id, email, role, created_at FROM team_invite WHERE org = ${org} AND status = 'pending' ORDER BY created_at DESC`;
-    return rows.map((r) => ({ id: String(r.id), email: r.email, role: r.role, createdAt: new Date(r.created_at).toISOString() }));
+    const rows = await sql<{ id: string; email: string; role: Role; status: string; created_at: string }[]>`
+      SELECT id, email, role, status, created_at FROM team_invite
+      WHERE org = ${org} AND status IN ('pending', 'accepted') ORDER BY created_at DESC`;
+    return rows.map((r) => ({
+      id: String(r.id), email: r.email, role: r.role,
+      status: r.status === "accepted" ? "accepted" : "pending",
+      createdAt: new Date(r.created_at).toISOString(),
+    }));
   } catch { return []; }
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-/** Capture a pending invite. Does NOT send email or provision a seat — that's the (deferred) billing work. */
+/** Capture an invite, which is what grants a seat (see lib/seats.ts). Still sends no email.
+ *
+ *  Capped at the paid seat count. The cap is also enforced at read time by rank, so exceeding it
+ *  would downgrade the newest invitee rather than leak access — but refusing here is what makes
+ *  that visible instead of mysterious. Re-inviting an address already on the roster is an update,
+ *  not a new seat, so it is allowed through a full workspace. */
 export async function inviteMember(email: string, inviteEmail: string, role: string): Promise<void> {
   const sql = db();
   await ensure(sql);
@@ -169,6 +194,16 @@ export async function inviteMember(email: string, inviteEmail: string, role: str
   const target = key(inviteEmail);
   if (!EMAIL_RE.test(target)) throw new Error("Enter a valid email address.");
   if (target === e) throw new Error("That's you — you're already on the team.");
+  const roster = await seatRoster(org).catch(() => []);
+  if (!roster.some((m) => m.email === target)) {
+    const seats = await orgSeats(org);
+    if (seats.remaining < 1) {
+      const plan = planOf(seats.owner?.plan);
+      throw new Error(
+        `All ${seats.capacity} seats on ${plan.label} are taken. Add a seat ($${plan.extraSeatUsd}/mo) on the billing page, then invite them.`,
+      );
+    }
+  }
   const r: Role = role === "admin" ? "admin" : "member";
   await sql`
     INSERT INTO team_invite (org, email, role, status, invited_by) VALUES (${org}, ${target}, ${r}, 'pending', ${e})

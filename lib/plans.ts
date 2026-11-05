@@ -81,6 +81,21 @@ export const ADDON_RADAR_PARTNERS_USD = 100;
  *  script can create ONE seat price rather than one per plan. */
 export const EXTRA_SEAT_USD = 30;
 
+/** Months billed on the 2027 annual promo — 8, i.e. 4 months free. DERIVED from the ladder
+ *  rather than restated, because an annual seat price that drifted from the annual plan prices
+ *  would be invisible until someone's invoice was wrong. */
+export const ANNUAL_MONTHS_BILLED = PLANS.intelligence.annualUsd! / PLANS.intelligence.monthlyUsd;
+
+/** A seat on an annual subscription. Stripe refuses to mix billing intervals inside one
+ *  subscription, so an annual plan needs an annual seat price — a monthly one cannot be added
+ *  to it at all. */
+export const EXTRA_SEAT_ANNUAL_USD = EXTRA_SEAT_USD * ANNUAL_MONTHS_BILLED;
+
+/** Hard ceiling on seats bought in one go. Not a business limit — a fat-finger limit, so a
+ *  stray keystroke can't start a four-figure subscription. */
+export const MAX_EXTRA_SEATS = 50;
+
+
 /** Unmetered plans are still COUNTED — we just don't refuse. Crossing this in a month
  *  notifies us to look, rather than blocking a legitimate BD team mid-quarter. One month
  *  of Intelligence is otherwise the whole Shopify base (40,922 rows). */
@@ -105,6 +120,9 @@ export const platformsFor = (raw: string | null | undefined): string[] | null =>
 
 /** Rows/month, or null for unmetered. */
 export const exportLimitFor = (raw: string | null | undefined): number | null => planOf(raw).exportLimit;
+
+/** Seats a plan carries before any extra are bought — the payer included. */
+export const seatsFor = (raw: string | null | undefined): number => planOf(raw).seats;
 
 /** Does this plan unlock a report at `tier`? The single check the catalog asked for. */
 export function hasInsightAccess(tier: ReportTier, raw: string | null | undefined): boolean {

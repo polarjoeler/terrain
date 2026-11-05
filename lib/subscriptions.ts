@@ -7,6 +7,7 @@
 
 import { db } from "./db";
 import { planOf, resolvePlan, type PlanKey } from "./plans.ts";
+import { orgSubscriberEmails, seatCapacity, seatInviteFor, seatRoster } from "./seats";
 import { getStore } from "./store";
 
 export const TRIAL_DAYS = 7;
@@ -30,6 +31,7 @@ export async function listSubscribers(): Promise<Subscriber[]> {
       nextPaymentDate: r.next_payment_date ? new Date(r.next_payment_date).toISOString() : null,
       exportMonth: r.export_month ?? null,
       exportUsed: r.export_used ?? 0,
+      extraSeats: r.extra_seats ?? 0,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
       updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
     }));
@@ -95,6 +97,12 @@ export type Subscriber = {
   /** Monthly CSV-export quota (Pro). */
   exportMonth?: string | null; // 'YYYY-MM'
   exportUsed?: number;
+  /** Seats bought on top of the plan's included count — the Stripe seat line item's quantity. */
+  extraSeats?: number;
+  /** Set only on a record resolved through someone else's subscription: the address that pays.
+   *  Derived per read, never stored. Its presence is also the "you are not the billing owner"
+   *  signal the account page needs. */
+  viaSeat?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -130,6 +138,8 @@ export async function consumeExportQuota(
   const plan = planOf(s.plan);
   const limit = plan.exportLimit;
   const month = currentMonth();
+  // `s` is the OWNER's record for a seat holder, so both the reading and the writing below land on
+  // one row: the month's allowance is pooled across the workspace, not handed out per seat.
   const used = s.exportMonth === month ? s.exportUsed ?? 0 : 0;
 
   // Unmetered plans are still COUNTED — usage is shown to the customer, and crossing
@@ -137,7 +147,7 @@ export async function consumeExportQuota(
   // rather than capping it, and an advertised cap we'd have to honour is worse than an
   // unadvertised threshold we can act on.
   if (limit == null) {
-    await upsertSubscriber(email, { exportMonth: month, exportUsed: used + n });
+    await upsertSubscriber(s.viaSeat ?? email, { exportMonth: month, exportUsed: used + n });
     return { ok: true, remaining: null, limit: null };
   }
 
@@ -149,7 +159,7 @@ export async function consumeExportQuota(
       reason: `That's ${n.toLocaleString()} stores but only ${(limit - used).toLocaleString()} left on ${plan.label} this month (${limit.toLocaleString()}/mo).`,
     };
   }
-  await upsertSubscriber(email, { exportMonth: month, exportUsed: used + n });
+  await upsertSubscriber(s.viaSeat ?? email, { exportMonth: month, exportUsed: used + n });
   return { ok: true, remaining: limit - used - n, limit };
 }
 
@@ -163,7 +173,8 @@ export function usageFor(s: Subscriber | null): { used: number; limit: number | 
 
 const key = (email: string) => email.trim().toLowerCase();
 
-export async function getSubscriber(email: string): Promise<Subscriber | null> {
+/** This address's OWN subscriber row, with no seat inheritance. */
+async function readOwn(email: string): Promise<Subscriber | null> {
   // The paywall gate runs on EVERY authenticated page (dashboard, insights, billing). It's a single
   // indexed read, but with no retry a brief pooler-exhaustion window made it throw and 500 the whole
   // page. Retry through transient blips (bounded, read-only → safe). Sustained saturation still needs
@@ -176,6 +187,56 @@ export async function getSubscriber(email: string): Promise<Subscriber | null> {
     catch (e) { lastErr = e; if (i < 2) await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
   }
   throw lastErr;
+}
+
+/** Whoever is paying for an org: the oldest subscriber on its domain that still has access.
+ *  `subscribers` has no org column, so this matches the email domain (idx_subscribers_domain). */
+export async function billingOwnerOf(org: string): Promise<Subscriber | null> {
+  const store = getStore();
+  for (const candidate of await orgSubscriberEmails(org)) {
+    const sub = await store.get(candidate).catch(() => null);
+    if (sub && hasAccess(sub)) return sub;
+  }
+  return null;
+}
+
+/** Seat accounting for an org, for the account page and the invite cap. */
+export async function orgSeats(org: string): Promise<{
+  capacity: number; used: number; remaining: number; extraSeats: number; owner: Subscriber | null;
+}> {
+  const owner = await billingOwnerOf(org).catch(() => null);
+  const extraSeats = owner?.extraSeats ?? 0;
+  // A live trial counts: hasAccess is true for one, so the trialling account IS the owner here and
+  // gets its plan's seats. No owner at all means nobody in the org has access, so there is exactly
+  // one seat to speak of — the person reading the page.
+  const capacity = owner ? seatCapacity(owner.plan, extraSeats) : 1;
+  const used = 1 + (await seatRoster(org).catch(() => [])).length;   // the payer holds seat 1
+  return { capacity, used, remaining: Math.max(0, capacity - used), extraSeats, owner };
+}
+
+/** A subscription reached through an invite, shaped as this address's own record.
+ *
+ *  Only ever called for an address with no access of its own, so it adds no query to a paying
+ *  customer's page load. Returns the OWNER's plan, status and export counters: the quota is
+ *  pooled across the workspace rather than multiplied per seat, and `viaSeat` records who pays
+ *  so a consumed export is billed against their row. */
+async function inheritSeat(email: string): Promise<Subscriber | null> {
+  const invite = await seatInviteFor(email);
+  if (!invite) return null;
+  const owner = await billingOwnerOf(invite.org);
+  if (!owner) return null;
+  // Seat 1 is the payer's, so invite #n needs capacity n+1. Over the cap = no access, newest first.
+  if (invite.rank > seatCapacity(owner.plan, owner.extraSeats) - 1) return null;
+  return { ...owner, email: key(email), viaSeat: owner.email };
+}
+
+export async function getSubscriber(email: string): Promise<Subscriber | null> {
+  const own = await readOwn(email);
+  if (own && hasAccess(own)) return own;         // hot path for anyone paying: unchanged, one read
+  // No access of their own — they may still hold a seat on someone else's subscription. Never let
+  // this throw: a seat lookup failing must leave them where they already were, not 500 the page.
+  const seat = await inheritSeat(email).catch(() => null);
+  return seat ?? own;
 }
 
 export async function upsertSubscriber(
@@ -198,6 +259,7 @@ export async function upsertSubscriber(
     nextPaymentDate: patch.nextPaymentDate ?? existing?.nextPaymentDate ?? null,
     exportMonth: patch.exportMonth ?? existing?.exportMonth ?? null,
     exportUsed: patch.exportUsed ?? existing?.exportUsed ?? 0,
+    extraSeats: patch.extraSeats ?? existing?.extraSeats ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };

@@ -9,7 +9,7 @@
 
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { mapStatus, planFromMetadata, stripe } from "@/lib/stripe";
+import { mapStatus, planFromMetadata, planItemOf, seatQuantityOf, stripe } from "@/lib/stripe";
 import { upsertSubscriber } from "@/lib/subscriptions";
 import { setBrandSubscription } from "@/lib/radar/brands";
 
@@ -20,7 +20,10 @@ function iso(unixSeconds: number | null | undefined): string | null {
 }
 
 async function applySubscription(sub: Stripe.Subscription, email?: string | null) {
-  const periodEndTs = sub.items?.data?.[0]?.current_period_end ?? null;
+  // The billing period lives on the subscription item in the current API. Read it off the PLAN
+  // item specifically: a subscription with extra seats has a second item, and which one Stripe
+  // puts first is not ours to assume.
+  const periodEndTs = planItemOf(sub)?.current_period_end ?? null;
 
   // Radar monitoring subscription → update the enrolled brand, keyed by metadata.
   if (sub.metadata?.product === "radar") {
@@ -43,15 +46,17 @@ async function applySubscription(sub: Stripe.Subscription, email?: string | null
   }
   if (!addr) return;
 
-  // In the latest Stripe API the billing period lives on the subscription item.
-  const periodEnd = sub.items?.data?.[0]?.current_period_end ?? null;
   await upsertSubscriber(addr, {
     plan: planFromMetadata(sub.metadata),
     status: mapStatus(sub.status),
     trialEndsAt: iso(sub.trial_end),
-    nextPaymentDate: iso(periodEnd),
+    nextPaymentDate: iso(periodEndTs),
     customerCode: typeof sub.customer === "string" ? sub.customer : sub.customer.id,
     subscriptionCode: sub.id,
+    // Seats are read from the LINE ITEM, never from metadata: a quantity changed later (from the
+    // account page, or by hand in the Stripe dashboard) moves the item, and metadata written at
+    // checkout would then be stale. Stripe is the source of truth for what is being paid for.
+    extraSeats: seatQuantityOf(sub),
   });
 }
 

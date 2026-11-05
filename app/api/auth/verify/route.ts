@@ -6,6 +6,7 @@ import { redeemMagicToken, startSession, originFromRequest } from "@/lib/auth";
 import { recordLogin, ipOf } from "@/lib/sessions";
 import { ONBOARDING_SKIP_COOKIE, hasCompletedOnboarding } from "@/lib/profile";
 import { grantTrial } from "@/lib/subscriptions";
+import { acceptInvites } from "@/lib/seats";
 import { resolvePlan } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -43,6 +44,11 @@ export async function GET(req: Request) {
   // Record where this seat signed in from (anti-sharing signal) — best-effort, MUST NOT block or fail
   // sign-in: the session cookie is already set, so a DB hiccup here can't be allowed to 500 the login.
   try { await recordLogin(email, ipOf(req), req.headers.get("user-agent") ?? ""); } catch { /* ignore */ }
+
+  // Flip any invite for this address from pending to accepted. Cosmetic only — a pending invite
+  // already holds its seat (lib/seats.ts), so this just stops the roster calling an active
+  // teammate "Pending". Must never break sign-in.
+  try { await acceptInvites(email); } catch { /* ignore */ }
 
   // Send a user who has never completed setup to /onboarding instead of straight to the dashboard —
   // otherwise the screen only exists behind a link most people never click. Skippable: once they
