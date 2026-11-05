@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { SectionReport, ReportItem } from "@/lib/insights";
 import { ProviderAdoptionChart } from "./provider-adoption-chart";
+import { LastMonthWinners } from "./last-month-winners";
 import { InsightsNav } from "../insights-nav";
 import { marketLabel, groupCodesByRegion } from "@/lib/markets";
 
@@ -199,7 +200,8 @@ export function ReportView({ report, country, countries, platform }: { report: S
         {/* 10-year adoption curve — provider growth by best-estimate choose-at-launch. Client-fetched
             (cached), so it streams in after the report and never slows the page. */}
         {report.section === "payments" && (
-          <div className="mt-10">
+          <div className="mt-10 space-y-6">
+            <LastMonthWinners country={country} platform={platform} />
             <ProviderAdoptionChart country={country} platform={platform} />
           </div>
         )}

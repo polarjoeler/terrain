@@ -300,14 +300,21 @@ const NEW_SHARE_CFG: Record<NewSharePeriod, { trunc: string; window: string }> =
  *  payment data (so "chose you" is knowable). Sparse for recent months until dating catches up. */
 export async function providerNewShareSeries(
   provider: string, period: NewSharePeriod = "month", country?: string, platform: string = "all",
+  markets?: string[],
 ): Promise<NewShareBucket[]> {
   const sql = db();
   // Match whole checkout tokens, not substrings: ILIKE '%credit card%' also hit
   // "Mollie - Credit Card". Variants fold aliases ("wigwag-app") into the provider.
   const variants = providerVariants(provider);
   const cfg = NEW_SHARE_CFG[period] ?? NEW_SHARE_CFG.month;
-  const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  // Scope: a chosen country wins; otherwise the provider's DECLARED service markets (so "All markets"
+  // means e.g. Peach's ZA/KE/MU, not the whole world); otherwise every market (no declared list).
+  const AND_C = country
+    ? sql`AND UPPER(country) = ${country.toUpperCase()}`
+    : markets && markets.length
+      ? sql`AND UPPER(country) = ANY(${markets.map((m) => m.toUpperCase())}::text[])`
+      : sql``;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql<{ b: Date; total: number; mine: number }[]>`
     SELECT date_trunc(${cfg.trunc}, ${LAUNCH})::date AS b,
            COUNT(*)::int AS total,
@@ -336,12 +343,17 @@ export type ProviderLaunchShare = { months: string[]; share: number[]; providerC
  *  newly-discovered old stores spreads across history instead of spiking today's share — so the curve
  *  reflects real adoption, not when we happened to probe. Survivorship-adjusted (live stores only) and
  *  always fresh (no snapshot dependency). Monthly granularity. */
-export async function providerLaunchShare(provider: string, country?: string, platform: string = "all"): Promise<ProviderLaunchShare> {
+export async function providerLaunchShare(provider: string, country?: string, platform: string = "all", markets?: string[]): Promise<ProviderLaunchShare> {
   const sql = db();
-  const ctry = country && country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
+  // Same scoping as the new-store curve: country wins, else the provider's declared markets, else all.
+  const ctry = country && country !== "ALL"
+    ? sql`AND UPPER(country) = ${country.toUpperCase()}`
+    : markets && markets.length
+      ? sql`AND UPPER(country) = ANY(${markets.map((m) => m.toUpperCase())}::text[])`
+      : sql``;
   const plat = platformClause(sql, platform);
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const VERIFIED = sql`payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus' AND ${realPaymentsClause(sql)}`;
   const variants = providerVariants(provider);
   const HASPROV = sql`EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`;
@@ -519,7 +531,7 @@ export function providerMomentumByPeriod(country = "ALL"): Promise<Record<Moment
 export async function computeProviderMomentumByPeriod(country: string): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
   const sql = db();
   const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql<{ launch_date: Date; payments: string }[]>`
     SELECT ${LAUNCH} AS launch_date, payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
@@ -656,7 +668,7 @@ export async function growthSeries(opts: {
   // oldest product, else the StoreLeads launch date) — NOT discovered_at, which counts old
   // stores we merely re-saw (a cert renewal) as "new". Floored at when tracking began so old
   // stores we backfill-discovered don't reappear as historical launches.
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   // Floor = when our FORWARD tracking began, so old stores we merely backfill-discovered don't
   // reappear as historical launches. Guard against bulk imports that carry historical
   // discovered_at (e.g. the BuiltWith Woo list, dated 2016-2019): Terrain didn't exist before
@@ -781,7 +793,7 @@ export async function platformGrowthSeries(country?: string, provider?: string):
     ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
     : sql``;
   const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   // "shopify" absorbs unclassified CT discoveries (platform NULL); every other CMS groups by its slug.
   const BUCKET = sql`CASE WHEN lower(platform) = 'shopify' OR platform IS NULL THEN 'shopify' ELSE lower(platform) END`;
   // Full vintage arc — live stores date back to ~2012; pre-2013 is negligible, so 2013 is a clean edge.

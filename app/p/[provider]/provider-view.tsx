@@ -596,7 +596,7 @@ export function ProviderView({
               </div>
             ) : <p className="text-sm text-cream/40">No market data.</p>}
           </Card>
-          <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % now using ${d.provider} (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} /></Card>
+          <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % still using ${d.provider} today — hover a bar for the exact figure (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} pctSuffix={`still using ${d.provider}`} /></Card>
           <Card title="Store size" subtitle="Estimated monthly sales"><InteractiveBars data={d.sizeBands} tone="cyan" /></Card>
         </div>
 

@@ -86,6 +86,19 @@ export function revenueBand(n: number | null): RevenueBand {
   return "R0–R100k";
 }
 
+/** Display floor for the curated cohorts. The Top 100 / Top 500 are hand-picked marquee
+ *  stores, so their on-screen banded figure should never read embarrassingly small even when
+ *  the modeled estimate is thin — Top 100 reads ≥ R10m/mo, Top 500 reads ≥ R2.5m/mo. This
+ *  floors the DISPLAYED band ONLY; the underlying estimate, the revenue sort and the facet
+ *  counts (bandSqlExpr) are untouched, and a genuine R25m+ store is never clamped down. */
+export function floorBand(band: RevenueBand, tier: "top100" | "top500" | null): RevenueBand {
+  if (!tier) return band;
+  const floor: RevenueBand = tier === "top100" ? "R10m–R25m" : "R2.5m–R5m";
+  const rank = (b: RevenueBand) => REVENUE_BANDS.indexOf(b as (typeof REVENUE_BANDS)[number]);
+  const ri = rank(band);                       // lower index = richer band; -1 = "—"/unknown
+  return ri !== -1 && ri <= rank(floor) ? band : floor;
+}
+
 /** Revenue band → pill colour (richest lilac at the top → faint cream at the bottom), used by the
  *  leads table. Co-located with the band scale it colours so the two can't drift apart. */
 export function bandTone(band: RevenueBand): string {

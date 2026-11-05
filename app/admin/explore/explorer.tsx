@@ -5,7 +5,7 @@ import { saveListAction } from "@/app/(app)/lists/actions";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
 import { scoreColor } from "@/lib/revenue";
-import { bandTone, REVENUE_BANDS, bandDisplay } from "@/lib/fx";
+import { bandTone, REVENUE_BANDS, bandDisplay, floorBand } from "@/lib/fx";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
 import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
@@ -319,7 +319,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // Stat tiles read true counts over the WHOLE filtered set (from the aggregate), not the page.
   const liveStats = {
     shown: data.total,
-    fresh: hasLaunchData ? (data.recency.launched[7] ?? 0) : (data.recency.discovered[7] ?? 0),
+    // "New this week" = stores newly DISCOVERED in the last 7d (the number that actually moves
+    // week to week). Launch-dated counts are still thin while catalog-dating backfills, so the
+    // headline tile reads discovery, not launches.
+    fresh: data.recency.discovered[7] ?? 0,
     plus: data.stats.plus,
     email: data.stats.email,
     reachable: data.stats.reachable,
@@ -536,7 +539,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
           <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
             <div className="rounded-3xl bg-mint p-5 text-ink">
               <div className="font-display text-4xl tabular-nums">+{liveStats.fresh.toLocaleString()}</div>
-              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">{hasLaunchData ? "Launched" : "Newly discovered"} · 7d</div>
+              <div className="mt-1 text-xs font-semibold uppercase tracking-wide opacity-70">New this week</div>
             </div>
             <div className="rounded-3xl bg-lilac p-5 text-ink">
               <div className="font-display text-4xl tabular-nums">{liveStats.plus.toLocaleString()}</div>
@@ -640,8 +643,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
             </thead>
             <tbody>
               {rows.map((l) => {
-                const b = l.band;
-                const bd = bandDisplay(l.band, l.country);
+                // Curated cohorts get a display floor so marquee stores never read too small.
+                const b = floorBand(l.band, l.top100 ? "top100" : l.top500 ? "top500" : null);
+                const bd = bandDisplay(b, l.country);
                 return (
                   <tr key={l.domain} onClick={() => setSelected(l.domain)} className={`cursor-pointer border-t border-cream/[0.07] transition hover:bg-cream/[0.05] ${picked.has(l.domain) ? "bg-cyan/[0.06]" : ""}`} title="View all known data">
                     <td className="w-8 px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
