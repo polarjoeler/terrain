@@ -177,8 +177,8 @@ const stale = await stripe.products.list({ limit: 100, active: true });
 const old = stale.data.filter((p) => ["Terrain Starter", "Terrain Pro"].includes(p.name));
 if (old.length) {
   console.log(`\nStill active from the old ladder: ${old.map((p) => p.name).join(", ")}.`);
-  console.log("Archive them in Stripe once STRIPE_PRICE_LEADS/INTELLIGENCE are set in every");
-  console.log("environment — lib/stripe.ts falls back to STRIPE_PRICE_STARTER/PRO until then.");
+  console.log("Safe to archive in Stripe now — lib/stripe.ts no longer falls back to");
+  console.log("STRIPE_PRICE_STARTER/PRO; prices resolve by lookup_key in whatever mode the key is in.");
 }
 
 if (mismatches) {
