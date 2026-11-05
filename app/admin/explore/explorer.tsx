@@ -188,6 +188,8 @@ export type ExportUsage = {
   limit: number | null;
   remaining: number | null;
   planLabel: string;
+  /** Trial seats can browse but not export — the button is disabled and the server also refuses. */
+  trial?: boolean;
 };
 
 export function Explorer({ initialData, initial, showStats, usage: usageProp }: {
@@ -337,14 +339,17 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   const [exporting, setExporting] = useState(false);
   // How many rows THIS click would export: the ticked rows, or the whole filtered set.
   const pendingRows = picked.size > 0 ? picked.size : data.total;
+  const exportBlocked = !!usage?.trial; // trial seats can browse but not export
   const overAllowance = usage?.remaining != null && pendingRows > usage.remaining;
   // Metered plans show what's left; unmetered ones show what's been used. Both read from the
   // plan, so adding a tier needs no change here.
   const usageLabel = !usage
     ? null
-    : usage.limit == null
-      ? `${usage.used.toLocaleString()} leads exported this month · ${usage.planLabel}`
-      : `${(usage.remaining ?? 0).toLocaleString()} of ${usage.limit.toLocaleString()} leads left this month · ${usage.planLabel}`;
+    : usage.trial
+      ? `Export unlocks on a paid plan · ${usage.planLabel} trial`
+      : usage.limit == null
+        ? `${usage.used.toLocaleString()} leads exported this month · ${usage.planLabel}`
+        : `${(usage.remaining ?? 0).toLocaleString()} of ${usage.limit.toLocaleString()} leads left this month · ${usage.planLabel}`;
 
   // Both export surfaces report what the download cost and what is left.
   const noteRemaining = (rows: string | null, remaining: string | null) => {
@@ -600,10 +605,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                 </>
               )}
             </div>
-            <button onClick={exportCsv} disabled={exporting || overAllowance} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
+            <button onClick={exportCsv} disabled={exporting || overAllowance || exportBlocked} title={exportBlocked ? "Export unlocks on a paid plan" : undefined} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
               {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
             </button>
-            <button onClick={exportSheet} disabled={sheetBusy || overAllowance} title="Export the filtered set into a Google Sheet" className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
+            <button onClick={exportSheet} disabled={sheetBusy || overAllowance || exportBlocked} title={exportBlocked ? "Export unlocks on a paid plan" : "Export the filtered set into a Google Sheet"} className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
               {sheetBusy ? "Exporting…" : "→ Google Sheets"}
             </button>
           </div>

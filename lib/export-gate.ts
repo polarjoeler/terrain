@@ -34,6 +34,17 @@ export async function openExport(): Promise<Denied | Opened> {
     if (!hasAccess(sub)) {
       return { ok: false, response: NextResponse.json({ error: "no_access" }, { status: 403 }) };
     }
+    // Trial accounts can browse the full dataset but not export it — export unlocks on a paid plan.
+    // Enforced here (the one gate every export surface shares) so both the CSV and Sheet doors honour it.
+    if (sub?.status === "trialing") {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Export unlocks when you upgrade from the trial to a paid plan.", trial: true },
+          { status: 403 },
+        ),
+      };
+    }
     scope = platformsFor(sub?.plan);
   }
 

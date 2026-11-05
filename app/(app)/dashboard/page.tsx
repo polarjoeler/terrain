@@ -159,7 +159,7 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
   // Export allowance travels with the first paint, so the Explorer can show what's left
   // before the customer clicks. Admins are unmetered, so they get nothing to show.
   const u = admin ? null : usageFor(sub);
-  const usage = u ? { used: u.used, limit: u.limit, remaining: u.remaining, planLabel: u.plan.label } : undefined;
+  const usage = u ? { used: u.used, limit: u.limit, remaining: u.remaining, planLabel: u.plan.label, trial: sub?.status === "trialing" } : undefined;
   const RMAP: Record<string, number> = { "7d": 7, "30d": 30, "365d": 365 };
   const LMAP: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 };
   const filters: BrowseFilters = {
