@@ -5,6 +5,8 @@ import { cookies } from "next/headers";
 import { redeemMagicToken, startSession, originFromRequest } from "@/lib/auth";
 import { recordLogin, ipOf } from "@/lib/sessions";
 import { ONBOARDING_SKIP_COOKIE, hasCompletedOnboarding } from "@/lib/profile";
+import { grantTrial } from "@/lib/subscriptions";
+import { resolvePlan } from "@/lib/plans";
 
 export const runtime = "nodejs";
 
@@ -15,16 +17,26 @@ export async function GET(req: Request) {
   // /dashboard rewrites to /radar/dashboard).
   const origin = originFromRequest(req);
 
-  let email: string | null = null;
+  let redeemed: Awaited<ReturnType<typeof redeemMagicToken>> = null;
   try {
-    email = await redeemMagicToken(token);
+    redeemed = await redeemMagicToken(token);
   } catch {
     // DB couldn't be reached even after retries (pooler saturated) — send them back to try again
     // rather than a 500. The token is still unburned, so a retry works once the DB has a free moment.
     return NextResponse.redirect(`${origin}/login?error=retry`);
   }
-  if (!email) {
+  if (!redeemed) {
     return NextResponse.redirect(`${origin}/login?error=expired`);
+  }
+  const { email, grant } = redeemed;
+
+  // An admin invite link carries the access it was minted with. Apply it BEFORE the session starts,
+  // so the very first page they land on already sees them as entitled rather than bouncing them to
+  // /billing. grantTrial never downgrades an existing subscriber. Best-effort: if it fails we still
+  // sign them in — an admin can set the plan by hand, whereas a failed sign-in is a dead link.
+  if (grant) {
+    try { await grantTrial(email, resolvePlan(grant.plan), grant.days); }
+    catch (e) { console.error(`[terrain] invite grant failed for ${email}:`, e); }
   }
 
   await startSession(email);

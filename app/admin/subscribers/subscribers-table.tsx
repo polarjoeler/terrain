@@ -31,6 +31,12 @@ export function SubscribersTable({ initial }: { initial: Subscriber[] }) {
   const [grant, setGrant] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  // Invite-link builder: an email plus the access to pre-authorise.
+  const [invEmail, setInvEmail] = useState("");
+  const [invPlan, setInvPlan] = useState<PlanKey>("intelligence");
+  const [invDays, setInvDays] = useState(14);
+  const [invUrl, setInvUrl] = useState("");
+  const [copied, setCopied] = useState(false);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -67,6 +73,33 @@ export function SubscribersTable({ initial }: { initial: Subscriber[] }) {
     }
   }
 
+  async function makeInvite() {
+    setBusy("invite"); setMsg(""); setInvUrl(""); setCopied(false);
+    try {
+      const res = await fetch("/api/admin/invite", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: invEmail.trim(), plan: invPlan, days: invDays }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setMsg(data.error ?? "Could not create the link"); return; }
+      setInvUrl(data.url);
+      setMsg(`Link ready for ${data.email} — ${PLANS[invPlan].label}, ${data.days} days.`);
+    } catch {
+      setMsg("Network error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyInvite() {
+    try {
+      await navigator.clipboard.writeText(invUrl);
+      setCopied(true);
+    } catch {
+      setMsg("Couldn't copy — select the link and copy it manually.");
+    }
+  }
+
   const btn =
     "rounded-full border border-cream/20 px-2.5 py-1 text-xs text-cream/70 transition hover:border-cream/50 hover:text-cream disabled:opacity-40";
 
@@ -92,10 +125,62 @@ export function SubscribersTable({ initial }: { initial: Subscriber[] }) {
             disabled={!grant.includes("@") || busy !== null}
             className="rounded-full bg-mint px-4 py-1.5 text-sm font-medium text-ink transition hover:brightness-95 disabled:opacity-40"
           >
-            Grant 7-day Pro trial
+            Grant 7-day Intelligence trial
           </button>
         </div>
       </div>
+      {/* Sign-up link builder. Creating a link writes nothing — the plan and trial length ride
+          inside the signed token and are applied when the recipient opens it, so the trial starts
+          when they sign in rather than now. */}
+      <div className="mt-4 rounded-2xl border border-cream/12 bg-cream/[0.02] p-4">
+        <div className="text-sm font-semibold text-cream/90">Create a sign-up link</div>
+        <p className="mt-1 text-xs text-cream/45">
+          Signs this address in and starts the trial you choose. Single-use, expires in 7 days, and
+          it authenticates as that address — send it like a password reset, not a marketing link.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            value={invEmail}
+            onChange={(e) => setInvEmail(e.target.value)}
+            placeholder="their@email.com"
+            className="min-w-[14rem] flex-1 rounded-full border border-cream/15 bg-transparent px-4 py-1.5 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50"
+          />
+          <select
+            value={invPlan}
+            onChange={(e) => setInvPlan(e.target.value as PlanKey)}
+            className="rounded-full border border-cream/15 bg-ink px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+          >
+            {PLAN_ORDER.map((k) => (
+              <option key={k} value={k}>{PLANS[k].label} — ${PLANS[k].monthlyUsd}/mo</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number" min={1} max={90} value={invDays}
+              onChange={(e) => setInvDays(Math.max(1, Math.min(90, Number(e.target.value) || 1)))}
+              className="w-16 rounded-full border border-cream/15 bg-transparent px-3 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+            />
+            <span className="text-xs text-cream/45">days</span>
+          </div>
+          <button
+            onClick={makeInvite}
+            disabled={!invEmail.includes("@") || busy !== null}
+            className="rounded-full bg-cyan px-4 py-1.5 text-sm font-medium text-ink transition hover:brightness-95 disabled:opacity-40"
+          >
+            {busy === "invite" ? "Creating…" : "Create link"}
+          </button>
+        </div>
+        {invUrl && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              readOnly value={invUrl} onFocus={(e) => e.currentTarget.select()}
+              className="min-w-[18rem] flex-1 rounded-xl border border-cream/15 bg-cream/[0.03] px-3 py-1.5 font-mono text-xs text-cream/80 outline-none"
+            />
+            <button onClick={copyInvite} className={btn}>{copied ? "Copied ✓" : "Copy"}</button>
+          </div>
+        )}
+      </div>
+
       {msg && <p className="mt-3 text-xs text-cream/50">{msg}</p>}
 
       <div className="mt-4 overflow-x-auto">

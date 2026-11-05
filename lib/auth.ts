@@ -26,6 +26,11 @@ async function sessionCookieDomain(): Promise<string | undefined> {
 
 export const SESSION_COOKIE = "terrain_session";
 const LINK_TTL_MS = 15 * 60 * 1000;
+/** Invite links are sent by a human to a human and have to survive a weekend in an inbox, so they
+ *  cannot use the 15-minute sign-in TTL. Kept to a week rather than longer: the token authenticates
+ *  as the address baked into it, so its lifetime IS the window in which a misdirected link is
+ *  useful to whoever received it. Single-use, like every other token here. */
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 864e5;
 
 function authSecret(): string {
@@ -38,7 +43,15 @@ function authSecret(): string {
 
 const b64 = (v: string | Buffer) => Buffer.from(v).toString("base64url");
 
-type Payload = { email: string; exp: number; jti: string; kind: "link" | "session" };
+type Payload = {
+  email: string;
+  exp: number;
+  jti: string;
+  kind: "link" | "session" | "invite";
+  /** Invite tokens only: the access an admin pre-authorised, applied when the link is redeemed. */
+  plan?: string;
+  days?: number;
+};
 
 function sign(payload: Payload): string {
   const body = b64(JSON.stringify(payload));
@@ -87,6 +100,21 @@ export function createMagicToken(email: string): string {
   });
 }
 
+/** An admin-minted sign-up link: authenticates `email` AND carries the plan/trial length to apply
+ *  on redemption. The grant travels inside the signed payload, so creating a link writes nothing —
+ *  a link made by mistake grants nothing until it is actually opened, and the trial clock starts
+ *  when the customer signs in rather than when you generated it. */
+export function createInviteToken(email: string, plan: string, days: number): string {
+  return sign({
+    email: email.trim().toLowerCase(),
+    exp: Date.now() + INVITE_TTL_MS,
+    jti: randomBytes(12).toString("hex"),
+    kind: "invite",
+    plan,
+    days,
+  });
+}
+
 // Ride through brief DB blips. Sign-in is the one critical path that MUST hit the DB (burn the
 // single-use token) and can't be cached, so when the pooler is briefly exhausted (fleet load spikes)
 // a single attempt fails and the user sees "link expired". Both token ops are safe to retry — the
@@ -102,13 +130,25 @@ async function withDbRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   throw lastErr;
 }
 
-/** Verify and burn a magic token. Returns the email, or null if invalid/reused. */
-export async function redeemMagicToken(token: string): Promise<string | null> {
+export type Redeemed = {
+  email: string;
+  /** Present only for an admin invite link — the access to apply before starting the session. */
+  grant?: { plan: string; days: number };
+};
+
+/** Verify and burn a sign-in or invite token. Returns the email (plus any grant), or null if
+ *  invalid/reused. Both kinds are single-use: the jti is burned here, so a link cannot be replayed
+ *  from a forwarded inbox. */
+export async function redeemMagicToken(token: string): Promise<Redeemed | null> {
   const payload = unsign(token);
-  if (!payload || payload.kind !== "link") return null;
+  if (!payload || (payload.kind !== "link" && payload.kind !== "invite")) return null;
   if (await withDbRetry(() => wasTokenUsed(payload.jti))) return null;
   await withDbRetry(() => consumeToken(payload.jti, payload.exp));
-  return payload.email;
+  const grant =
+    payload.kind === "invite" && payload.plan && typeof payload.days === "number"
+      ? { plan: payload.plan, days: payload.days }
+      : undefined;
+  return { email: payload.email, grant };
 }
 
 /* ------------------------------------------------------------ sessions --- */

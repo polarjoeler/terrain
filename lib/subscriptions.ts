@@ -42,6 +42,23 @@ export async function listSubscribers(): Promise<Subscriber[]> {
 /** Admin actions on a subscriber's access (used by /api/admin/subscriber). `setPlan:<key>`
  *  replaced the old makePro/makeStarter pair so adding a tier needs no new action. */
 export type SubscriberAction = "trial" | "activate" | "cancel" | `setPlan:${PlanKey}`;
+
+/** Start a trial on a specific plan for a specific number of days — what an admin invite link
+ *  applies when it is redeemed. `applyAdminAction("trial")` can't serve this: it is hardwired to
+ *  Intelligence for TRIAL_DAYS, and a pilot is often a different tier for a different length.
+ *
+ *  Deliberately does not downgrade: if they already have access (a real Stripe subscription, or a
+ *  longer trial), re-redeeming an invite must not cut it short or move them to a cheaper plan. */
+export async function grantTrial(email: string, plan: PlanKey, days: number): Promise<Subscriber> {
+  const endsAt = new Date(Date.now() + days * 864e5);
+  const existing = await getSubscriber(email).catch(() => null);
+  if (existing?.status === "active") return existing;        // paying already — leave them alone
+  const existingEnd = existing?.trialEndsAt ? new Date(existing.trialEndsAt) : null;
+  if (existingEnd && existingEnd > endsAt) return existing!;  // already on a longer trial
+  return upsertSubscriber(email, {
+    plan, status: "trialing", trialEndsAt: endsAt.toISOString(),
+  });
+}
 export async function applyAdminAction(email: string, action: SubscriberAction): Promise<Subscriber> {
   const in7Days = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
   if (action.startsWith("setPlan:")) {
