@@ -25,7 +25,7 @@ export async function GET(req: Request) {
   // one-time cold build, stale rows serve instantly and the ~minute-long recompute runs in the
   // background, so a viewer never waits on it.
   const data = await cachedAgg(
-    `insights:adoption:${country}:${platform}:${grain}:v4`, // v4: month/quarter/year buckets. v3 added storesCumulative.
+    `insights:adoption:${country}:${platform}:${grain}:v5`, // v5: 5-year window. v4: month/quarter/year buckets.
     6 * 60 * 60 * 1000,
     () => providerAdoptionSeries(country, platform, grain),
   ).catch(() => null);

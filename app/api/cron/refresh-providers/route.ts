@@ -45,7 +45,7 @@ async function warmProvider(canonical: string, country: string | undefined, plat
 // MIRRORS app/api/provider-adoption/route.ts — identical key.
 async function warmAdoption(country: string, grain: AdoptionGranularity, platform = "all") {
   await cachedAgg(
-    `insights:adoption:${country}:${platform}:${grain}:v4`,
+    `insights:adoption:${country}:${platform}:${grain}:v5`,
     6 * 60 * 60 * 1000,
     () => providerAdoptionSeries(country, platform, grain),
   );
