@@ -55,7 +55,7 @@ export function leadersReport(country: string, cohort = 100): Promise<LeadersRep
   return cachedAgg(`leaders:v1:${C}:${N}`, 60 * 60 * 1000, () => computeLeadersReport(C, N));
 }
 
-async function computeLeadersReport(country: string, cohort: number): Promise<LeadersReport> {
+export async function computeLeadersReport(country: string, cohort: number): Promise<LeadersReport> {
   const sql = db();
   const C = country.toUpperCase();
   const N = cohort === 500 ? 500 : 100;
@@ -121,7 +121,7 @@ export function leadersMarkets(min = 20): Promise<{ country: string; stores: num
   return cachedAgg(`leaders:markets:v1:${min}`, 24 * 60 * 60 * 1000, () => computeLeadersMarkets(min));
 }
 
-async function computeLeadersMarkets(min: number): Promise<{ country: string; stores: number }[]> {
+export async function computeLeadersMarkets(min: number): Promise<{ country: string; stores: number }[]> {
   const sql = db();
   const rows = await sql<{ c: string; n: number }[]>`
     SELECT UPPER(country) c, COUNT(*)::int n FROM imported_stores

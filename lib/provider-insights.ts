@@ -516,7 +516,7 @@ export function providerMomentumByPeriod(country = "ALL"): Promise<Record<Moment
     () => computeProviderMomentumByPeriod(country));
 }
 
-async function computeProviderMomentumByPeriod(country: string): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+export async function computeProviderMomentumByPeriod(country: string): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
   const sql = db();
   const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { aggAges, primeAgg } from "@/lib/agg-cache";
-import { leadersMarkets, leadersReport } from "@/lib/leaders-report";
-import { providerMomentumByPeriod } from "@/lib/provider-insights";
-import { tagCounts } from "@/lib/tags";
+import { computeLeadersMarkets, computeLeadersReport } from "@/lib/leaders-report";
+import { computeProviderMomentumByPeriod } from "@/lib/provider-insights";
+import { computeTagCounts } from "@/lib/tags";
 
 /** Warms the insights rollups that are NOT part of the typed insights_cache (lib/insights) — the
  *  market-leaders report, the leaders market picker, provider momentum and the tag counts.
@@ -37,13 +37,17 @@ export async function GET(req: Request) {
   const started = Date.now();
 
   // Cheapest first, so a tight budget still warms the highest-traffic keys.
+  // Each `run` is the UNCACHED compute, never the cached wrapper. Passing the wrapper looks right
+  // and silently defeats the warmer: on a stale key the wrapper returns the STALE value (scheduling
+  // its own background refresh) and primeAgg would store that straight back with computed_at = now(),
+  // so the key looks freshly computed for another whole TTL without having been recomputed.
   const jobs: { key: string; run: () => Promise<unknown> }[] = [
-    { key: "tagcounts:v1", run: tagCounts },
-    { key: "leaders:markets:v1:20", run: () => leadersMarkets(20) },
+    { key: "tagcounts:v1", run: computeTagCounts },
+    { key: "leaders:markets:v1:20", run: () => computeLeadersMarkets(20) },
   ];
   for (const c of CORE_MARKETS) {
-    jobs.push({ key: `provmomentum:v1:${c}`, run: () => providerMomentumByPeriod(c) });
-    for (const n of COHORTS) jobs.push({ key: `leaders:v1:${c}:${n}`, run: () => leadersReport(c, n) });
+    jobs.push({ key: `provmomentum:v1:${c}`, run: () => computeProviderMomentumByPeriod(c) });
+    for (const n of COHORTS) jobs.push({ key: `leaders:v1:${c}:${n}`, run: () => computeLeadersReport(c, n) });
   }
 
   const ages = await aggAges(jobs.map((j) => j.key));
@@ -58,8 +62,6 @@ export async function GET(req: Request) {
     const age = ages.get(job.key);
     if (age !== undefined && age < FRESH_MS) { skipped.push(job.key); continue; }
     if (Date.now() - started > BUDGET_MS) { ranOut = true; break; }
-    // primeAgg, not the cached wrapper: cachedAgg on a stale key schedules the refresh in after()
-    // and returns stale, which would let this route report success without warming anything.
     try { await primeAgg(job.key, job.run); warmed.push(job.key); }
     catch { failed.push(job.key); }
   }

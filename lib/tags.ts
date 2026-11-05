@@ -38,7 +38,7 @@ export function tagCounts(): Promise<{ tag: string; count: number }[]> {
   return cachedAgg(TAG_COUNTS_KEY, 10 * 60 * 1000, computeTagCounts);
 }
 
-async function computeTagCounts(): Promise<{ tag: string; count: number }[]> {
+export async function computeTagCounts(): Promise<{ tag: string; count: number }[]> {
   await ensure();
   const rows = await db()<{ tag: string; n: number }[]>`
     SELECT tag, COUNT(*)::int n FROM store_tags GROUP BY tag`;
