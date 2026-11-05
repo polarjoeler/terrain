@@ -45,7 +45,7 @@ for (const k of PLAN_ORDER) {
 const SPECS = [];
 for (const key of PLAN_ORDER) {
   const plan = PLANS[key];
-  const platforms = plan.platforms.join(" + ");
+  const platforms = plan.platforms ? plan.platforms.join(" + ") : "every platform we track";
   const limit = plan.exportLimit == null ? "unlimited leads" : `${plan.exportLimit.toLocaleString()} leads/mo`;
   SPECS.push({
     env: `STRIPE_PRICE_${key.toUpperCase()}`,
