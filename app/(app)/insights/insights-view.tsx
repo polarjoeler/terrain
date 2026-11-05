@@ -328,7 +328,7 @@ function PaymentIntelligenceCard({
       title="Payment intelligence"
       subtitle={subtitle ?? (windowed
         ? `What the ${data.launchedByPeriod[pk].toLocaleString()} stores that launched ${pw} chose at checkout — the newest-store cohort`
-        : `Checkout-verified on ${data.coverage.paymentPct}% of live stores (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()})`)}
+        : `Checkout-verified on ${data.coverage.paymentPct}% of the reachable base (${data.paymentsVerifiedStores.toLocaleString()} of ${data.coverage.paymentReachable.toLocaleString()}) · ${data.coverage.paymentRawPct ?? data.coverage.paymentPct}% of all ${data.coverage.live.toLocaleString()} live stores`)}
       reportHref={`/insights/payments?country=${country}${pfx}`}
     >
       {/* Headline signals — all-time store-level type coverage; hidden in a launch window (where we
@@ -506,7 +506,9 @@ export function InsightsView({
     { n: cov.tracked.toLocaleString(), label: "stores tracked", sub: "in our dataset" },
     { n: cov.live.toLocaleString(), label: "verified live", sub: `${covPctOf(cov.live, cov.tracked)}% of tracked` },
     { n: `${covPctOf(cov.checked30d, cov.tracked)}%`, label: "scan freshness", sub: "checked ≤ 30 days" },
-    { n: `${cov.paymentPct}%`, label: "payment coverage", sub: `of ${cov.live.toLocaleString()} live` },
+    // Two tracks: reachable coverage (of the addressable base we can actually read) headline, with
+    // the raw "of all live" floor underneath — a probed-no-gateway store counts against the raw one.
+    { n: `${cov.paymentPct}%`, label: "payment coverage", sub: `reachable · ${cov.paymentRawPct ?? cov.paymentPct}% of all ${cov.live.toLocaleString()} live` },
     { n: `${cov.launchPct}%`, label: "launch-date coverage", sub: "of tracked" },
   ];
 

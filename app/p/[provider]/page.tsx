@@ -6,6 +6,7 @@ import { getSubscriber, hasAccess, trialDaysLeft } from "@/lib/subscriptions";
 import { getAccount } from "@/lib/account";
 import { AppShell, type ShellUser } from "@/app/components/app-shell";
 import { providerInsights, providerHistory, providerLaunchShare, availableProviders, providerCountries, providerNewShareSeries, providerSubReport, providerSwitches, type NewSharePeriod, type NewShareBucket } from "@/lib/provider-insights";
+import { declaredMarkets, mergeMarkets } from "@/lib/provider-markets";
 import { cachedAgg } from "@/lib/agg-cache";
 import { signProviderToken, verifyProviderToken } from "@/lib/provider-share";
 import { matchesProviderSlug, providerSlug, slugToTitle } from "@/lib/provider-slug";
@@ -58,9 +59,16 @@ export default async function ProviderPage({
   // can navigate the rest of the product, and get a provider switcher.
   const authed = admin || paid;
 
-  // Country filter (from the dropdown). Validate against the countries we actually have.
-  const countries = await providerCountries(canonical).catch((): string[] => []);
+  // Country filter (from the dropdown). The dropdown offers declared service markets ∪ the markets we
+  // detect stores in, so a PSP's real markets appear even where detection is thin (Peach → KE/MU).
+  const detectedCountries = await providerCountries(canonical).catch((): string[] => []);
+  const declared = declaredMarkets(canonical);
+  const countries = mergeMarkets(detectedCountries, declared);
   const country = countryParam && countries.includes(countryParam.toUpperCase()) ? countryParam.toUpperCase() : undefined;
+  // With no single country chosen, default the acquisition/cohort charts (share-of-new, market share
+  // over time) to the provider's declared markets — so "All markets" = where the PSP actually operates,
+  // not the whole world. No declared list → all markets (prior behaviour).
+  const scopeMarkets = country ? undefined : declared.length ? declared : undefined;
 
   // CMS filter (carried from the insights drill-in). Validate against the CMSs we track so a bad
   // slug falls back to the combined view rather than an empty page.
@@ -74,17 +82,17 @@ export default async function ProviderPage({
   // Whole provider bundle (all ~9 aggregate queries) cached per provider×country — one row read
   // instead of recomputing on every view. Returns are JSON-safe (dates are pre-stringified).
   const { data, history, launchShare, subReport, switches, newShare } = await cachedAgg(
-    `provider:${canonical}:${country ?? "ALL"}:${platform}`,
+    `provider:${canonical}:${country ?? "ALL"}:${platform}:v2`,
     10 * 60 * 1000,
     async () => {
       const [data, history, launchShare, subReport, switches] = await Promise.all([
         providerInsights(canonical, country, platform),
         providerHistory(canonical, country ?? "ALL", platform),
-        providerLaunchShare(canonical, country, platform),
+        providerLaunchShare(canonical, country, platform, scopeMarkets),
         providerSubReport(canonical, country, platform),
         providerSwitches(canonical, country, 12, platform),
       ]);
-      const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country, platform).catch(() => [])));
+      const series = await Promise.all(periods.map((pr) => providerNewShareSeries(canonical, pr, country, platform, scopeMarkets).catch(() => [])));
       const newShare = Object.fromEntries(periods.map((pr, i) => [pr, series[i]])) as Record<NewSharePeriod, NewShareBucket[]>;
       return { data, history, launchShare, subReport, switches, newShare };
     },
