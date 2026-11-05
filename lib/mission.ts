@@ -5,6 +5,7 @@
 //   • a period DELTA (this window vs the prior equal window) = "more or less impactful than before".
 // Reuses the live heartbeat machines (lib/fleet) + health alerts (lib/ops). One aggregate per scope,
 // cached briefly. A daily snapshot is written to mission_snapshots so charts can accrue over time.
+import { cachedAgg } from "./agg-cache";
 import { db } from "./db";
 import { fleetMachines, type FleetMachine } from "./fleet";
 import { healthAlerts } from "./ops";
@@ -17,7 +18,9 @@ export type MetricRow = { label: string; africa: number; global: number; pct?: b
 export type Pillar = { key: string; title: string; accent: "mint" | "cyan" | "lilac" | "amber"; headline: string; owners: string; rows: MetricRow[] };
 export type Mission = { machines: FleetMachine[]; alerts: { check: string; detail: string }[]; pillars: Pillar[]; generatedAt: string };
 
-const cache = new Map<string, { at: number; data: Mission }>(); // keyed by include-imports variant
+// Mission counters are cached in the shared agg_cache (lib/agg-cache) rather than in-process: a Map
+// lives per serverless instance, so every warm lambda recomputed the same full-corpus scans.
+const MISSION_TTL_MS = 15 * 60 * 1000;
 let snapshotDay = ""; // guard: attempt the daily snapshot (incl. CREATE TABLE) at most once per process per day
 
 // All pillar counters for one scope, in one aggregate. `scope` is a SQL predicate (Africa or TRUE).
@@ -70,16 +73,21 @@ async function captureSnapshot(sql: ReturnType<typeof db>, africa: M, global: M)
 // discovery. "Our work only" excludes these so the numbers reflect what the pipeline actually found.
 export async function missionControl(includeImports = true): Promise<Mission> {
   const key = includeImports ? "all" : "ours";
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.at < 20_000) return cached.data;
   const sql = db();
   const imp = includeImports ? sql`` : sql`AND NOT (source ILIKE 'storecensus%' OR source ILIKE 'storeleads%' OR source ILIKE 'builtwith%' OR source = 'csv')`;
-  const [machines, alerts, africa, global] = await Promise.all([
+  // The two scopeMetrics calls are full-corpus aggregate scans (60-100s each on a loaded box). They
+  // used to run inside this Promise.all, so ONE request launched TWO concurrent scans and fanned the
+  // small postgres.js pool out (see the Promise.all deadlock note in lib/db). They now run
+  // SEQUENTIALLY, and behind the durable agg_cache (shared across serverless instances + single-flight)
+  // rather than the old per-instance 20s Map, which made every warm lambda repeat the same scans.
+  const [machines, alerts] = await Promise.all([
     fleetMachines().catch(() => [] as FleetMachine[]),
     healthAlerts().catch(() => [] as { check: string; detail: string }[]),
-    scopeMetrics(sql, sql`country = ANY(${AFRICA}) ${imp}`).catch(() => ({} as M)),
-    scopeMetrics(sql, sql`TRUE ${imp}`).catch(() => ({} as M)),
   ]);
+  const africa = await cachedAgg(`ops:mission:${key}:africa`, MISSION_TTL_MS,
+    () => scopeMetrics(sql, sql`country = ANY(${AFRICA}) ${imp}`)).catch(() => ({} as M));
+  const global = await cachedAgg(`ops:mission:${key}:global`, MISSION_TTL_MS,
+    () => scopeMetrics(sql, sql`TRUE ${imp}`)).catch(() => ({} as M));
   if (includeImports) void captureSnapshot(sql, africa, global);   // canonical daily snapshot = full view
 
   const g = (m: M, k: string) => Number(m[k] ?? 0);
@@ -134,7 +142,5 @@ export async function missionControl(includeImports = true): Promise<Mission> {
       ] },
   ];
 
-  const data: Mission = { machines, alerts, pillars, generatedAt: new Date().toISOString() };
-  cache.set(key, { at: Date.now(), data });
-  return data;
+  return { machines, alerts, pillars, generatedAt: new Date().toISOString() };
 }
