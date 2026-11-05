@@ -2,6 +2,7 @@
  *  an admin applies to stores. Powers the admin lead manager and tagged-cohort
  *  insights (e.g. "payment breakdown of the ZA Top 100"). */
 
+import { cachedAgg, invalidateAgg } from "./agg-cache";
 import { db as sharedDb } from "./db";
 import { PRESET_TAGS, tagLabel } from "./tag-defs";
 
@@ -10,20 +11,34 @@ export { PRESET_TAGS, tagLabel };
 function db() {
   return sharedDb();
 }
-// Ensure the table exists ONCE per process, not on every call. This DDL takes a brief
-// ACCESS EXCLUSIVE lock; running it on every request (tagCounts is on the insights hot path)
-// added latency and a serialization point. Memoise the first success; reset on failure to retry.
+// Ensure the table exists ONCE per process, not on every call. Memoising is not enough on its own:
+// on Vercel a module-level memo is per LAMBDA INSTANCE, so every cold start replayed the DDL, and
+// `CREATE TABLE IF NOT EXISTS` evaluates its IF NOT EXISTS while already HOLDING ACCESS EXCLUSIVE —
+// it is idempotent but not free (same class as lib/ensure-schema). So read the catalog first, which
+// takes no lock on store_tags, and only issue the DDL when the table is genuinely absent.
 let _ensured: Promise<void> | null = null;
 function ensure(): Promise<void> {
-  return (_ensured ??= db()`CREATE TABLE IF NOT EXISTS store_tags (
-    domain TEXT NOT NULL, tag TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (domain, tag))`
-    .then(() => {})
-    .catch((e) => { _ensured = null; throw e; }));
+  return (_ensured ??= (async () => {
+    const [present] = await db()`SELECT 1 AS ok FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'store_tags'`;
+    if (present) return;
+    await db()`CREATE TABLE IF NOT EXISTS store_tags (
+      domain TEXT NOT NULL, tag TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (domain, tag))`;
+  })().catch((e) => { _ensured = null; throw e; }));
 }
 
-/** All distinct tags in use, with counts (preset order first). */
-export async function tagCounts(): Promise<{ tag: string; count: number }[]> {
+/** agg_cache key for tagCounts — shared with setTag, which invalidates it after a write. */
+const TAG_COUNTS_KEY = "tagcounts:v1";
+
+/** All distinct tags in use, with counts (preset order first). Cached: it sits on the insights hot
+ *  path AND on two admin pages, and setTag invalidates it, so a 10-minute TTL costs nothing in
+ *  staleness. */
+export function tagCounts(): Promise<{ tag: string; count: number }[]> {
+  return cachedAgg(TAG_COUNTS_KEY, 10 * 60 * 1000, computeTagCounts);
+}
+
+export async function computeTagCounts(): Promise<{ tag: string; count: number }[]> {
   await ensure();
   const rows = await db()<{ tag: string; n: number }[]>`
     SELECT tag, COUNT(*)::int n FROM store_tags GROUP BY tag`;
@@ -56,9 +71,11 @@ export async function setTag(domains: string[], tag: string, on: boolean): Promi
       const batch = rows.slice(i, i + 500);
       await db()`INSERT INTO store_tags ${db()(batch, "domain", "tag")} ON CONFLICT DO NOTHING`;
     }
+    await invalidateAgg(TAG_COUNTS_KEY);
     return clean.length;
   }
   const r = await db()`DELETE FROM store_tags WHERE tag = ${tag} AND domain = ANY(${db().array(clean)}) RETURNING domain`;
+  await invalidateAgg(TAG_COUNTS_KEY);
   return r.length;
 }
 

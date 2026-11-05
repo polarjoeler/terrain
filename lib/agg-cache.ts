@@ -86,3 +86,35 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
     throw e;
   }
 }
+
+/** Force-recompute a key and store the result, bypassing the read/SWR path entirely.
+ *  For WARMERS (the cron routes): `cachedAgg` on a stale key schedules the refresh in `after()` and
+ *  returns stale, which is right for a viewer but useless for a warmer — it would return without
+ *  having warmed anything. This computes inline and writes through. Throws on failure so the caller
+ *  can report which keys warmed. */
+export async function primeAgg<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  const data = await compute();
+  await store(key, data);
+  return data;
+}
+
+/** Drop a key so the next read recomputes from scratch. Use after a WRITE that invalidates a cached
+ *  rollup (e.g. an admin applying a tag changes tagCounts) — without this the admin would stare at a
+ *  stale count for the whole TTL and reasonably conclude the write failed. */
+export async function invalidateAgg(key: string): Promise<void> {
+  await db()`DELETE FROM agg_cache WHERE key = ${key}`.catch(() => {});
+}
+
+/** Age in ms of each given key, or absent from the map when the key has no row at all. One query,
+ *  so a warmer can skip keys that are still fresh instead of recomputing the whole set every run. */
+export async function aggAges(keys: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!keys.length) return out;
+  try {
+    const rows = await db()<{ key: string; age_ms: number }[]>`
+      SELECT key, (EXTRACT(EPOCH FROM (now() - computed_at)) * 1000)::bigint AS age_ms
+      FROM agg_cache WHERE key = ANY(${keys}::text[])`;
+    for (const r of rows) out.set(r.key, Number(r.age_ms));
+  } catch { /* table missing → treat every key as cold */ }
+  return out;
+}

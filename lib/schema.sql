@@ -104,6 +104,14 @@ CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_chec
 -- takes the dashboard down (see the 2026-10-30 outage). Two partial indexes, one per casing path.
 CREATE INDEX IF NOT EXISTS idx_is_browse_country   ON imported_stores (country)        WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
 CREATE INDEX IF NOT EXISTS idx_is_browse_upper     ON imported_stores (upper(country)) WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
+-- The market-leaders traffic lens (lib/leaders-report) cannot use either index above: it
+-- deliberately does NOT gate on published, because the custom/headless traffic head is parked
+-- unpublished — and a partial index is only usable when the query implies its predicate. So it fell
+-- to a parallel seq scan (cost 406k, ~13s). Only 12.6% of rows carry a crux_rank, so a partial index
+-- on that subset is 2.8 MB and turns the cohort query into a 4.5ms index scan.
+-- ALREADY BUILT IN PRODUCTION with CREATE INDEX CONCURRENTLY; declared here so a fresh database
+-- gets it too. applySchema skips it when present, so this never runs a blocking build in prod.
+CREATE INDEX IF NOT EXISTS idx_is_leaders_crux     ON imported_stores (upper(country), crux_rank) WHERE crux_rank IS NOT NULL;
 -- Recent-activity reads for the /fleet live monitor (partial: only rows that have been touched),
 -- so "newest N enriched / hosting-resolved" is an index scan, not a 2.8M-row full scan.
 CREATE INDEX IF NOT EXISTS idx_is_ai_enriched      ON imported_stores (ai_enriched_at DESC) WHERE ai_enriched_at IS NOT NULL;
