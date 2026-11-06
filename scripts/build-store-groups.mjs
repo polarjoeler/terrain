@@ -35,23 +35,32 @@ const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, idle_ti
 // ---------------------------------------------------------------- normalisers ---
 // Registrable domain without a public-suffix list: a 2-letter ccTLD under a generic second level
 // (co.za, com.ng, ac.ke, gov.ng …) keeps three labels, everything else two.
-const SL2 = /^(co|com|org|net|edu|gov|ac|or|ne|go|sch|web|mil|nom|info|biz|ltd|plc)$/;
+// Registries that sell third-level names under a generic domain (afi.za.com, x.name.ng) count as suffixes too.
+const SL2 = /^(co|com|org|net|edu|gov|ac|or|ne|go|sch|web|mil|nom|info|biz|ltd|plc|name)$/;
+const PRIVATE_SL2 = new Set(["za.com", "za.net", "za.org", "co.com", "uk.com", "us.com", "eu.com", "de.com", "africa.com", "name.ng", "com.de"]);
 function registrable(host) {
   if (!host) return null;
   const l = host.toLowerCase().trim().replace(/\.$/, "").replace(/^www\./, "").split(".");
   if (l.length < 2) return null;
-  return l.length >= 3 && l[l.length - 1].length === 2 && SL2.test(l[l.length - 2]) ? l.slice(-3).join(".") : l.slice(-2).join(".");
+  const two = l.slice(-2).join(".");
+  return l.length >= 3 && ((l[l.length - 1].length === 2 && SL2.test(l[l.length - 2])) || PRIVATE_SL2.has(two)) ? l.slice(-3).join(".") : two;
 }
 // Email domains that say nothing about ownership: freemail, ISPs, platforms that send on a merchant's behalf.
 const FREEMAIL = /^(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|mac|aol|mweb|telkomsa|vodamail|webmail|lantic|iafrica|absamail|wol|proton|protonmail|pm|zoho|zohomail|gmx|mail|email|yandex|inbox|tutanota|hey)\.[a-z.]+$/;
 const PLATFORM_MAIL = /(^|\.)(myshopify\.com|shopify\.com|shopstar\.co\.za|selar\.(com|co)|catlog\.shop|wix\.com|wixsite\.com|squarespace\.com|bumpa\.(shop|com)|takeapp\.(co|me)|mainstack\.(me|com)|godaddysites\.com|wordpress\.com|example\.(com|org)|sentry\.io|domain\.com|email\.com)$/;
 const NON_OWNER_SUFFIX = /\.(edu|gov|ac|sch|mil)\.[a-z]{2}$|\.(gov|edu)$/;
+// Theme placeholders (xxx@xxx.xxx, info@yourwebsite.com, john@doe.com), image names that look like
+// emails (logo@2x.heic) and app senders (back-in-stock@notifyboost.net) — present on many unrelated
+// stores without ever reaching the cap, so they are dropped by shape, not by count.
+const PLACEHOLDER_MAIL = /^(x+\.x+|(your|my)?(web)?(site|domain|company|store|shop|email|mail|name|business)\.[a-z.]+|doe\.com|test\.[a-z.]+|sample\.[a-z.]+|[^.]+\.(heic|png|jpe?g|webp|gif|svg|css|js))$/;
+const APP_SENDER = /^(back-?in-?stock|no-?reply|do-?not-?reply|notifications?|notify|mailer|alerts?|bounce)[@+]/;
+const APP_MAIL = /(^|\.)(notifyboost\.net|starapps\.studio|ryviu\.com|judge\.me|klaviyomail\.com|omnisend\.com|appmate\.io)$/;
 function email(e) {
   if (!e) return null;
   e = String(e).trim().toLowerCase();
   if (!/^[^@\s]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(e)) return null;   // drops "ecom-swiper@11.css"-style junk
   const dom = e.split("@")[1];
-  if (PLATFORM_MAIL.test(dom)) return null;
+  if (PLATFORM_MAIL.test(dom) || PLACEHOLDER_MAIL.test(dom) || APP_MAIL.test(dom) || APP_SENDER.test(e)) return null;
   return e;
 }
 const corporateDomain = (e) => {
@@ -79,6 +88,11 @@ function phone(v) {
   if (/^(\d)\1+$/.test(n) || "0123456789012345678".includes(n) || "9876543210987654321".includes(n)) return null;   // 111111111, 123456789…
   return n;
 }
+
+// Store names arrive straight from <title>: "SALT &#8211; CHEF WEAR", "Ticketing &amp; Events".
+const ENTITY = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—" };
+const decode = (v) => (v ? String(v).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) =>
+  e[0] === "#" ? String.fromCodePoint(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : ENTITY[e.toLowerCase()] ?? m).trim() : v);
 
 // ---------------------------------------------------------------- load ---
 const t0 = Date.now();
@@ -179,7 +193,7 @@ for (const idx of groups.values()) {
   sizes[review ? "review" : sites.size >= 10 ? "10-40" : sites.size >= 5 ? "5-9" : String(sites.size)]++;
   outGroups.push({
     group_id: gid,
-    label: opDom ?? (rows[biggest].name || rows[biggest].domain),
+    label: opDom ?? (decode(rows[biggest].name) || rows[biggest].domain.replace(/^www\./, "")),
     operator_domain: opDom,
     n_sites: sites.size,
     n_stores: idx.length,
