@@ -725,7 +725,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
         )}
       </main>
 
-      <LeadDrawer domain={selected} onClose={() => setSelected(null)} />
+      <LeadDrawer domain={selected} onClose={() => setSelected(null)} onOpen={setSelected} />
     </div>
   );
 }

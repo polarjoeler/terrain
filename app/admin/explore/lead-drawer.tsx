@@ -80,7 +80,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /** Slide-in panel showing EVERY field we know about one store. */
-export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose: () => void }) {
+export function LeadDrawer({ domain, onClose, onOpen }: { domain: string | null; onClose: () => void; onOpen?: (domain: string) => void }) {
   const [data, setData] = useState<LeadDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -206,6 +206,30 @@ export function LeadDrawer({ domain, onClose }: { domain: string | null; onClose
               <Row label="Theme" value={data.theme} />
               <Row label="Platform" value={data.platform} />
             </Section>
+
+            {data.group && data.group.others.length > 0 && (
+              <Section title={`Same group · ${data.group.sites} stores`}>
+                <p className="mb-2 text-xs text-cream/50">
+                  {data.group.operatorDomain ? <>Run from <span className="text-cream/75">{data.group.operatorDomain}</span>. </> : null}
+                  Linked by {data.group.reasons.length ? data.group.reasons.map((r) => r.charAt(0).toLowerCase() + r.slice(1)).join(", ") : "shared details"}.
+                </p>
+                <ul className="space-y-1.5">
+                  {data.group.others.map((m) => (
+                    <li key={m.domain} className="flex items-baseline justify-between gap-3">
+                      <button type="button" onClick={() => onOpen?.(m.domain)} disabled={!onOpen}
+                        className="min-w-0 truncate text-left text-sm text-cyan enabled:hover:underline disabled:text-cream/80">
+                        {m.name || m.domain}
+                        {m.name && <span className="ml-1.5 font-mono text-[11px] text-cream/35">{m.domain}</span>}
+                      </button>
+                      <span className="shrink-0 text-[11px] text-cream/40">{[m.platform, m.country].filter(Boolean).join(" · ")}</span>
+                    </li>
+                  ))}
+                </ul>
+                {data.group.sites - 1 > data.group.others.length && (
+                  <p className="mt-1.5 text-[11px] text-cream/35">+{data.group.sites - 1 - data.group.others.length} more</p>
+                )}
+              </Section>
+            )}
 
             {data.platform === "woocommerce" && (
               <Section title="WooCommerce">

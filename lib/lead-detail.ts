@@ -2,6 +2,7 @@
  *  Kept out of the Explorer's bulk payload (that ships ~13k rows); fetched on click. */
 
 import { db as sharedDb } from "./db";
+import { getStoreGroup, type StoreGroup } from "./store-groups";
 
 function db() {
   return sharedDb();
@@ -35,6 +36,8 @@ export type LeadDetail = {
   revenue_band: string | null; revenue_confidence: string | null;
   /** Curated tags (store_tags) — shown + editable in the admin drawer. */
   tags: string[];
+  /** Other stores run by the same operator (scripts/build-store-groups.mjs), or null. */
+  group: StoreGroup | null;
 };
 
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
@@ -51,5 +54,9 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence,
            COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
-  return r ?? null;
+  if (!r) return null;
+  // Sequential, not Promise.all: the shared pool is small (see memory: postgres-pool-deadlock). A
+  // missing or failing group lookup never costs the drawer the rest of the store.
+  r.group = await getStoreGroup(d).catch(() => null);
+  return r;
 }
