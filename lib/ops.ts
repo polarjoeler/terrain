@@ -149,7 +149,7 @@ export async function opsStatus(): Promise<OpsStatus> {
 
 async function opsStatusUncached(): Promise<OpsStatus> {
   const sql = db();
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
 
   const [disc, pay, launch, woo, hb, platCov, mktChurn, rawStores, rawChurn] = await mapLimit([
     () => sql<{ today: number; yest: number }[]>`

@@ -20,7 +20,7 @@ export type JpStats = {
 
 // The launch date as a bare SQL expression string — reused inside subqueries below so we never
 // interpolate a shared fragment into a fragile position (that broke the "… year" alias).
-const LAUNCH_EXPR = `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
+const LAUNCH_EXPR = `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
 
 export async function jpStats(): Promise<JpStats> {
   const sql = db();
@@ -60,7 +60,7 @@ export type JpLead = {
 };
 export async function jpLeads(limit = 200): Promise<JpLead[]> {
   const sql = db();
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql`
     SELECT domain, name, platform, ${LAUNCH} AS launched, payments, city, category, product_count
     FROM imported_stores WHERE ${LIVE()}
