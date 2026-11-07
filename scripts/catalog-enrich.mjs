@@ -6,15 +6,22 @@
  *  Value-ranked, resumable (skips stores already enriched), bounded worker pool.
  *   node --env-file=.env.local scripts/catalog-enrich.mjs [--limit 3000] [--all] [--country ZA,KE]
  *   node … scripts/catalog-enrich.mjs --recheck --all   # re-enrich rows the old (buggy) pass got wrong
+ *   node … scripts/catalog-enrich.mjs --fp --limit 500  # (re)fingerprint ZA/KE/NG catalogues
+ *
+ *  Fingerprints (store_catalog_fp, see lib/catalog-fp.mjs) ride on the same products.json download:
+ *  a ZA/KE/NG store gets one on its first catalog pass at no extra fetch. --fp is the backfill for
+ *  stores checked before fingerprints existed, and the monthly refresh (FP_STALE_DAYS) after that.
  */
 import postgres from "postgres";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
+import { buildFp, ensureFpTable, upsertFp, deferFp, EMPTY_FP, FP_MARKETS, FP_STALE_DAYS } from "./lib/catalog-fp.mjs";
 
 const ALL = process.argv.includes("--all");
 // --recheck re-runs stores the first pass measured with the two known bugs: product_count pinned at
 // the 250 page-limit (no pagination), or an outlier-inflated avg_product_price. Everything else is
 // left alone, so the re-run only touches the ~6k broken rows, not the whole fleet.
 const RECHECK = process.argv.includes("--recheck");
+const FP = process.argv.includes("--fp");
 const li = process.argv.indexOf("--limit");
 const LIMIT = ALL ? 0 : li > -1 ? Number(process.argv[li + 1]) : 3000;
 // --country ZA,KE,NG,… scopes the backfill to the markets we sell into (the launch metric is
@@ -39,7 +46,11 @@ const PROXIED = PROXIES.length > 0;
 // heavily; direct, concurrent workers never let the shared IP's Shopify-edge throttle recover and
 // nearly everything 429s — so DIRECT recheck runs sequentially. Fanned across the fleet, each request
 // is a different IP, so concurrency is safe and the pause is just politeness per store.
-const CONCURRENCY = flagNum("--concurrency", RECHECK ? (PROXIED ? 8 : 1) : (PROXIED ? 24 : 4));
+// --fp takes what Shopify will give at a polite pace: a 429 here is the store saying "not now", so
+// the fingerprint lane never retries it in-run (no hopping to another proxy) — it comes back in a few
+// days instead (FP_RETRY_DAYS). Lower default concurrency for the same reason.
+const CONCURRENCY = flagNum("--concurrency", FP ? (PROXIED ? 6 : 2) : RECHECK ? (PROXIED ? 8 : 1) : (PROXIED ? 24 : 4));
+const FP_RETRY_DAYS = 3;
 const PAUSE_MS = flagNum("--pause", PROXIED ? 50 : (RECHECK ? 600 : 250));
 // Pagination cap: up to 3,000 products/store. Only stores with a full first page ever fetch a
 // second, so this adds requests for large catalogues only — keeps the shared IP's Shopify-edge
@@ -83,7 +94,7 @@ async function fetchPage(domain, page) {
     if (PROXIED) {
       const r = await fetchText(url, { proxy: pickProxy(PROXIES), timeoutMs: 15000, maxBytes: 8_000_000, ua: UA, redirects: 3 });
       const status = r ? r.status : 0;   // null => DNS/TLS/timeout/dead proxy
-      if ((status === 0 || status === 429 || status >= 500) && attempt < 3) { await sleep(1200 * (attempt + 1)); continue; }
+      if ((status === 0 || status === 429 || status >= 500) && attempt < (FP ? 0 : 3)) { await sleep(1200 * (attempt + 1)); continue; }
       let json = null; if (r) { try { json = JSON.parse(r.text); } catch { /* non-JSON */ } }
       return { status, json };
     }
@@ -91,7 +102,7 @@ async function fetchPage(domain, page) {
       headers: { "User-Agent": UA, Accept: "application/json" },
       signal: AbortSignal.timeout(15000), redirect: "follow",
     });
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) { await sleep(1500 * (attempt + 1)); continue; }
+    if ((res.status === 429 || res.status >= 500) && attempt < (FP ? 0 : 3)) { await sleep(1500 * (attempt + 1)); continue; }
     const json = res.ok ? await res.json().catch(() => null) : null;
     return { status: res.status, json };
   }
@@ -117,7 +128,7 @@ async function fetchCatalog(domain) {
     // Own-sourced launch date: the earliest product's publish date ≈ when the store went live.
     const dates = all.map((p) => p.published_at || p.created_at).filter(Boolean).sort();
     const launched = dates.length ? String(dates[0]).slice(0, 10) : null;
-    return { count: all.length, avg: catalogAov(all), launched, note: null };
+    return { count: all.length, avg: catalogAov(all), launched, products: all, note: null };
   } catch (e) {
     return { note: e.name === "TimeoutError" ? "timeout" : "error", retriable: e.name === "TimeoutError" };
   }
@@ -131,8 +142,20 @@ async function main() {
     // if the column is genuinely absent.
     const [col] = await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'imported_stores' AND column_name = 'catalog_checked_at'`;
     if (!col) await sql`ALTER TABLE imported_stores ADD COLUMN catalog_checked_at TIMESTAMPTZ`;
-    const rows = await sql`
-      SELECT domain FROM imported_stores
+    await ensureFpTable(sql);
+    const rows = FP ? await sql`
+      -- Fingerprint backfill / refresh: focus-market stores known to have a catalogue whose
+      -- fingerprint is missing or stale — missing first, then the biggest stores (brands worth
+      -- protecting, and the likeliest to be cloned).
+      SELECT s.domain, s.country FROM imported_stores s
+      LEFT JOIN store_catalog_fp f ON f.domain = s.domain
+      WHERE s.published AND (s.live_status IS NULL OR s.live_status NOT IN ('dead','migrated'))
+        AND upper(s.country) = ANY(${COUNTRIES ?? FP_MARKETS}) AND s.product_count > 0
+        AND lower(s.platform) IS DISTINCT FROM 'woocommerce'
+        AND (f.domain IS NULL OR f.fp_at < now() - make_interval(days => ${FP_STALE_DAYS}))
+      ORDER BY (f.domain IS NULL) DESC, s.estimated_monthly_sales DESC NULLS LAST, s.domain
+      ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}` : await sql`
+      SELECT domain, country FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         ${RECHECK
           // the two bug signatures: count truncated at the 250 page-limit, or an inflated AOV
@@ -151,13 +174,14 @@ async function main() {
       ORDER BY (upper(country) = ANY(ARRAY['ZA','KE','NG'])) DESC, (launched_at IS NULL) DESC, (platform = 'Shopify') DESC,
                discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
-    console.log(`Catalog-enriching ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY}${PROXIED ? `, fanned across ${PROXIES.length} proxies` : ", DIRECT single-IP"})…`);
+    console.log(`${FP ? "Fingerprinting" : "Catalog-enriching"} ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY}${PROXIED ? `, fanned across ${PROXIES.length} proxies` : ", DIRECT single-IP"})…`);
 
-    let i = 0, ok = 0, done = 0;
+    let i = 0, ok = 0, done = 0, fps = 0, throttled = 0;
     async function worker() {
       while (i < rows.length) {
-        const { domain } = rows[i++];
+        const { domain, country } = rows[i++];
         const r = await fetchCatalog(domain);
+        const wantFp = FP || FP_MARKETS.includes(String(country ?? "").toUpperCase());
         if (r.note == null) {
           await sql`UPDATE imported_stores SET product_count = ${r.count},
                     avg_product_price = COALESCE(${r.avg}, avg_product_price),
@@ -167,17 +191,23 @@ async function main() {
                     platform = COALESCE(platform, 'Shopify'),
                     catalog_checked_at = now()
                     WHERE domain = ${domain}`;
+          if (wantFp) { await upsertFp(sql, domain, buildFp(r.products), r.launched); fps++; }
           ok++;
         } else if (!r.retriable) {
           // Terminal (not Shopify / gone) — mark done so we don't keep trying it.
           await sql`UPDATE imported_stores SET catalog_checked_at = now() WHERE domain = ${domain}`;
+          if (wantFp) await upsertFp(sql, domain, EMPTY_FP, null);
+        } else if (FP) {
+          // Throttled / transient: park it for FP_RETRY_DAYS (an existing fingerprint is kept), so
+          // the same refusing stores don't head every run's batch.
+          await deferFp(sql, domain, FP_STALE_DAYS - FP_RETRY_DAYS); throttled++;
         } // retriable (429/5xx/timeout): leave catalog_checked_at NULL → picked up next run
         if (++done % 200 === 0) process.stdout.write(`\r  ${done}/${rows.length}  (${ok} with catalog)`);
         await sleep(PAUSE_MS);
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-    console.log(`\n✓ Done. ${ok}/${rows.length} returned a product catalogue.`);
+    console.log(`\n✓ Done. ${ok}/${rows.length} returned a product catalogue; ${fps} fingerprinted${FP ? `, ${throttled} throttled (retry in ${FP_RETRY_DAYS}d)` : ""}.`);
   } finally {
     await sql.end();
     closeAgents();   // keep-alive proxy sockets would otherwise hold the process open
