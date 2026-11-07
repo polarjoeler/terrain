@@ -23,14 +23,12 @@
  *   node --env-file=.env.local scripts/clone-sweep.mjs [--dry-run]
  */
 import postgres from "postgres";
-import { scorePair } from "./lib/catalog-fp.mjs";
+import { scorePair, siteOf as site } from "./lib/catalog-fp.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const HUB = 25;          // a hash in more stores than this is boilerplate, not evidence
 const MIN_SHARED = 3;    // shared images + SKUs before a pair is scored at all
 const MIN_SCORE = 25;    // PARTIAL and up are kept
-
-const site = (d) => d.replace(/^www\./, "");
 
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, idle_timeout: 20 });
@@ -52,7 +50,7 @@ async function main() {
         img: toI32(r.img), sku: toI32(r.sku), handle: toI32(r.handle), title: toI32(r.title), price: toI32(r.price),
       });
     }
-    // One row per site (www/apex twins are the same shop): keep the bigger catalogue.
+    // One row per site (www/apex twins and shop./checkout. subdomains are the same shop): keep the bigger catalogue.
     const bySite = new Map();
     for (const s of S) { const k = site(s.domain); const cur = bySite.get(k); if (!cur || s.n > cur.n) bySite.set(k, s); }
     const loaded = S.length;
@@ -124,7 +122,11 @@ async function main() {
           copied_share = EXCLUDED.copied_share, img_n = EXCLUDED.img_n, sku_n = EXCLUDED.sku_n, handle_n = EXCLUDED.handle_n,
           title_n = EXCLUDED.title_n, price_mirror = EXCLUDED.price_mirror, reasons = EXCLUDED.reasons, scanned_at = now()`;
     }
-    console.log(`✓ Upserted ${matches.length} matches in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    // Pairs an older sweep kept before a site rule existed (e.g. shop.x.co.za ← x.co.za) aren't
+    // re-found, so they'd linger; drop them. Gutted clones on different sites stay on record.
+    const stale = (await sql`SELECT original, suspect FROM catalog_matches`).filter((r) => site(r.original) === site(r.suspect));
+    for (const r of stale) await sql`DELETE FROM catalog_matches WHERE original = ${r.original} AND suspect = ${r.suspect}`;
+    console.log(`✓ Upserted ${matches.length} matches${stale.length ? `, dropped ${stale.length} same-site pairs` : ""} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   } finally {
     await sql.end();
   }
