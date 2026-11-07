@@ -13,13 +13,14 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Terrain — Set up your workspace" };
 
 // The searchable category list is DATA-DERIVED (no canonical taxonomy) — the most common real
-// categories, cached so onboarding never waits on a scan.
+// categories, cached so onboarding never waits on a scan (~20s cold; SWR, so only the first-ever
+// request pays it). "Other"/"Unknown" are classifier leftovers, not something to target.
 async function topCategories(): Promise<string[]> {
-  return cachedAgg("onboarding:categories", 6 * 60 * 60 * 1000, async () => {
+  return cachedAgg("onboarding:categories:v2", 24 * 60 * 60 * 1000, async () => {
     const sql = db();
     const rows = await sql<{ category: string }[]>`
       SELECT category FROM imported_stores
-      WHERE published AND category IS NOT NULL AND category <> '' AND country = ANY(ARRAY['ZA','KE','NG'])
+      WHERE published AND category IS NOT NULL AND category NOT IN ('', 'Other', 'Unknown') AND country = ANY(ARRAY['ZA','KE','NG'])
       GROUP BY category ORDER BY count(*) DESC LIMIT 60`.catch(() => []);
     return rows.map((r) => r.category);
   }).catch(() => []);
@@ -29,11 +30,10 @@ export default async function OnboardingPage() {
   const email = await currentUser();
   if (!email) redirect("/login");
 
-  const [firstUser, saved, categories] = await Promise.all([
-    orgHasProfile(email).then((has) => !has).catch(() => true),
-    loadOnboardingState(email).catch((): OnboardingState | null => null),
-    topCategories(),
-  ]);
+  // Sequential, not Promise.all: three queries fanned out on the small pool is the deadlock class.
+  const firstUser = await orgHasProfile(email).then((has) => !has).catch(() => true);
+  const saved = await loadOnboardingState(email).catch((): OnboardingState | null => null);
+  const categories = await topCategories();
 
   const org = orgKey(email);
   const orgName = org.includes("@") ? "" : org;

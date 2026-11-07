@@ -97,6 +97,11 @@ function ensureTables(sql: ReturnType<typeof db>): Promise<void> {
   })().catch((e) => { _ensured = null; throw e; }));
 }
 
+/** The base profile tables, for lib/onboarding-store.ts — one owner for the CREATE TABLEs. */
+export function ensureProfileTables(): Promise<void> {
+  return ensureTables(db());
+}
+
 /** Cookie set when a new user chooses "skip for now" on the setup screen, so the sign-in redirect
  *  offers onboarding once rather than nagging on every visit. A preference, not a credential. */
 export const ONBOARDING_SKIP_COOKIE = "terrain_setup_skipped";

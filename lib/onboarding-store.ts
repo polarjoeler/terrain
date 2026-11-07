@@ -7,43 +7,60 @@
  *  a user can finish onboarding while Slack/WhatsApp/fraud setup stays pending.
  */
 import { db as sharedDb } from "./db";
-import { orgKey } from "./profile";
+import { ensureProfileTables, orgKey } from "./profile";
 import type { OnboardingState } from "./onboarding";
 import { isFraudEligible } from "./onboarding";
 
 function db() { return sharedDb(); }
 
+// The rich onboarding columns, added on top of the base tables lib/profile.ts creates.
+const COLUMNS: [table: "org_profile" | "user_profile", column: string, type: string][] = [
+  ["org_profile", "company_type", "text"],
+  ["org_profile", "cms_focus", "text[] DEFAULT '{}'"],
+  ["org_profile", "track_own_performance", "boolean DEFAULT false"],
+  ["org_profile", "provider_name", "text"],
+  ["org_profile", "markets", "text[] DEFAULT '{}'"],
+  ["org_profile", "company_name", "text"],
+  ["org_profile", "website", "text"],
+  ["org_profile", "goals", "text[] DEFAULT '{}'"],
+  ["org_profile", "targeting", "jsonb"],
+  ["org_profile", "technologies", "jsonb"],
+  ["org_profile", "monitoring", "jsonb"],
+  ["org_profile", "seats", "int"],
+  ["org_profile", "seats_pending", "boolean DEFAULT true"],
+  ["org_profile", "created_by", "text"],
+  ["user_profile", "role", "text"],
+  ["user_profile", "delivery", "jsonb"],
+  ["user_profile", "onboarding_state", "jsonb"],
+  ["user_profile", "onboarding_completed_at", "timestamptz"],
+  ["user_profile", "lead_cadence", "text"],
+  ["user_profile", "lead_focus", "text[] DEFAULT '{}'"],
+  ["user_profile", "ingestion", "text"],
+  ["user_profile", "digest", "boolean DEFAULT true"],
+  ["user_profile", "completed_at", "timestamptz"],
+  ["user_profile", "created_at", "timestamptz"],
+];
+
+// Same rule as lib/profile.ts ensureTables: a module memo is per LAMBDA INSTANCE, and every
+// ADD COLUMN IF NOT EXISTS takes ACCESS EXCLUSIVE before checking, so replaying ~25 of them on each
+// cold start is the lock-jam class. Read the catalog (no table lock) and alter only what's missing —
+// normally nothing. The base tables come from lib/profile.ts; if they don't exist yet, create them
+// through it rather than racing it with a second CREATE.
 let _ensured: Promise<void> | null = null;
 function ensure(sql: ReturnType<typeof db>): Promise<void> {
   return (_ensured ??= (async () => {
-    // Base tables are created by lib/profile.ts ensureTables; here we add the rich onboarding columns.
-    await sql`CREATE TABLE IF NOT EXISTS org_profile (org text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`;
-    await sql`CREATE TABLE IF NOT EXISTS user_profile (email text PRIMARY KEY, org text, created_at timestamptz)`;
-    for (const c of [
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS company_type text`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS cms_focus text[] DEFAULT '{}'`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS track_own_performance boolean DEFAULT false`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS provider_name text`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS markets text[] DEFAULT '{}'`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS company_name text`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS website text`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS goals text[] DEFAULT '{}'`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS targeting jsonb`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS technologies jsonb`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS monitoring jsonb`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS seats int`,
-      `ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS seats_pending boolean DEFAULT true`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS role text`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS delivery jsonb`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS onboarding_state jsonb`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS onboarding_completed_at timestamptz`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS lead_cadence text`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS lead_focus text[] DEFAULT '{}'`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS ingestion text`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS digest boolean DEFAULT true`,
-      `ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS completed_at timestamptz`,
-    ]) {
-      try { await sql.unsafe(c); } catch (e) { if (!/already exists/i.test((e as Error)?.message || "")) throw e; }
+    let rows = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT table_name, column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name IN ('org_profile','user_profile')`;
+    if (!rows.some((r) => r.table_name === "org_profile") || !rows.some((r) => r.table_name === "user_profile")) {
+      await ensureProfileTables();
+      rows = await sql<{ table_name: string; column_name: string }[]>`
+        SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name IN ('org_profile','user_profile')`;
+    }
+    const have = new Set(rows.map((r) => `${r.table_name}.${r.column_name}`));
+    for (const [t, c, type] of COLUMNS) {
+      if (!have.has(`${t}.${c}`)) await sql.unsafe(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS ${c} ${type}`);
     }
   })().catch((e) => { _ensured = null; throw e; }));
 }

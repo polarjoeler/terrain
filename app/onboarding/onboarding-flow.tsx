@@ -94,13 +94,26 @@ export function OnboardingFlow({ email, firstUser, orgName, initialState, platfo
     } finally { setLaunching(false); }
   };
 
+  // Sign-in sends every new account here (#96), so the flow must be leavable. Skip records the
+  // choice server-side (POST — a prefetched GET would skip for everyone); progress so far is
+  // already saved, so they can resume later. A failed write still lets them through.
+  const skip = async () => {
+    setLaunching(true);
+    try { await fetch("/api/onboarding/skip", { method: "POST" }); } catch { /* non-blocking */ }
+    router.push("/dashboard");
+    router.refresh();
+  };
+
   const sp = stageProgress(state, view);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-10">
       <div className="flex items-center justify-between">
         <Wordmark size="text-xl" tone="cream" />
-        <span className="text-xs text-cream/40">{email}</span>
+        <div className="flex items-center gap-4">
+          <span className="hidden text-xs text-cream/40 sm:inline">{email}</span>
+          <button onClick={skip} disabled={launching} className="text-sm text-cream/55 transition hover:text-cream/80 disabled:opacity-40">Skip for now</button>
+        </div>
       </div>
 
       {/* Stepper */}
