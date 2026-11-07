@@ -5,6 +5,8 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { buildDigest } from "@/lib/digest";
 import { publishedLeads } from "@/lib/imported";
 import { digestSnapshot } from "@/lib/insights";
+import { digestLeadLoader } from "@/lib/digest-leads";
+import { getFocus } from "@/lib/profile";
 import { buildProviderDigestData, renderProviderDigest } from "@/lib/provider-digest";
 
 export const runtime = "nodejs";
@@ -28,7 +30,12 @@ export async function GET(req: Request) {
   }
 
   // Default: the leads digest. Same Postgres universe as the dashboard / insights, so the email agrees.
-  const [leads, insights] = await Promise.all([publishedLeads(), digestSnapshot()]);
-  const { html } = buildDigest({ leads, insights, siteUrl });
+  // ?as=<email> renders that reader's version — their onboarding focus, exactly as the send job would.
+  // Sequential, not Promise.all: the small pool.
+  const as = url.searchParams.get("as");
+  const focus = as ? await getFocus(as) : undefined;
+  const leads = focus ? await digestLeadLoader()(focus) : await publishedLeads();
+  const insights = await digestSnapshot();
+  const { html } = buildDigest({ leads, insights, siteUrl, focus });
   return new NextResponse(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }

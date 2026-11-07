@@ -10,6 +10,7 @@
  *    user_profile (email PK)    — per-seat lead cadence, focus, ingestion, digest opt-in.
  */
 import { db as sharedDb } from "./db";
+import { EMPTY_FOCUS, focusFromProfiles, type Focus } from "./focus";
 
 function db() {
   return sharedDb();
@@ -181,6 +182,20 @@ export async function getOrgProfile(org: string): Promise<OrgProfile | null> {
       createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString(),
     };
   } catch { return null; }
+}
+
+/** What this user's onboarding says to lead with (lib/focus). SELECT * on purpose: the profiler's
+ *  rich columns are added lazily by lib/onboarding-store, so naming them would throw on a database
+ *  that hasn't seen a 5-stage setup yet. Never throws — no profile is just the whole market. */
+export async function getFocus(email: string): Promise<Focus> {
+  const sql = db();
+  try {
+    const e = email.trim().toLowerCase();
+    // Sequential, not Promise.all — the small pool (see dueDigestUsers).
+    const [u] = await sql`SELECT * FROM user_profile WHERE email = ${e}`;
+    const [o] = await sql`SELECT * FROM org_profile WHERE org = ${orgKey(e)}`;
+    return focusFromProfiles(o, u);
+  } catch { return EMPTY_FOCUS; }
 }
 
 /** Does this email's org already have a company profile? (→ decides short vs full onboarding.) */

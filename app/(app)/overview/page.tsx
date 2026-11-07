@@ -3,7 +3,9 @@ import { currentUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { overviewData } from "@/lib/overview";
 import { getAccount } from "@/lib/account";
-import { getOrgProfile, orgKey } from "@/lib/profile";
+import { getFocus, getOrgProfile, orgKey } from "@/lib/profile";
+import { focusPhrase, hasTargeting, inFocus, rankByFocus, type Focus } from "@/lib/focus";
+import { providerSlug } from "@/lib/provider-slug";
 import { marketLabel, marketFlag } from "@/lib/markets";
 import { weekRead, type Read } from "@/lib/read";
 import { StatChip, LaunchTrend } from "@/app/components/command";
@@ -19,8 +21,16 @@ function daysAgo(iso: string) {
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 864e5);
   return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
 }
-// Personalised focus strip, driven by the company type captured at signup.
-const PERSONA: Record<string, { focus: string; line: string; ctas: { label: string; href: string }[] }> = {
+// Personalised focus strip, driven by the company type captured at signup. Keys cover both the
+// 5-stage profiler's types (lib/onboarding) and the older short form's (app_developer, investor,
+// researcher), which existing accounts still carry.
+type Persona = { focus: string; line: string; ctas: { label: string; href: string }[] };
+const PERSONA: Record<string, Persona> = {
+  ecommerce_platform: { focus: "Platforms", line: "Who's launching, migrating and churning — on your platform and the ones you compete with.", ctas: [{ label: "Platform shift", href: "/insights" }, { label: "Migrations", href: "/dashboard?status=migrated&checked=7" }] },
+  marketing_tech: { focus: "Apps & marketing", line: "Where merchants are installing — and the stores without your category yet.", ctas: [{ label: "App landscape", href: "/insights/apps" }] },
+  hosting: { focus: "New stores", line: "Fresh launches and migrations — the moments merchants pick infrastructure.", ctas: [{ label: "This week's launches", href: "/dashboard?launched=7d" }] },
+  theme_dev: { focus: "Themes", line: "Which themes new stores launch on, and who's re-platforming.", ctas: [{ label: "Theme landscape", href: "/insights" }] },
+  merchant: { focus: "Your market", line: "The stores launching in your category and markets.", ctas: [{ label: "Browse competitors", href: "/dashboard" }] },
   payments: { focus: "Payments", line: "Who's winning checkout — and the new stores with no gateway yet.", ctas: [{ label: "Provider momentum", href: "/insights/payments" }, { label: "No-gateway prospects", href: "/dashboard?nopay=1" }] },
   app_developer: { focus: "Apps", line: "Where merchants are installing — and the gaps for your app.", ctas: [{ label: "App landscape", href: "/insights/apps" }] },
   shipping: { focus: "Shipping", line: "Which carriers are winning at checkout across the market.", ctas: [{ label: "Carrier landscape", href: "/insights/shipping" }] },
@@ -39,10 +49,22 @@ export default async function OverviewPage() {
   if (!email) redirect("/login");
 
   const [data, account, org, reads] = [await overviewData(), await getAccount(email).catch(() => null), await getOrgProfile(orgKey(email)).catch(() => null), await weekRead().catch(() => [] as Read[])];
-  const { pulse, launches, trend, markets } = data;
+  const focus = await getFocus(email);
+  const { pulse, trend } = data;
   const name = (account?.name ?? "there").split(" ")[0];
-  const persona = org?.companyType ? PERSONA[org.companyType] : null;
+  const persona = personaFor(org?.companyType ?? focus.companyType, focus);
+
+  // Lead with what onboarding said they care about; never hide the rest (lib/focus).
+  const ranked = rankByFocus(data.launches, focus);
+  const launches = ranked.items.slice(0, 7);
+  const focused = hasTargeting(focus);
+  const mine = new Set(focus.countries);
+  const markets = (mine.size
+    ? [...data.markets.filter((m) => mine.has(m.country)), ...data.markets.filter((m) => !mine.has(m.country) && m.live >= 50)]
+    : data.markets.filter((m) => m.live >= 50)).slice(0, 6);
   const marketMax = Math.max(1, ...markets.map((m) => m.live));
+  const myNewWeek = data.markets.filter((m) => mine.has(m.country)).reduce((n, m) => n + m.newWeek, 0);
+  const myMarkets = data.markets.filter((m) => mine.has(m.country)).map((m) => cleanMarket(m.country));
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -51,7 +73,11 @@ export default async function OverviewPage() {
         <div>
           <h2 className="font-display text-3xl font-bold tracking-tight text-cream md:text-4xl">{greeting()}, {name}.</h2>
           <p className="mt-1.5 text-sm text-cream/55">
-            While you were away, <span className="font-mono text-cream/80">{pulse.newWeek.toLocaleString()}</span> stores launched across your markets this week — and <span className="font-mono text-cream/80">{pulse.totalLive.toLocaleString()}</span> are live in total.
+            {myMarkets.length > 0 && myMarkets.length <= 3 ? (
+              <>While you were away, <span className="font-mono text-cream/80">{myNewWeek.toLocaleString()}</span> stores launched in {joinNames(myMarkets)} this week — <span className="font-mono text-cream/80">{pulse.newWeek.toLocaleString()}</span> across all our markets.</>
+            ) : (
+              <>While you were away, <span className="font-mono text-cream/80">{pulse.newWeek.toLocaleString()}</span> stores launched across your markets this week — and <span className="font-mono text-cream/80">{pulse.totalLive.toLocaleString()}</span> are live in total.</>
+            )}
           </p>
         </div>
         <span className="flex items-center gap-2 rounded-full border border-mint/25 bg-mint/[0.07] px-3 py-1.5 text-xs font-medium text-mint">
@@ -105,7 +131,14 @@ export default async function OverviewPage() {
       <section className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <div className="mb-3 flex items-baseline justify-between">
-            <h3 className="font-display text-lg text-cream">Just launched</h3>
+            <div>
+              <h3 className="font-display text-lg text-cream">Just launched</h3>
+              {focused && (
+                <p className="mt-0.5 text-xs text-cream/45">
+                  {ranked.matched > 0 ? `${focusPhrase(focus)} first` : `Nothing in your focus (${focusPhrase(focus)}) in the last two weeks — showing everything`}
+                </p>
+              )}
+            </div>
             <Link href="/dashboard?launched=7d" className="text-xs text-cream/45 transition hover:text-mint">See all →</Link>
           </div>
           {launches.length === 0 ? (
@@ -121,6 +154,8 @@ export default async function OverviewPage() {
                       <span className="mt-0.5 flex items-center gap-2 text-[11px] text-cream/40">
                         <span className={`rounded px-1.5 py-0.5 font-medium ${platTone(s.platform)}`}>{platName(s.platform)}</span>
                         {s.country ? cleanMarket(s.country) : ""}
+                        {s.category && <span className="truncate">· {s.category}</span>}
+                        {focused && inFocus(s, focus) && <span className="rounded bg-lilac/10 px-1.5 py-0.5 font-medium text-lilac">your focus</span>}
                       </span>
                     </span>
                     <span className="shrink-0 font-mono text-[11px] text-cream/40">{daysAgo(s.launchedAt)}</span>
@@ -144,7 +179,7 @@ export default async function OverviewPage() {
                 <li key={m.country}>
                   <Link href={`/dashboard?country=${m.country}`} className="block rounded-lg p-1 -m-1 transition hover:bg-cream/[0.03]">
                     <div className="flex items-baseline justify-between gap-2 text-sm">
-                      <span className="text-cream/85">{marketFlag(m.country)} {cleanMarket(m.country)}</span>
+                      <span className="text-cream/85">{marketFlag(m.country)} {cleanMarket(m.country)}{mine.has(m.country) && <span className="ml-1.5 text-[10px] font-medium uppercase tracking-wide text-lilac">yours</span>}</span>
                       <span className="shrink-0 font-mono text-xs text-cream/50">{m.live.toLocaleString()}{m.newWeek > 0 && <span className="ml-1.5 text-mint">+{m.newWeek}</span>}</span>
                     </div>
                     <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-cream/[0.06]"><div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/40" style={{ width: `${Math.max(3, (100 * m.live) / marketMax)}%` }} /></div>
@@ -168,6 +203,19 @@ export default async function OverviewPage() {
       </section>
     </div>
   );
+}
+
+const joinNames = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/** The focus strip: the company type sets the framing; a product they told us is theirs adds a
+ *  direct link to how it's doing (payments providers have a /p page). */
+function personaFor(companyType: string | null, focus: Focus): Persona | null {
+  const base = companyType ? PERSONA[companyType] : null;
+  const own = focus.technologies.find((t) => t.category === "payments");
+  if (!base && !own) return null;
+  const p: Persona = base ? { ...base, ctas: [...base.ctas] } : { focus: own!.name, line: `How ${own!.name} is doing at checkout across the market.`, ctas: [] };
+  if (own) p.ctas.unshift({ label: `${own.name} at checkout`, href: `/p/${providerSlug(own.name)}` });
+  return p;
 }
 
 function ReadPanel({ reads }: { reads: Read[] }) {
