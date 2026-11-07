@@ -4,7 +4,8 @@ import { useState } from "react";
 import { tagLabel } from "@/lib/tag-defs";
 import { marketLabel } from "@/lib/markets";
 
-type Provider = { key: string; label: string; hint: string };
+type ConnectField = { key: string; label: string; placeholder?: string };
+type Provider = { key: string; label: string; hint: string; secretLabel?: string; fields?: ConnectField[] };
 type Campaign = { id: string; name: string };
 
 function ProviderCard({
@@ -18,6 +19,7 @@ function ProviderCard({
 }) {
   const [connected, setConnected] = useState(initialConnected);
   const [apiKey, setApiKey] = useState("");
+  const [fieldVals, setFieldVals] = useState<Record<string, string>>({});
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setCampaignId] = useState<string>(String(initialConfig.campaignId ?? ""));
   const [cohort, setCohort] = useState("");   // "" = all contactable
@@ -32,11 +34,18 @@ function ProviderCard({
 
   async function connect() {
     if (!apiKey.trim()) return;
+    const fields = provider.fields ?? [];
+    const missing = fields.find((f) => !fieldVals[f.key]?.trim());
+    if (missing) { setMsg(`${missing.label} is required.`); return; }
+    const config = Object.fromEntries(fields.map((f) => [f.key, (fieldVals[f.key] ?? "").trim()]));
     setBusy(true); setMsg("Verifying…");
-    const { ok, j } = await call({ action: "connect", apiKey });
+    const { ok, j } = await call({ action: "connect", apiKey, config });
     if (!ok) { setMsg(j.error ?? "Failed"); setBusy(false); return; }
-    setConnected(true); setCampaigns(j.campaigns ?? []); setApiKey("");
-    setMsg(`Connected — ${(j.campaigns ?? []).length} campaigns found.`);
+    const found = j.campaigns ?? [];
+    setConnected(true); setCampaigns(found); setApiKey(""); setFieldVals({});
+    // single-target providers (Slack/WhatsApp/HubSpot) expose one pseudo-campaign — auto-select it.
+    if (found.length === 1) saveCampaign(found[0].id);
+    setMsg(found.length === 1 ? `Connected — ${found[0].name}.` : `Connected — ${found.length} campaigns found.`);
     setBusy(false);
   }
   async function loadCampaigns() {
@@ -83,9 +92,20 @@ function ProviderCard({
       </div>
 
       {!connected ? (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Paste API key" className={`${inp} flex-1`} />
-          <button onClick={connect} disabled={busy} className="rounded-full bg-cyan px-5 py-2 text-sm font-medium text-cyan-deep disabled:opacity-50">Connect</button>
+        <div className="mt-4 space-y-2">
+          {(provider.fields ?? []).map((f) => (
+            <input
+              key={f.key}
+              value={fieldVals[f.key] ?? ""}
+              onChange={(e) => setFieldVals((v) => ({ ...v, [f.key]: e.target.value }))}
+              placeholder={f.placeholder ? `${f.label} — ${f.placeholder}` : f.label}
+              className={`${inp} w-full`}
+            />
+          ))}
+          <div className="flex flex-wrap gap-2">
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={`Paste ${provider.secretLabel ?? "API key"}`} className={`${inp} flex-1`} />
+            <button onClick={connect} disabled={busy} className="rounded-full bg-cyan px-5 py-2 text-sm font-medium text-cyan-deep disabled:opacity-50">Connect</button>
+          </div>
         </div>
       ) : (
         <div className="mt-4 space-y-3">

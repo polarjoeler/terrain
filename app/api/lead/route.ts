@@ -2,7 +2,7 @@
  *  GET /api/lead?domain=example.co.za — gated to a signed-in subscriber. */
 
 import { NextResponse } from "next/server";
-import { currentUser } from "@/lib/auth";
+import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { getLeadDetail } from "@/lib/lead-detail";
 
@@ -20,5 +20,5 @@ export async function GET(req: Request) {
 
   const detail = await getLeadDetail(domain).catch(() => null);
   if (!detail) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json(detail);
+  return NextResponse.json({ ...detail, canEdit: isAdmin(email) });
 }

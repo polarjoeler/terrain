@@ -13,9 +13,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
-const cachePath = process.argv[2] || join(homedir(), "shopify-radar", "checkout_cache.json");
+const cachePath = process.argv.slice(2).find((a) => !a.startsWith("--")) || join(homedir(), "shopify-radar", "checkout_cache.json");
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
+// The DB stores many domains WITH a www. prefix while clean() strips it, so match BOTH forms
+// (the www bug that stranded ~2.8k ZA cached gateways: WHERE domain='x' never hit the 'www.x' row).
+const www2 = (d) => [d, "www." + d];
 
 if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
 
@@ -31,7 +35,11 @@ async function main() {
   const statePath = join(homedir(), "shopify-radar", ".sync_state.json");
   let lastSync = 0;
   try { lastSync = Date.parse(JSON.parse(readFileSync(statePath, "utf8")).last_synced_at) || 0; } catch {}
-  const cutoff = lastSync ? lastSync - 20 * 60e3 : Date.now() - 6 * 3600e3; // first run: last 6h
+  // --full reconciles the WHOLE cache (not just since last sync). One-time repair for the zombie
+  // backlog: stores probed before an earlier sync (gateway found OR no-gateway) that never reached
+  // the DB, so the queue kept re-offering them and the probe kept skipping them (cache says done).
+  const FULL = process.argv.includes("--full");
+  const cutoff = FULL ? 0 : lastSync ? lastSync - 20 * 60e3 : Date.now() - 6 * 3600e3; // first run: last 6h
   const fresh = (rec) => { const t = rec?.probed_at ? Date.parse(rec.probed_at) : NaN; return isNaN(t) || t >= cutoff; };
 
   // domain -> { payments, shipping, free } (checkout-verified)
@@ -44,12 +52,26 @@ async function main() {
     const hasShip = Array.isArray(ship) && ship.length;
     const hasFree = typeof rec?.free_shipping === "boolean";
     const hasPlus = rec?.plus === "strong"; // independent, still-Plus-exclusive fingerprint
-    if (hasGw || hasShip || hasFree || hasPlus) {
+    // The literal admin plan, when an embedded app config leaked it at checkout (~0.5% of
+    // pages). The ONLY exact tier we ever see — everything else is an eligibility floor.
+    const planExact = typeof rec?.plan_exact === "string" && rec.plan_exact ? rec.plan_exact : null;
+    // Shop identity from /meta.json — Shopify's own country/city/province (ground truth, vs the
+    // ccTLD+currency guess that mislabels stores) and the shop id, which is the real identity
+    // behind www/apex and generic-TLD rows that currently look like separate stores.
+    const m = rec?.meta && typeof rec.meta === "object" ? rec.meta : null;
+    const meta = m?.id ? {
+      id: Number(m.id) || null,
+      country: m.country || null, city: m.city || null, province: m.province || null,
+      currency: m.currency || null, myshopify: m.myshopify_domain || null,
+    } : null;
+    if (hasGw || hasShip || hasFree || hasPlus || planExact || meta) {
       verified.push([clean(domain), {
         payments: hasGw ? gw.join(";") : null,
         shipping: hasShip ? ship.join(";") : null,
         free: hasFree ? rec.free_shipping : null,
         plus: hasPlus,
+        planExact,
+        meta,
       }]);
     }
   }
@@ -81,12 +103,25 @@ async function main() {
   // (42P07 "already exists") — swallow that so an overlap never aborts the run.
   const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
   try {
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS shipping_providers TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS free_shipping BOOLEAN`);
-    // When we last verified checkout — lets the queue re-surface stale stores for a
-    // re-probe (so provider switches get caught), instead of probe-once-forever.
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS payments_checked_at TIMESTAMPTZ`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS plus_signal TEXT`);
+    // One catalog read instead of 11 ACCESS EXCLUSIVE lock requests. payments_checked_at records
+    // when we last verified checkout, so the queue can re-surface stale stores for a re-probe
+    // (catching provider switches) instead of probe-once-forever.
+    await ensureColumns(sql, "imported_stores", {
+      shipping_providers: "TEXT",
+      free_shipping: "BOOLEAN",
+      payments_checked_at: "TIMESTAMPTZ",
+      plus_signal: "TEXT",
+      plan_exact: "TEXT",
+      shop_id: "BIGINT",
+      shop_country: "TEXT",
+      shop_city: "TEXT",
+      shop_province: "TEXT",
+      shop_currency: "TEXT",
+      myshopify_domain: "TEXT",
+    });
+    // shop_id is the dedupe key for the www/apex and generic-TLD rows; not unique by design
+    // (expansion stores aside, one shop legitimately answers on several of our domain rows).
+    await ddl(sql`CREATE INDEX IF NOT EXISTS idx_imported_shop_id ON imported_stores (shop_id)`);
     // Event log of payment-provider shifts — the raw material for monitoring stores
     // that switch/add/drop a gateway or reorder their checkout (a live sales signal).
     // Populated here by diffing each re-probe against what we last had.
@@ -129,7 +164,7 @@ async function main() {
       while (idx < verified.length) {
         const [domain, v] = verified[idx++];
         // Read what we currently have so we can detect a real shift (not first capture).
-        const [cur] = await sql`SELECT payments, payments_source FROM imported_stores WHERE domain = ${domain} AND published`;
+        const [cur] = await sql`SELECT payments, payments_source FROM imported_stores WHERE domain = ANY(${www2(domain)}) AND published`;
         const oldP = cur?.payments ?? null;
         // A bootstrap import (e.g. StoreCensus generic gateways) is NOT a prior probe, so the
         // first checkout probe over it is an INITIAL capture, not a switch — comparing our
@@ -178,8 +213,18 @@ async function main() {
               -- an independent, still-Plus-exclusive fingerprint (multipass / Plus badge) confirms
               -- Plus on its own — record it and set the confident flag live (never un-set).
               plus_signal = CASE WHEN ${v.plus} THEN 'strong' ELSE plus_signal END,
-              plus        = CASE WHEN ${v.plus} THEN true ELSE plus END
-            WHERE domain = ${domain} AND published`;
+              plus        = CASE WHEN ${v.plus} THEN true ELSE plus END,
+              -- exact plan never degrades: a leak is ground truth, a later page without the
+              -- leaky app must not erase it (typed cast — postgres.js throws on bare nulls).
+              plan_exact  = COALESCE(${v.planExact}::text, plan_exact),
+              -- shop identity: refreshed when present (a store CAN move country), never wiped
+              shop_id          = COALESCE(${v.meta?.id ?? null}::bigint, shop_id),
+              shop_country     = COALESCE(${v.meta?.country ?? null}::text, shop_country),
+              shop_city        = COALESCE(${v.meta?.city ?? null}::text, shop_city),
+              shop_province    = COALESCE(${v.meta?.province ?? null}::text, shop_province),
+              shop_currency    = COALESCE(${v.meta?.currency ?? null}::text, shop_currency),
+              myshopify_domain = COALESCE(${v.meta?.myshopify ?? null}::text, myshopify_domain)
+            WHERE domain = ANY(${www2(domain)}) AND published`;
         updated += r.count;
       }
     }
@@ -191,7 +236,7 @@ async function main() {
     // Guarded so it never overwrites a store that DOES have a gateway on record.
     if (checkedEmpty.length) {
       const r = await sql`UPDATE imported_stores SET payments_checked_at = now()
-        WHERE domain = ANY(${checkedEmpty}) AND published AND (payments IS NULL OR payments = '')`;
+        WHERE domain = ANY(${checkedEmpty.flatMap(www2)}) AND published AND (payments IS NULL OR payments = '')`;
       console.log(`  ↳ marked ${r.count.toLocaleString()} stores checked-but-no-gateway (probed, no provider yet).`);
     }
     // Park probe-exhausted stores — stamp ONCE (payments_checked_at IS NULL) so we don't keep
@@ -199,7 +244,7 @@ async function main() {
     // backlog out of the initial-probe queue.
     if (exhausted.length) {
       const r = await sql`UPDATE imported_stores SET payments_checked_at = now()
-        WHERE domain = ANY(${exhausted}) AND published AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL`;
+        WHERE domain = ANY(${exhausted.flatMap(www2)}) AND published AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL`;
       console.log(`  ↳ parked ${r.count.toLocaleString()} probe-exhausted stores (terminal / max-attempts) — they leave the initial queue.`);
     }
     if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);

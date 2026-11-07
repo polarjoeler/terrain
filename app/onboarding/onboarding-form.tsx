@@ -69,6 +69,16 @@ export function OnboardingForm({ firstUser }: { firstUser: boolean }) {
     }
   }
 
+  // Skip records the choice server-side so sign-in stops diverting here, then goes to the dashboard.
+  // If recording it fails we still let them through — setup is optional, and trapping someone on
+  // this screen because a cookie write failed would be the worse outcome.
+  async function skip() {
+    setBusy(true); setErr(null);
+    try { await fetch("/api/onboarding/skip", { method: "POST" }); } catch { /* non-blocking */ }
+    router.push("/dashboard");
+    router.refresh();
+  }
+
   return (
     <div className="mt-8 rounded-2xl border border-cream/12 bg-cream/[0.02] p-5 md:p-6">
       {firstUser && (
@@ -115,6 +125,10 @@ export function OnboardingForm({ firstUser }: { firstUser: boolean }) {
       <button onClick={submit} disabled={!canSubmit || busy}
         className="mt-7 w-full rounded-full bg-cream px-4 py-2.5 text-sm font-semibold text-ink transition hover:bg-cream/90 disabled:cursor-not-allowed disabled:opacity-40">
         {busy ? "Saving…" : "Start using Terrain →"}
+      </button>
+      <button onClick={skip} disabled={busy}
+        className="mt-3 w-full rounded-full px-4 py-2 text-sm text-cream/55 transition hover:text-cream/80 disabled:opacity-40">
+        Skip for now
       </button>
     </div>
   );

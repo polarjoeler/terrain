@@ -1,0 +1,111 @@
+import {
+  cachedInsights,
+  insightsHistory,
+  snapshotInsights,
+  getBaselineDate,
+  availableCountries,
+  availablePlatforms,
+  cohortCount,
+  type PlatformSel,
+} from "@/lib/insights";
+import { tagCounts } from "@/lib/tags";
+import { VISIBLE_MARKETS } from "@/lib/markets";
+import { providerMomentumByPeriod, recentPaymentShifts } from "@/lib/provider-insights";
+import { InsightsView } from "./insights-view";
+import { redirect } from "next/navigation";
+import { currentUser, isAdmin } from "@/lib/auth";
+import { getSubscriber, hasAccess } from "@/lib/subscriptions";
+import { getUserProfile, getOrgProfile, orgKey } from "@/lib/profile";
+
+export const metadata = { title: "Terrain — Market Insights" };
+// Computed live from the store DB per request.
+export const dynamic = "force-dynamic";
+
+export default async function Insights({
+  searchParams,
+}: {
+  searchParams: Promise<{ country?: string; tag?: string; platform?: string }>;
+}) {
+  // Paywall: proprietary market data — signed-in paid subscribers (or the owner) only.
+  const email = await currentUser();
+  if (!email) redirect("/login");
+  const subscriber = await getSubscriber(email).catch(() => null);
+  if (!hasAccess(subscriber) && !isAdmin(email)) redirect("/billing");
+
+  const sp = await searchParams;
+  const [countries, tags] = await Promise.all([
+    availableCountries().catch(() => []),
+    tagCounts().catch(() => []),
+  ]);
+  const country =
+    sp.country && countries.some((c) => c.country === sp.country) ? sp.country : "ZA";
+  // Dynamic "Brand New Stores" cohort (recently discovered in this market), shown first, then just
+  // the two curated size cohorts. Deliberately simplified to Brand-new / Top 100 / Top 500 — other
+  // operational tags (partner-managed, …) aren't market cohorts and only cluttered the picker.
+  const newCount = await cohortCount(country, "new").catch(() => 0);
+  const COHORT_TAGS = ["top-100", "top-500"];
+  const cohorts = [{ tag: "new", count: newCount }, ...tags.filter((t) => COHORT_TAGS.includes(t.tag))];
+  // Only accept a cohort that actually has stores.
+  const tag = sp.tag && cohorts.some((c) => c.tag === sp.tag && c.count > 0) ? sp.tag : undefined;
+  // Which CMSs actually have a live presence in this market — the data-driven platform picker.
+  const platforms = await availablePlatforms(country).catch(() => [{ platform: "shopify", live: 0 }]);
+  // Allowed selections: "all" + every platform in the picker, plus the named ones so deep links
+  // (?platform=woocommerce) survive even in a market where that CMS is currently thin.
+  const allowed = new Set<string>(["all", "woocommerce", "magento", ...platforms.map((p) => p.platform)]);
+  // Default view is "all" — a combined Shopify + Woo (+ every other CMS) growth picture per market,
+  // as the landing state. The per-CMS chips then drill into one platform.
+  let platform: PlatformSel = sp.platform && allowed.has(sp.platform) ? sp.platform : "all";
+  // Persona lens: when the user hasn't explicitly chosen a platform, default to their profile
+  // focus IF it's a single specific CMS (e.g. a Woo-only shop) — otherwise stay on "all".
+  if (!sp.platform) {
+    const [prof, org] = await Promise.all([getUserProfile(email).catch(() => null), getOrgProfile(orgKey(email)).catch(() => null)]);
+    const focus = (prof?.leadFocus?.length ? prof.leadFocus : org?.cmsFocus) ?? [];
+    const specific = focus.filter((f) => allowed.has(f));
+    if (specific.length === 1) platform = specific[0] as PlatformSel;
+  }
+
+  const [data, baselineDate, momentumByPeriod, shifts] = await Promise.all([
+    cachedInsights(country, tag, platform),
+    // Guarded: a dropped-connection blip on this tiny query must not 500 the whole page when the
+    // heavy insights data itself is served fine (cachedInsights serves stale on failure).
+    getBaselineDate().catch(() => null),
+    // Momentum for EVERY timeframe (the card follows the selector client-side), scoped to this
+    // market, launch-keyed among newly-launched stores (not discovered_at / snapshot counts, which
+    // the payment backfill inflated). Empty maps on failure so the page still renders.
+    providerMomentumByPeriod(country).catch(() => ({ day: [], week: [], month: [], quarter: [], year: [] })),
+    // Recent switches scoped to the selected market (falls back to all African markets if no single
+    // market resolves) — a global feed drowned the local signal, so stay continent-scoped.
+    recentPaymentShifts(40, country ? [country] : [...VISIBLE_MARKETS]).catch(() => []),
+  ]);
+  // Daily snapshots / trends are a single Shopify-only ZA series (the snapshot table is
+  // single-series): a WooCommerce/all page view once overwrote it with Woo data (storesTotal
+  // 679, plus 0), a fake Plus-trend drop. So we ALWAYS snapshot the Shopify computation on the
+  // ZA no-tag view — computing it explicitly when the view itself is all/Woo — and only hydrate
+  // comparison history for the matching Shopify view (all/Woo show live figures without period
+  // deltas, since a cross-platform delta vs a Shopify baseline would be apples-to-oranges).
+  let history = [data];
+  if (country === "ZA" && !tag) {
+    const snapData = platform === "shopify" ? data : await cachedInsights(country, undefined, "shopify").catch(() => null);
+    if (snapData) await snapshotInsights(snapData).catch(() => {});
+    if (platform === "shopify") {
+      const h = await insightsHistory().catch(() => [data]);
+      if (h.length) history = h;
+    }
+  }
+
+  return (
+    <InsightsView
+      data={data}
+      history={history}
+      baselineDate={baselineDate}
+      countries={countries}
+      country={country}
+      cohorts={cohorts}
+      tag={tag ?? ""}
+      platform={platform}
+      platforms={platforms}
+      momentumByPeriod={momentumByPeriod}
+      shifts={shifts}
+    />
+  );
+}

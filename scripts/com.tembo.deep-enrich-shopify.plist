@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.deep-enrich-shopify</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/deep-enrich-shopify.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+    <!-- LUCY ONLY. Daily Shopify homepage deep-enrich over the Rain residential IP (2nd Shopify-edge
+         budget). Direct fetch, ~1,200/day pace. The one lane that turns the Rain line into real extra
+         throughput — Rex can't run it (home IP is already saturated by its own Shopify work). -->
+    <key>StartInterval</key>
+    <integer>86400</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/deep-enrich-shopify.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/deep-enrich-shopify.err.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

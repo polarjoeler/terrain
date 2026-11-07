@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.builder-promote</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/builder-promote.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+    <!-- Weekly. Promotes banked Wix/Squarespace/Webflow STORES → live leads + demotes banked
+         brochures. ~1,500 new builder rows get banked per fortnight, so weekly keeps up with slack.
+         Proxy-fleet fetches, sequential across builders (shared residential rate budget). -->
+    <key>StartInterval</key>
+    <integer>604800</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/builder-promote.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/builder-promote.err.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

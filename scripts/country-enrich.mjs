@@ -12,6 +12,7 @@
  * failures stay null → retried). Only overwrites when we get an authoritative signal.
  */
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "2000"), 10);
@@ -71,12 +72,13 @@ async function probe(domain) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS country_checked_at TIMESTAMPTZ`;
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS country_source TEXT`;
+    await ensureColumns(sql, "imported_stores",
+      { country_checked_at: "TIMESTAMPTZ", country_source: "TEXT" });
     const target = NULL_COUNTRY ? sql`(country IS NULL OR country = '')` : sql`domain LIKE ${LIKE}`;
     const rows = await sql`
       SELECT domain, country FROM imported_stores
       WHERE ${target} AND country_checked_at IS NULL
+        AND country_source IS DISTINCT FROM 'manual'
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       ORDER BY published DESC, discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;

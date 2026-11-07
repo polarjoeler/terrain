@@ -69,7 +69,11 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
   const series = useMemo(
     () => (data?.platforms ?? []).map((p, i) => ({
       ...p, color: colorFor(p.slug, i), vis: p.cumulative.slice(startIdx),
-      drawable: months.length > 1 && p.now > 0 && p.dated / p.now >= 0.2,
+      // Draw a line for every CMS with live stores. Platforms whose launches we can't date yet
+      // (Wix, Squarespace, …) render as a near-flat line at their current base — still visible on
+      // the chart (the point of showing "all CMSs") — while Shopify/Woo show their real slope.
+      drawable: months.length > 1 && p.now > 0,
+      dateable: p.dated / Math.max(1, p.now) >= 0.2,
     })),
     [data, startIdx, months.length],
   );
@@ -91,7 +95,7 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
     setHover(i >= 0 && i < months.length ? i : null);
   };
 
-  const StatusPop = ({ p }: { p: Series & { color: string; drawable: boolean } }) => {
+  const StatusPop = ({ p }: { p: Series & { color: string; drawable: boolean; dateable: boolean } }) => {
     const rows = ([
       ["Selling", p.status.selling, "text-mint"],
       [p.slug === "shopify" ? "Other live" : "Active (live, stocked)", p.status.active, "text-cyan"],
@@ -106,7 +110,7 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
             <li key={lbl} className="flex justify-between"><span className="text-cream/60">{lbl}</span><span className={`tabular-nums ${cls}`}>{v.toLocaleString()}</span></li>
           ))}
         </ul>
-        {!p.drawable && <p className="mt-1.5 text-[11px] leading-snug text-cream/40">Too few launch-dated {noun} to chart a trajectory yet — total only.</p>}
+        {!p.dateable && <p className="mt-1.5 text-[11px] leading-snug text-cream/40">Launch dates for {noun} on this platform are still being captured — shown at its current base until the slope can be drawn.</p>}
       </div>
     );
   };
@@ -122,8 +126,8 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
         <div className="flex flex-wrap gap-2">
           {series.map((p) => (
             <div key={p.slug} className="relative" onMouseEnter={() => setLegend(p.slug)} onMouseLeave={() => setLegend(null)}>
-              <button className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs text-cream/75 hover:border-cream/30 ${p.drawable ? "border-cream/12" : "border-dashed border-cream/15"}`}>
-                <span className="h-2.5 w-2.5 rounded-full" style={{ background: p.color, opacity: p.drawable ? 1 : 0.5 }} />
+              <button className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs text-cream/75 hover:border-cream/30 ${p.dateable ? "border-cream/12" : "border-dashed border-cream/15"}`}>
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: p.color, opacity: p.dateable ? 1 : 0.5 }} />
                 {p.label}
                 <span className="tabular-nums text-cream/50">{p.now.toLocaleString()}</span>
               </button>
@@ -142,7 +146,7 @@ export function PlatformGrowthChart({ country, provider }: { country?: string; p
           <div className="grid h-64 place-items-center text-sm text-cream/40">Not enough dated {noun} yet to chart growth.</div>
         ) : (
           <>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove}>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" onMouseMove={onMove} style={{ fontFamily: "var(--font-mono)" }}>
               {[0, 0.25, 0.5, 0.75, 1].map((f) => (
                 <g key={f}>
                   <line x1={padL} y1={padT + ih - f * ih} x2={W - padR} y2={padT + ih - f * ih} stroke="var(--color-cream)" strokeOpacity="0.08" />

@@ -55,7 +55,8 @@ const SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
 const b64url = (b: Buffer | string) =>
   Buffer.from(b).toString("base64url");
 
-let cachedToken: { token: string; expires: number } | null = null;
+const WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";   // read + write
+const cachedTokens = new Map<string, { token: string; expires: number }>();
 
 /** Mint a Google access token from the service-account key.
  *
@@ -74,16 +75,15 @@ async function loadServiceKey(): Promise<{ client_email: string; private_key: st
   throw new Error("No Google credentials: set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS");
 }
 
-async function accessToken(): Promise<string> {
-  if (cachedToken && cachedToken.expires > Date.now() + 60_000) {
-    return cachedToken.token;
-  }
+async function accessToken(scope: string = SCOPE): Promise<string> {
+  const hit = cachedTokens.get(scope);
+  if (hit && hit.expires > Date.now() + 60_000) return hit.token;
   const key = await loadServiceKey();
 
   const iat = Math.floor(Date.now() / 1000);
   const claim = {
     iss: key.client_email,
-    scope: SCOPE,
+    scope,
     aud: "https://oauth2.googleapis.com/token",
     exp: iat + 3600,
     iat,
@@ -107,11 +107,49 @@ async function accessToken(): Promise<string> {
   });
   if (!res.ok) throw new Error(`token ${res.status}: ${await res.text()}`);
   const json = (await res.json()) as { access_token: string; expires_in: number };
-  cachedToken = {
-    token: json.access_token,
-    expires: Date.now() + json.expires_in * 1000,
-  };
+  cachedTokens.set(scope, { token: json.access_token, expires: Date.now() + json.expires_in * 1000 });
   return json.access_token;
+}
+
+/* ---- writing (lead export → a user's connected Google Sheet) --------------- */
+export const SERVICE_ACCOUNT_EMAIL = "shopify-radar@shopify-radar-503921.iam.gserviceaccount.com";
+
+async function sheetsApi(spreadsheetId: string, path: string, init: RequestInit): Promise<Record<string, unknown>> {
+  const token = await accessToken(WRITE_SCOPE);
+  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
+  });
+  if (!res.ok) throw new Error(`sheets ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return res.json();
+}
+
+/** Confirm the service account can read a spreadsheet (used at connect time). Returns its title. */
+export async function checkSheetAccess(spreadsheetId: string): Promise<string> {
+  const meta = await sheetsApi(spreadsheetId, "?fields=properties.title", { method: "GET" });
+  return ((meta.properties as { title?: string })?.title) ?? "Untitled";
+}
+
+/** Replace a tab with header + rows (creating the tab if needed). Returns the direct URL to that tab. */
+export async function writeLeadSheet(
+  spreadsheetId: string, tabName: string, header: string[], rows: (string | number | boolean | null)[][],
+): Promise<{ url: string; rows: number }> {
+  const meta = await sheetsApi(spreadsheetId, "?fields=sheets.properties(title,sheetId)", { method: "GET" });
+  const sheets = (meta.sheets ?? []) as { properties?: { title?: string; sheetId?: number } }[];
+  let gid = sheets.find((s) => s.properties?.title === tabName)?.properties?.sheetId;
+  if (gid == null) {
+    const added = await sheetsApi(spreadsheetId, ":batchUpdate", {
+      method: "POST", body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tabName } } }] }),
+    });
+    gid = ((added.replies as { addSheet?: { properties?: { sheetId?: number } } }[])?.[0]?.addSheet?.properties?.sheetId) ?? 0;
+  } else {
+    await sheetsApi(spreadsheetId, `/values/${encodeURIComponent(tabName)}:clear`, { method: "POST", body: "{}" });
+  }
+  const values = [header, ...rows.map((r) => r.map((c) => (c == null ? "" : c)))];
+  await sheetsApi(spreadsheetId, `/values/${encodeURIComponent(tabName)}!A1?valueInputOption=RAW`, {
+    method: "PUT", body: JSON.stringify({ values }),
+  });
+  return { url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${gid}`, rows: rows.length };
 }
 
 async function readRange(range: string, revalidate?: number): Promise<string[][]> {

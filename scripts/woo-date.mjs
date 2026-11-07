@@ -11,6 +11,7 @@
  * Only fills where there's no launch date already.
  */
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "800"), 10);
@@ -47,7 +48,7 @@ async function oldestDate(base) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONC + 1, 6), idle_timeout: 20 });
   try {
-    await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS wp_dated_at TIMESTAMPTZ`;
+    await ensureColumns(sql, "imported_stores", { wp_dated_at: "TIMESTAMPTZ" });
     const rows = await sql`
       SELECT domain FROM imported_stores
       WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))

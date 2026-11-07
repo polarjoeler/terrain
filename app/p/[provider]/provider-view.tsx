@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { InteractiveBars, CountUp } from "@/app/components/interactive-bars";
-import { marketLabel } from "@/lib/markets";
+import { marketLabel, groupCodesByRegion } from "@/lib/markets";
 import { PAY_TYPES, type PayType } from "@/lib/payments-taxonomy";
 import { providerSlug } from "@/lib/provider-slug";
-import type { ProviderInsights, ProviderTrendPoint, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
+import type { ProviderInsights, ProviderTrendPoint, ProviderLaunchShare, NewSharePeriod, NewShareBucket, ProviderStore, ProviderSubReport, PaymentShift } from "@/lib/provider-insights";
 import { GrowthChart } from "@/app/components/growth-chart";
 import { PlatformGrowthChart } from "@/app/components/platform-growth-chart";
 
@@ -16,64 +16,111 @@ const TYPE_TONE: Record<PayType, string> = { PSP: "orange", BNPL: "mint", APM: "
 const usd = (n: number | null) =>
   n == null ? "—" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
 
-type Range = "Day" | "Week" | "Month" | "Quarter" | "Year" | "All";
-const RANGES: Range[] = ["Day", "Week", "Month", "Quarter", "Year", "All"];
-const RANGE_DAYS: Record<Range, number> = { Day: 1, Week: 7, Month: 30, Quarter: 91, Year: 365, All: Infinity };
+type Win = "1Y" | "3Y" | "All";
+const WINS: Win[] = ["1Y", "3Y", "All"];
+const WIN_MONTHS: Record<Win, number> = { "1Y": 12, "3Y": 36, All: Infinity };
+const fmtMon = (iso: string) => {
+  const dt = new Date(iso + "T00:00:00Z");
+  return `${dt.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })} ’${String(dt.getUTCFullYear()).slice(2)}`;
+};
 
-/** Holistic market-share view — share % over time, filterable by range. */
-function MarketShareChart({ history, currentShare, provider, scope }: { history: ProviderTrendPoint[]; currentShare: number; provider: string; scope: string }) {
-  const [range, setRange] = useState<Range>("All");
-  const pts = (() => {
-    const days = RANGE_DAYS[range];
-    if (days === Infinity) return history;
-    const cut = Date.now() - days * 864e5;
-    return history.filter((h) => new Date(h.date + "T00:00:00Z").getTime() >= cut);
-  })();
+/** Market share over time, with a toggle:
+ *   • CUMULATIVE — of all live checkout-verified stores launched by each month, the % on this provider
+ *     (catch-up-proof: a newly-found old store credits to its launch month, so discovery doesn't spike
+ *     today's number).
+ *   • % OF NEWLY LAUNCHED — of the stores that launched in each month, the % that chose it (acquisition).
+ *  Windowable to the last 1Y / 3Y / all. */
+function MarketShareChart({ launchShare, newMonthly, provider, scope }: { launchShare: ProviderLaunchShare; newMonthly: NewShareBucket[]; provider: string; scope: string }) {
+  const [win, setWin] = useState<Win>("3Y");
+  const [mode, setMode] = useState<"cumulative" | "new">("cumulative");
+  const [hover, setHover] = useState<number | null>(null);
+  const cumAll = launchShare.months.map((m, i) => ({ m, share: launchShare.share[i] ?? 0, mine: launchShare.providerCum[i] ?? 0, base: launchShare.baseCum[i] ?? 0 }));
+  const newAll = newMonthly.map((b) => ({ m: b.date, share: b.share, mine: b.mine, base: b.total }));
+  const all = mode === "cumulative" ? cumAll : newAll;
+  const pts = WIN_MONTHS[win] === Infinity ? all : all.slice(Math.max(0, all.length - WIN_MONTHS[win]));
+  const headline = mode === "cumulative" ? Math.round(launchShare.currentShare) : (newAll.length ? newAll[newAll.length - 1].share : 0);
+  const color = mode === "cumulative" ? "var(--color-cyan)" : "var(--color-mint)";
 
   const w = 720, h = 200, padL = 34, padB = 22, padT = 12;
   const maxY = Math.max(1, ...pts.map((p) => p.share)) * 1.15;
   const x = (i: number) => padL + (pts.length <= 1 ? 0 : (i / (pts.length - 1)) * (w - padL - 8));
   const y = (v: number) => padT + (1 - v / maxY) * (h - padT - padB);
+  const labelEvery = Math.max(1, Math.ceil(pts.length / 6));
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = Math.round((((e.clientX - r.left) / r.width) * w - padL) / ((w - padL - 8) / Math.max(1, pts.length - 1)));
+    setHover(i >= 0 && i < pts.length ? i : null);
+  };
 
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-cream">Market share over time</h3>
-          <p className="mt-1 text-xs text-cream/45">Share of checkout-verified stores using {provider} · {scope}</p>
+          <p className="mt-1 text-xs text-cream/45">
+            {mode === "cumulative"
+              ? <>Share of checkout-verified stores using {provider}, by launch cohort · <span className="text-cream/70">{scope}</span></>
+              : <>Of stores that <b className="text-cream/70">launched</b> each month, the % that chose {provider} · <span className="text-cream/70">{scope}</span></>}
+          </p>
           <div className="mt-3 flex items-baseline gap-2">
-            <CountUp value={Math.round(currentShare)} className="font-display text-5xl leading-none text-cream" />
+            <CountUp value={headline} className="font-display text-5xl leading-none text-cream" />
             <span className="font-display text-2xl text-cream/60">%</span>
-            <span className="ml-1 text-xs text-cream/40">today</span>
+            <span className="ml-1 text-xs text-cream/40">{mode === "cumulative" ? "today" : "latest month"}</span>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {RANGES.map((r) => (
-            <button key={r} onClick={() => setRange(r)}
-              className={`rounded-full px-3 py-1 text-xs transition ${range === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
-              {r === "All" ? "All time" : r}
-            </button>
-          ))}
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex gap-1 rounded-full border border-cream/12 p-1" title="running installed base vs. what each month's new stores chose">
+            {([["cumulative", "Cumulative"], ["new", "% of new"]] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setMode(k)}
+                className={`rounded-full px-3 py-1 text-xs transition ${mode === k ? "bg-cyan font-semibold text-cyan-deep" : "text-cream/50 hover:text-cream"}`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {WINS.map((r) => (
+              <button key={r} onClick={() => setWin(r)}
+                className={`rounded-full px-3 py-1 text-xs transition ${win === r ? "bg-cyan text-cyan-deep" : "border border-cream/15 text-cream/55 hover:border-cream/40"}`}>
+                {r === "All" ? "All time" : `Last ${r}`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {pts.length >= 2 ? (
-        <svg viewBox={`0 0 ${w} ${h}`} className="mt-5 w-full">
-          {[0, 0.5, 1].map((f) => (
-            <g key={f}>
-              <line x1={padL} x2={w} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--color-cream)" strokeOpacity="0.08" />
-              <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
-            </g>
-          ))}
-          <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill="var(--color-cyan)" opacity="0.1" />
-          <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke="var(--color-cyan)" strokeWidth="2.5" strokeLinejoin="round" />
-          {pts.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.share)} r="3" fill="var(--color-cyan)"><title>{`${p.date}: ${p.share}% (${p.total} of ${p.verifiedBase})`}</title></circle>)}
-          <text x={padL} y={h - 6} className="fill-cream/40" fontSize="9">{pts[0].date}</text>
-          <text x={w} y={h - 6} textAnchor="end" className="fill-cream/40" fontSize="9">{pts[pts.length - 1].date}</text>
-        </svg>
+        <div className="relative mt-5" onMouseLeave={() => setHover(null)}>
+          <svg viewBox={`0 0 ${w} ${h}`} className="w-full" onMouseMove={onMove}>
+            {[0, 0.5, 1].map((f) => (
+              <g key={f}>
+                <line x1={padL} x2={w} y1={y(maxY * f)} y2={y(maxY * f)} stroke="var(--color-cream)" strokeOpacity="0.08" />
+                <text x={0} y={y(maxY * f) + 3} className="fill-cream/40" fontSize="9">{Math.round(maxY * f)}%</text>
+              </g>
+            ))}
+            <polygon points={`${x(0)},${h - padB} ${pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} ${x(pts.length - 1)},${h - padB}`} fill={color} opacity="0.1" />
+            <polyline points={pts.map((p, i) => `${x(i)},${y(p.share)}`).join(" ")} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" />
+            {hover != null && <line x1={x(hover)} x2={x(hover)} y1={padT} y2={h - padB} stroke="var(--color-cream)" strokeOpacity="0.25" />}
+            {pts.map((p, i) => (i % labelEvery === 0 || i === pts.length - 1) ? <circle key={i} cx={x(i)} cy={y(p.share)} r={hover === i ? 4.5 : 2.5} fill={color} opacity={hover == null || hover === i ? 1 : 0.5} /> : null)}
+            {pts.map((p, i) => (i % labelEvery === 0 ? (
+              <text key={`l${i}`} x={x(i)} y={h - 6} textAnchor="middle" className="fill-cream/40" fontSize="9">{fmtMon(p.m)}</text>
+            ) : null))}
+          </svg>
+          {hover != null && pts[hover] && (
+            <div className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-cream/20 bg-ink-deep/95 px-3 py-2 text-xs shadow-xl"
+              style={{ left: `${Math.min(86, Math.max(14, (x(hover) / w) * 100))}%`, top: 0 }}>
+              <div className="font-semibold text-cream">{fmtMon(pts[hover].m)}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-cream/75">
+                <span className="inline-block h-2 w-2 rounded-sm" style={{ background: color }} />
+                <span>{provider}</span>
+                <span className="ml-auto pl-3 font-medium text-cream tabular-nums">{pts[hover].share}%</span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-cream/40 tabular-nums">{pts[hover].mine.toLocaleString()} of {pts[hover].base.toLocaleString()} {mode === "cumulative" ? "verified · launched by then" : "launched that month"}</div>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="mt-5 grid h-32 place-items-center rounded-2xl border border-dashed border-cream/12 text-center text-sm text-cream/45">
-          Trend line builds as daily snapshots accrue — the first point is recorded.<br />Come back over the next few weeks to watch it move.
+          {mode === "cumulative"
+            ? "Not enough launch-dated, checkout-verified stores to chart yet — it fills in as dating + checkout coverage grow."
+            : "Not enough newly-launched stores with payment data yet — it fills in as launch-dating + checkout coverage grow."}
         </div>
       )}
     </div>
@@ -99,7 +146,7 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
     return `${dt.getUTCDate()} ${mo}`;
   };
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-cream">Share of new stores choosing {provider}</h3>
@@ -119,8 +166,8 @@ function NewShareChart({ series, provider }: { series: Record<NewSharePeriod, Ne
           {data.map((b) => (
             <div key={b.date} className="flex items-center gap-3">
               <span className="w-16 shrink-0 text-xs tabular-nums text-cream/60">{fmt(b.date)}</span>
-              <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                <div className="h-full rounded-full bg-mint" style={{ width: `${b.total ? Math.max(2, Math.min(b.share, 100)) : 0}%` }} />
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${b.total ? Math.max(2, Math.min(b.share, 100)) : 0}%` }} />
               </div>
               <span className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{b.total ? `${b.share}%` : "—"}</span>
               <span className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{b.mine}/{b.total}</span>
@@ -163,7 +210,7 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
   }).slice(0, 100);
 
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-cream">Stores on {provider}</h3>
@@ -220,10 +267,12 @@ function StoresTable({ stores, provider }: { stores: ProviderStore[]; provider: 
 }
 
 export function ProviderView({
-  data: d, history, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
+  data: d, launchShare, newShare, shareToken, isAdmin, countries, country, logo, subReport, switches = [], platform = "all",
+  providers = [], chromeless = false,
 }: {
   data: ProviderInsights;
   history: ProviderTrendPoint[];
+  launchShare: ProviderLaunchShare;
   newShare: Record<NewSharePeriod, NewShareBucket[]>;
   shareToken: string;
   isAdmin: boolean;
@@ -233,6 +282,12 @@ export function ProviderView({
   subReport?: ProviderSubReport | null;
   switches?: PaymentShift[];
   platform?: string;
+  // The other providers a user can jump to (authed viewers only — a share token is scoped to one
+  // provider, so token viewers get an empty list and no switcher).
+  providers?: { slug: string; name: string }[];
+  // When rendered inside the app shell (logged-in users) the shell supplies the full-screen frame,
+  // so we drop our own min-h-screen padding wrapper. Token viewers render standalone (chromeless=false).
+  chromeless?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   // The active CMS (carried from the insights drill-in) scopes the whole page; keep it in every
@@ -249,6 +304,16 @@ export function ProviderView({
     navigator.clipboard?.writeText(`${window.location.origin}${linkFor(country)}`)
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
+  // Jump to another provider, preserving the active market + CMS scope (and share token).
+  const providerLink = (slug: string) => {
+    const qs = new URLSearchParams();
+    if (shareToken) qs.set("t", shareToken);
+    if (country) qs.set("country", country);
+    if (platform && platform !== "all") qs.set("platform", platform);
+    const s = qs.toString();
+    return `/p/${slug}${s ? `?${s}` : ""}`;
+  };
+  const activeSlug = providerSlug(d.provider);
 
   const tiles = [
     { n: d.total, label: "stores at checkout", sub: `of ${d.verifiedBase.toLocaleString()} verified` },
@@ -257,8 +322,7 @@ export function ProviderView({
     { n: d.newLast7, label: "new stores this week", sub: `${d.shareOfNew7}% of ${d.newStores7} new chose you` },
   ];
 
-  return (
-    <div className="min-h-screen px-4 py-8 md:px-8">
+  const body = (
       <div className="mx-auto max-w-6xl">
         <nav className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -274,15 +338,32 @@ export function ProviderView({
             )}
             <span className="text-sm text-cream/45">market insights</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {providers.length > 1 && (
+              <label className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide text-cream/40">Provider</span>
+                <select
+                  value={activeSlug}
+                  onChange={(e) => { window.location.href = providerLink(e.target.value); }}
+                  className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>option]:bg-ink-deep"
+                  title="Switch to another payment provider"
+                >
+                  {providers.map((p) => <option key={p.slug} value={p.slug} className="text-ink">{p.name}</option>)}
+                </select>
+              </label>
+            )}
             {countries.length > 0 && (
               <select
                 value={country}
                 onChange={(e) => { window.location.href = linkFor(e.target.value); }}
-                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50"
+                className="rounded-full border border-cream/15 bg-transparent px-3.5 py-1.5 text-sm text-cream outline-none focus:border-cream/50 [&>optgroup]:bg-ink-deep [&>option]:bg-ink-deep"
               >
                 <option value="" className="text-ink">All markets</option>
-                {countries.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+                {groupCodesByRegion(countries).map(({ region, codes }) => (
+                  <optgroup key={region} label={region}>
+                    {codes.map((c) => <option key={c} value={c} className="text-ink">{marketLabel(c)}</option>)}
+                  </optgroup>
+                ))}
               </select>
             )}
             <span className="rounded-full border border-mint/25 bg-mint/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-mint">Live data</span>
@@ -305,7 +386,7 @@ export function ProviderView({
         {/* hero tiles */}
         <div className="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-4">
           {tiles.map((t) => (
-            <div key={t.label} className="rounded-3xl border border-cream/12 bg-cream/[0.03] px-5 py-6">
+            <div key={t.label} className="rounded-2xl border border-cream/10 bg-cream/[0.02] px-5 py-6">
               <CountUp value={t.n} className="font-display text-4xl leading-none text-cream" />
               <div className="mt-2 text-xs font-semibold uppercase tracking-wide text-cream/50">{t.label}</div>
               <div className="mt-1 text-xs text-cream/40">{t.sub}</div>
@@ -315,7 +396,7 @@ export function ProviderView({
 
         {/* market share over time — the holistic view */}
         <div className="mt-6">
-          <MarketShareChart history={history} currentShare={d.verifiedBase ? Math.round((10000 * d.total) / d.verifiedBase) / 100 : 0} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
+          <MarketShareChart launchShare={launchShare} newMonthly={newShare.month ?? []} provider={d.provider} scope={country ? marketLabel(country) : "all markets"} />
         </div>
 
         {/* share of NEW stores over time — the acquisition curve, D/W/M/Q/Y */}
@@ -336,7 +417,7 @@ export function ProviderView({
         {/* Sub-brand breakdown — only for providers with distinct products (Paystack Onsite vs
             redirect; Stitch vs WigWag). Merged into the parent everywhere else. */}
         {subReport && subReport.subs.some((s) => s.count > 0) && (
-          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
             <div className="mb-1 flex items-baseline justify-between">
               <h3 className="text-lg font-semibold text-cream">Product breakdown</h3>
               <span className="text-xs text-cream/40">{subReport.total.toLocaleString()} merchants on {d.provider}</span>
@@ -347,7 +428,7 @@ export function ProviderView({
                 <div key={s.label} className="flex items-center gap-3">
                   <div className="w-40 shrink-0 truncate text-sm text-cream/80">{s.label}</div>
                   <div className="h-2 flex-1 overflow-hidden rounded-full bg-cream/10">
-                    <div className="h-full rounded-full bg-cyan/70" style={{ width: `${Math.max(2, s.pct)}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-cyan to-cyan/45" style={{ width: `${Math.max(2, s.pct)}%` }} />
                   </div>
                   <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream/70">{s.pct}%</div>
                   <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{s.count.toLocaleString()}</div>
@@ -360,7 +441,7 @@ export function ProviderView({
         {/* Recent switches involving this provider — leads with WHAT changed; Paystack keeps
             the Onsite vs redirect distinction, Stitch keeps Stitch vs WigWag. */}
         {(
-          <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+          <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
             <div className="mb-1 flex items-baseline justify-between">
               <h3 className="text-lg font-semibold text-cream">Recent switches</h3>
               <span className="text-xs text-cream/40">latest stores adding or dropping {d.provider}</span>
@@ -406,7 +487,7 @@ export function ProviderView({
         )}
 
         {/* position in the checkout stack */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Position in the checkout stack</h3>
           <div className="mt-4 grid gap-5 md:grid-cols-[auto_1fr] md:items-center">
             <div className="grid grid-cols-2 gap-3 text-center">
@@ -430,8 +511,8 @@ export function ProviderView({
               {d.segments.map((sg) => (
                 <div key={sg.key} className="flex items-center gap-3">
                   <div className="w-24 shrink-0 text-sm text-cream/75">{sg.label}</div>
-                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                    <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(sg.pct, 100))}%` }} />
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                    <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(sg.pct, 100))}%` }} />
                   </div>
                   <div className="w-10 shrink-0 text-right text-sm tabular-nums text-cream">{sg.pct}%</div>
                   <div className="w-16 shrink-0 text-right text-xs tabular-nums text-cream/40">{sg.mine}/{sg.total}</div>
@@ -450,8 +531,8 @@ export function ProviderView({
                 {d.rankByCohort.map((c) => (
                   <div key={c.cohort} className="flex items-center gap-2">
                     <span className="w-12 shrink-0 text-sm text-cream/75">{c.cohort}</span>
-                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                      <div className="h-full rounded-full bg-cyan" style={{ width: `${Math.max(2, c.topSpotPct)}%` }} />
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                      <div className="h-full rounded-full bg-gradient-to-r from-cyan to-cyan/45" style={{ width: `${Math.max(2, c.topSpotPct)}%` }} />
                     </div>
                     <span className="w-14 shrink-0 text-right text-sm tabular-nums text-cream">#{c.avgRank}</span>
                     <span className="w-12 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.total}</span>
@@ -463,7 +544,7 @@ export function ProviderView({
         </div>
 
         {/* head-to-head — a PSP only competes with other PSPs */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Head-to-head — rival PSPs</h3>
           <p className="mt-1 text-xs text-cream/45">
             A PSP competes with other PSPs, not with BNPL or wallets (those coexist). Of {d.provider}&apos;s {d.pspRivalry.total.toLocaleString()} stores,
@@ -490,7 +571,7 @@ export function ProviderView({
         </div>
 
         {/* competitors — segmented by payment type */}
-        <div className="mt-6 rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+        <div className="mt-6 rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
           <h3 className="text-lg font-semibold text-cream">Who they compete with</h3>
           <p className="mt-1 text-xs text-cream/45">
             Gateways appearing alongside {d.provider} at checkout, grouped by type. {d.provider} is a{" "}
@@ -514,23 +595,30 @@ export function ProviderView({
 
         {/* breakdowns */}
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <Card title="Market share by market" subtitle={`Of each market's checkout-verified stores, the % using ${d.provider}`}>
+          <Card title="Market share by market" subtitle={country ? `Click a market to scope the whole page to it${country ? " — currently " + marketLabel(country) : ""}` : `Of each market's checkout-verified stores, the % using ${d.provider} — click one to drill in`}>
             {d.byCountry.length ? (
-              <div className="space-y-2.5">
-                {d.byCountry.map((c) => (
-                  <div key={c.label} className="flex items-center gap-3">
-                    <div className="w-28 shrink-0 truncate text-sm text-cream/75">{marketLabel(c.label)}</div>
-                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-cream/10">
-                      <div className="h-full rounded-full bg-mint" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
-                    </div>
-                    <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
-                    <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
-                  </div>
-                ))}
+              <div className="space-y-1">
+                {d.byCountry.map((c) => {
+                  const active = country && c.label.toUpperCase() === country.toUpperCase();
+                  return (
+                    <Link key={c.label} href={linkFor(c.label)} title={`Scope this page to ${marketLabel(c.label)}`}
+                      className={`flex items-center gap-3 rounded-lg px-2 py-1.5 transition ${active ? "bg-mint/10 ring-1 ring-mint/25" : "hover:bg-cream/[0.04]"}`}>
+                      <div className={`w-28 shrink-0 truncate text-sm ${active ? "font-semibold text-cream" : "text-cream/75"}`}>{marketLabel(c.label)}</div>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cream/[0.07]">
+                        <div className="h-full rounded-full bg-gradient-to-r from-mint to-mint/45" style={{ width: `${Math.max(2, Math.min(c.pct, 100))}%` }} />
+                      </div>
+                      <div className="w-11 shrink-0 text-right text-sm tabular-nums text-cream">{c.pct}%</div>
+                      <div className="w-20 shrink-0 text-right text-xs tabular-nums text-cream/40">{c.count.toLocaleString()} store{c.count === 1 ? "" : "s"}</div>
+                    </Link>
+                  );
+                })}
+                {country && (
+                  <Link href={linkFor("")} className="mt-1 inline-block px-2 text-xs font-medium text-cyan hover:underline">← Back to all markets</Link>
+                )}
               </div>
             ) : <p className="text-sm text-cream/40">No market data.</p>}
           </Card>
-          <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % now using ${d.provider} (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} /></Card>
+          <Card title="Market share by store vintage" subtitle={`Of stores first seen each year, the % still using ${d.provider} today — hover a bar for the exact figure (bar = your store count)`}><InteractiveBars data={d.vintage} tone="lilac" initialLimit={12} pctSuffix={`still using ${d.provider}`} /></Card>
           <Card title="Store size" subtitle="Estimated monthly sales"><InteractiveBars data={d.sizeBands} tone="cyan" /></Card>
         </div>
 
@@ -541,13 +629,15 @@ export function ProviderView({
 
         <p className="mt-8 text-center text-xs text-cream/40">Live Terrain data · {d.total.toLocaleString()} checkout-verified stores · {new Date().toISOString().slice(0, 10)}</p>
       </div>
-    </div>
   );
+  // Logged-in users get the full Terrain shell (sidebar nav) around the report; external share-token
+  // viewers get it standalone with its own full-screen padding.
+  return chromeless ? body : <div className="min-h-screen px-4 py-8 md:px-8">{body}</div>;
 }
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[2rem] border border-cream/12 bg-cream/[0.03] p-6">
+    <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
       <h3 className="text-lg font-semibold text-cream">{title}</h3>
       {subtitle && <p className="mt-1 text-xs text-cream/45">{subtitle}</p>}
       <div className="mt-4">{children}</div>

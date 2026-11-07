@@ -17,7 +17,33 @@ async function store(key: string, data: unknown): Promise<void> {
   await db()`
     INSERT INTO agg_cache (key, data, computed_at)
     VALUES (${key}, ${JSON.stringify(data)}::jsonb, now())
-    ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now()`.catch(() => {});
+    ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, computed_at = now(), refreshing_at = NULL`.catch(() => {});
+}
+
+/** SINGLE-FLIGHT. Without this, every serverless instance that sees a stale key schedules its own
+ *  refresh, so N warm instances run N identical full-corpus scans concurrently — the stampede that
+ *  saturated disk IO (the 2026-11-02 incident: the same aggregate running 2-3x at once, 60-100s each).
+ *  A short DB lease makes exactly one instance refresh; the rest serve stale, which is what SWR is for.
+ *  Implemented as a conditional UPDATE (not pg_advisory_lock) because session-level advisory locks are
+ *  unsafe on the transaction pooler — connections are handed to other callers between statements.
+ *  The lease self-heals: a crashed refresher's claim expires after LEASE_MS. */
+const LEASE_MS = 5 * 60 * 1000;
+
+async function claimRefresh(key: string): Promise<boolean> {
+  try {
+    const rows = await db()<{ key: string }[]>`
+      UPDATE agg_cache SET refreshing_at = now()
+      WHERE key = ${key}
+        AND (refreshing_at IS NULL OR refreshing_at < now() - ${LEASE_MS + "ms"}::interval)
+      RETURNING key`;
+    return rows.length > 0;
+  } catch {
+    return true; // column/table missing → degrade to the old behaviour rather than never refreshing
+  }
+}
+
+async function releaseRefresh(key: string): Promise<void> {
+  await db()`UPDATE agg_cache SET refreshing_at = NULL WHERE key = ${key}`.catch(() => {});
 }
 
 export async function cachedAgg<T>(key: string, freshMs: number, compute: () => Promise<T>): Promise<T> {
@@ -36,14 +62,19 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
   // key (no row at all) computes inline. This is what keeps the paid insights pages fast even when
   // the aggregate itself is slow to build on the flaky pooler.
   if (row) {
+    // Only ONE instance refreshes a stale key; everyone else serves stale immediately (see claimRefresh).
+    if (!(await claimRefresh(key))) return parse(row.data);
     let scheduled = false;
     try {
-      after(async () => { try { await store(key, await compute()); } catch { /* refresh best-effort */ } });
+      after(async () => {
+        try { await store(key, await compute()); }
+        catch { await releaseRefresh(key); }            // failed → let the next caller retry at once
+      });
       scheduled = true;
     } catch { /* not in a request scope (e.g. a script/warmer) → fall through to inline refresh */ }
     if (scheduled) return parse(row.data);              // stale now, fresh next time
     try { const data = await compute(); await store(key, data); return data; }
-    catch { return parse(row.data); }                    // inline refresh failed → serve stale
+    catch { await releaseRefresh(key); return parse(row.data); } // inline refresh failed → serve stale
   }
 
   // Cold key → must compute inline (once ever per key; then SWR keeps it warm).
@@ -54,4 +85,36 @@ export async function cachedAgg<T>(key: string, freshMs: number, compute: () => 
   } catch (e) {
     throw e;
   }
+}
+
+/** Force-recompute a key and store the result, bypassing the read/SWR path entirely.
+ *  For WARMERS (the cron routes): `cachedAgg` on a stale key schedules the refresh in `after()` and
+ *  returns stale, which is right for a viewer but useless for a warmer — it would return without
+ *  having warmed anything. This computes inline and writes through. Throws on failure so the caller
+ *  can report which keys warmed. */
+export async function primeAgg<T>(key: string, compute: () => Promise<T>): Promise<T> {
+  const data = await compute();
+  await store(key, data);
+  return data;
+}
+
+/** Drop a key so the next read recomputes from scratch. Use after a WRITE that invalidates a cached
+ *  rollup (e.g. an admin applying a tag changes tagCounts) — without this the admin would stare at a
+ *  stale count for the whole TTL and reasonably conclude the write failed. */
+export async function invalidateAgg(key: string): Promise<void> {
+  await db()`DELETE FROM agg_cache WHERE key = ${key}`.catch(() => {});
+}
+
+/** Age in ms of each given key, or absent from the map when the key has no row at all. One query,
+ *  so a warmer can skip keys that are still fresh instead of recomputing the whole set every run. */
+export async function aggAges(keys: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!keys.length) return out;
+  try {
+    const rows = await db()<{ key: string; age_ms: number }[]>`
+      SELECT key, (EXTRACT(EPOCH FROM (now() - computed_at)) * 1000)::bigint AS age_ms
+      FROM agg_cache WHERE key = ANY(${keys}::text[])`;
+    for (const r of rows) out.set(r.key, Number(r.age_ms));
+  } catch { /* table missing → treat every key as cold */ }
+  return out;
 }

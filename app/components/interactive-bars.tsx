@@ -12,13 +12,16 @@ const FILL: Record<string, string> = {
  *  "alive report" primitive. Bars grow on mount; click a bar to select it
  *  (cross-filter/drill-in via onSelect); the active bar is highlighted. */
 export function InteractiveBars({
-  data, tone = "orange", activeLabel, onSelect, initialLimit = 8,
+  data, tone = "orange", activeLabel, onSelect, initialLimit = 8, pctSuffix,
 }: {
   data: BarItem[];
   tone?: string;
   activeLabel?: string | null;
   onSelect?: (label: string) => void;
   initialLimit?: number;
+  /** When set, the hover tooltip leads with the % and reads e.g. "2021: 18% still using Peach · 1,234
+   *  stores" instead of the default "count (pct%)" — used where the % is the headline, not the count. */
+  pctSuffix?: string;
 }) {
   const [mounted, setMounted] = useState(false);
   const [all, setAll] = useState(false);
@@ -44,7 +47,9 @@ export function InteractiveBars({
               key={i.label}
               type="button"
               onClick={clickable ? () => onSelect!(i.label) : undefined}
-              title={`${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}
+              title={pctSuffix
+                ? `${i.label}: ${i.pct}% ${pctSuffix} · ${i.count.toLocaleString()} store${i.count === 1 ? "" : "s"}`
+                : `${i.label}: ${i.count.toLocaleString()} (${i.pct}%)`}
               className={`flex w-full items-center gap-3 rounded-lg px-1.5 py-1 text-left transition ${
                 clickable ? "cursor-pointer hover:bg-cream/[0.06]" : "cursor-default"
               } ${active ? "bg-cyan/[0.12]" : ""}`}

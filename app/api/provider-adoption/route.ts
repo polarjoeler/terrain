@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
-import { providerAdoptionSeries, type PlatformSel } from "@/lib/insights";
+import { providerAdoptionSeries, type PlatformSel, type AdoptionGranularity } from "@/lib/insights";
 import { cachedAgg } from "@/lib/agg-cache";
 
 export const dynamic = "force-dynamic";
 const PLATFORMS = new Set(["all", "shopify", "woocommerce", "magento"]);
+const GRAINS = new Set<AdoptionGranularity>(["month", "quarter", "year"]);
 
-/** 10-year provider adoption curve (cumulative installed base by launch year — best estimate of
- *  when each live store chose its provider). Paid-gated. Params: country, platform. */
+/** 10-year provider adoption curve (cumulative installed base by launch bucket — best estimate of
+ *  when each live store chose its provider). Paid-gated. Params: country, platform, grain. */
 export async function GET(req: Request) {
   const email = await currentUser();
   if (!email) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -18,14 +19,15 @@ export async function GET(req: Request) {
   const p = new URL(req.url).searchParams;
   const country = (p.get("country") || "ZA").toUpperCase();
   const platform = (PLATFORMS.has(p.get("platform") ?? "") ? p.get("platform") : "all") as PlatformSel;
+  const grain = (GRAINS.has(p.get("grain") as AdoptionGranularity) ? p.get("grain") : "year") as AdoptionGranularity;
 
   // Viewer-agnostic + heavy (scans the market's live base). Long TTL + SWR (in cachedAgg): after the
   // one-time cold build, stale rows serve instantly and the ~minute-long recompute runs in the
   // background, so a viewer never waits on it.
   const data = await cachedAgg(
-    `insights:adoption:${country}:${platform}:v3`, // v3: adds storesCumulative (share denominator). v2 added the typed all-providers list.
+    `insights:adoption:${country}:${platform}:${grain}:v5`, // v5: 5-year window. v4: month/quarter/year buckets.
     6 * 60 * 60 * 1000,
-    () => providerAdoptionSeries(country, platform),
+    () => providerAdoptionSeries(country, platform, grain),
   ).catch(() => null);
   if (!data) return NextResponse.json({ error: "failed" }, { status: 500 });
   return NextResponse.json(data);

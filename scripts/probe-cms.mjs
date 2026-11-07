@@ -23,7 +23,7 @@ const MARKETS = arg("--markets", "ZA,KE,NG").toUpperCase().split(",");
 const UA = "Mozilla/5.0 (compatible; terrain-radar/1.0; +probe-cms)";
 
 // Platforms we confirm here (native = store by platform; mixed = needs store markers).
-const NATIVE = new Set(["magento", "adobe_commerce", "prestashop", "bigcommerce", "ecwid", "opencart", "shopware", "shopstar"]);
+const NATIVE = new Set(["magento", "adobe_commerce", "prestashop", "bigcommerce", "ecwid", "opencart", "shopware", "shopstar", "shoplazza", "shopline", "bumpa"]);
 const MIXED = new Set(["wix", "squarespace", "webflow", "odoo"]);
 const TARGET = [...NATIVE, ...MIXED];
 const STORE_MARKERS = ["add to cart", "addtocart", "add-to-cart", "/cart", "checkout", "data-product", "/shop", "is-commerce", "add_to_cart"];

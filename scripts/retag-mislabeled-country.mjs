@@ -43,7 +43,7 @@ const plan = [];
 for (const cc of AFRICA) {
   const rows = await sql`
     SELECT domain, UPPER(country) AS was, currency FROM imported_stores
-    WHERE published AND UPPER(country) = ${cc}
+    WHERE published AND UPPER(country) = ${cc} AND country_source IS DISTINCT FROM 'manual'
       AND payments_source IS DISTINCT FROM 'storecensus' AND lower(payments) LIKE '%shopify_payments%'
       AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND domain NOT LIKE '%.za' AND (currency IS NULL OR upper(currency) <> 'ZAR')`.catch((e) => {

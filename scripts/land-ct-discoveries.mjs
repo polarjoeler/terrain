@@ -73,8 +73,11 @@ async function main() {
       // TLS cert issuance date (ISO YYYY-MM-DD) captured by the CT tailer; may be absent/null.
       // NOT a launch date — a cert renewal has a fresh notBefore, so it never touches launched_at.
       const certNotBefore = r.cert_not_before ? String(r.cert_not_before).slice(0, 10) : null;
+      // Preserve the feeder's discovery source (bulk_classify --source, e.g. common_crawl) so each
+      // source's yield is measurable; the CT tailer's own finds carry none → default ct_tail.
+      const source = (r.source && String(r.source).trim()) || "ct_tail";
       const prev = seen.get(d);
-      if (!prev || at < prev.at) seen.set(d, { at, country, certNotBefore });
+      if (!prev || at < prev.at) seen.set(d, { at, country, certNotBefore, source });
     } catch {
       /* skip malformed line */
     }
@@ -84,7 +87,10 @@ async function main() {
     return;
   }
 
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20,
+    // Generous statement_timeout (this lander's chunked queries can run long + it already retries),
+    // but idle/lock guards so a wedged connection can't freeze the table (the 2026-10-29 lock jam).
+    connection: { statement_timeout: 240000, idle_in_transaction_session_timeout: 120000, lock_timeout: 8000 } });
 
   // Retry on statement timeout. The queries themselves run in ~1s, but the first
   // statement on a pooled connection intermittently blocks ~57s behind the probe
@@ -129,21 +135,27 @@ async function main() {
     }
     const fresh = [...seen.keys()].filter((d) => !existing.has(d));
 
-    const records = [...seen.entries()].map(([domain, { at, country, certNotBefore }]) => ({
+    const records = [...seen.entries()].map(([domain, { at, country, certNotBefore, source }]) => ({
       domain,
       name: domain,
       country,
       discovered_at: at,
       published: true,
-      source: "ct_tail",
+      source,
       // ct_tail only surfaces Shopify (it tails Shopify CT certs), so the platform is known at
       // landing. Stamping it here means fresh leads are classified the instant they land — no
       // waiting on a probe — so insights counts + the "new this week" tile are honest immediately.
       platform: "Shopify",
-      // TLS cert issuance date (nullable). Freshness signal only — deliberately NOT launched_at.
+      // TLS cert issuance date (nullable).
       cert_not_before: certNotBefore,
+      // Launch estimate from the cert date. Sound for OUR CT finds: we tail CT continuously, so
+      // we catch certs at issuance — measured 73% within 30d of discovery, 0.006% old-renewal
+      // artifacts (2026-10-29). launched_at_source='cert' keeps it distinct from a precise import
+      // date; the COALESCE below keeps the EARLIEST, so a renewal never moves an existing date.
+      launched_at: certNotBefore,
+      launched_source: certNotBefore ? "cert" : null,
     }));
-    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before"];
+    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before", "launched_at", "launched_source"];
     for (let i = 0; i < records.length; i += 400) {
       const batch = records.slice(i, i + 400);
       // Insert new; for existing, only backfill discovered_at + platform-if-unset + cert_not_before-if-unset
@@ -151,9 +163,13 @@ async function main() {
       await withRetry(`upsert ${i}-${i + batch.length}`, () => sql`
         INSERT INTO imported_stores ${sql(batch, ...cols)}
         ON CONFLICT (domain) DO UPDATE SET
-          discovered_at   = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
-          platform        = COALESCE(imported_stores.platform, EXCLUDED.platform),
-          cert_not_before = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before)
+          discovered_at     = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
+          platform          = COALESCE(imported_stores.platform, EXCLUDED.platform),
+          cert_not_before   = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before),
+          -- Keep the EARLIEST launch date (never let a renewal move it), and only adopt the cert
+          -- estimate when we don't already hold a date — a precise import date always wins.
+          launched_at    = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
+          launched_source= COALESCE(imported_stores.launched_source, EXCLUDED.launched_source)
         -- Only write when a COALESCE would actually change something. Without this the
         -- run re-upserted all 201,133 rows every 30 minutes (~9.6M/day) where the
         -- COALESCEs were no-ops — Postgres still writes a new row version per upsert,
@@ -161,7 +177,8 @@ async function main() {
         -- an already CPU-starved instance, for no change.
         WHERE imported_stores.discovered_at IS NULL
            OR imported_stores.platform IS NULL
-           OR imported_stores.cert_not_before IS NULL`);
+           OR imported_stores.cert_not_before IS NULL
+           OR (imported_stores.launched_at IS NULL AND EXCLUDED.launched_at IS NOT NULL)`);
     }
 
     const overlap = seen.size - fresh.length;

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tembo.contact-enrich-shopify</string>
+
+    <!-- The SHOPIFY contact lane, as its own agent. contact-enrich-cron.sh self-configures by
+         hostname and routes a *Studio* host (Rex) to the NON-Shopify lane — so without this agent
+         nothing on Rex owns Shopify contact crawling at all (Shopify crawled/day fell 8,937 -> 327
+         when the coordinator's unpaced run was removed). CONTACT_LANE overrides the hostname rule;
+         the limits are the paced defaults the Shopify branch already uses: 1,200 @ conc 2 / 1200ms,
+         the rate measured ~1% rate-limited for weeks. This is the ONE lane on the shared home IP's
+         Shopify-edge budget, so it stays paced; the non-Shopify agent (merchants' own servers, no
+         shared ceiling) runs harder on its own. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/joel/storepulse/scripts/contact-enrich-cron.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/joel/storepulse</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CONTACT_LANE</key><string>shopify</string>
+        <key>CONTACT_LIMIT</key><string>1200</string>
+        <key>CONTACT_CONC</key><string>2</string>
+        <key>CONTACT_DELAY</key><string>1200</string>
+    </dict>
+
+    <!-- 13:15 — twelve hours from the non-Shopify agent's 01:15 so the two never share a window,
+         and clear of the 04:30 retag sweep. No RunAtLoad: loading the agent must not start a
+         crawl on the shared Shopify-edge budget. Step CONTACT_LIMIT toward 4,000 ONLY once run
+         summaries show <10% rate-limited for two or three consecutive runs. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>13</integer>
+        <key>Minute</key><integer>15</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joel/storepulse/logs/contact-enrich-shopify.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joel/storepulse/logs/contact-enrich-shopify.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

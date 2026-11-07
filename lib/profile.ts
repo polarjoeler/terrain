@@ -37,6 +37,8 @@ export type OrgProfile = {
   companyType: CompanyType;
   cmsFocus: string[];              // shopify / woocommerce / magento / wix / all
   trackOwnPerformance: boolean;    // they ARE a provider and want their own perf + weekly digest
+  providerName: string | null;     // the gateway this org IS (Paystack, PayFast…) — drives the provider digest
+  markets: string[];               // ISO2 markets they care about (defaults to ZA/KE/NG when empty)
   extras: string | null;          // free-text "any other features you want"
   createdBy: string;
   createdAt: string;
@@ -52,22 +54,66 @@ export type UserProfile = {
   completedAt: string | null;
 };
 
-// Once per process — not per request (see lib/tags.ts). getUserProfile/getOrgProfile are on the
-// insights hot path; the ALTER TABLE here takes ACCESS EXCLUSIVE, so running it every request was
-// a real serialization point. Memoise the first success; reset on failure so it retries.
+// Once per process — not per request (see lib/tags.ts). Memoising alone is not enough: on Vercel a
+// module-level memo is per LAMBDA INSTANCE, so every cold start replayed all five statements, and
+// both `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` evaluate their
+// IF NOT EXISTS while already HOLDING ACCESS EXCLUSIVE — idempotent, but not free (lib/ensure-schema
+// has the measurements). So read the catalog first, which takes no lock on either table, and issue
+// only what is genuinely missing — normally nothing. Reset on failure so it retries.
 let _ensured: Promise<void> | null = null;
 function ensureTables(sql: ReturnType<typeof db>): Promise<void> {
   return (_ensured ??= (async () => {
-    await sql`CREATE TABLE IF NOT EXISTS org_profile (
-      org text PRIMARY KEY, company_type text, cms_focus text[] DEFAULT '{}',
-      track_own_performance boolean DEFAULT false, extras text,
-      created_by text, created_at timestamptz NOT NULL DEFAULT now())`;
-    await sql`CREATE TABLE IF NOT EXISTS user_profile (
-      email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
-      lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
-      digest boolean DEFAULT true, completed_at timestamptz)`;
-    await sql`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS last_digest_at timestamptz`;
+    // Two sequential reads, NOT Promise.all — fanning out on the small pool is the deadlock class.
+    const tableRows = await sql<{ table_name: string }[]>`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('org_profile','user_profile')`;
+    const colRows = await sql<{ table_name: string; column_name: string }[]>`
+      SELECT table_name, column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name IN ('org_profile','user_profile')`;
+    const tables = new Set(tableRows.map((r) => r.table_name));
+    const columns = new Set(colRows.map((r) => `${r.table_name}.${r.column_name}`));
+
+    if (!tables.has('org_profile')) {
+      await sql`CREATE TABLE IF NOT EXISTS org_profile (
+        org text PRIMARY KEY, company_type text, cms_focus text[] DEFAULT '{}',
+        track_own_performance boolean DEFAULT false, extras text,
+        created_by text, created_at timestamptz NOT NULL DEFAULT now())`;
+    }
+    if (!columns.has('org_profile.provider_name')) {
+      await sql`ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS provider_name text`;
+    }
+    if (!columns.has('org_profile.markets')) {
+      await sql`ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS markets text[] DEFAULT '{}'`;
+    }
+    if (!tables.has('user_profile')) {
+      await sql`CREATE TABLE IF NOT EXISTS user_profile (
+        email text PRIMARY KEY, org text, is_first_user boolean DEFAULT false,
+        lead_cadence text, lead_focus text[] DEFAULT '{}', ingestion text,
+        digest boolean DEFAULT true, completed_at timestamptz)`;
+    }
+    if (!columns.has('user_profile.last_digest_at')) {
+      await sql`ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS last_digest_at timestamptz`;
+    }
   })().catch((e) => { _ensured = null; throw e; }));
+}
+
+/** Cookie set when a new user chooses "skip for now" on the setup screen, so the sign-in redirect
+ *  offers onboarding once rather than nagging on every visit. A preference, not a credential. */
+export const ONBOARDING_SKIP_COOKIE = "terrain_setup_skipped";
+
+/** Has this user finished onboarding? A single PK lookup, used on the SIGN-IN path.
+ *
+ *  Returns TRUE on any failure (including the table not existing yet) on purpose: the caller uses
+ *  this only to decide whether to divert a fresh sign-in to /onboarding, and a DB hiccup must send
+ *  people to their dashboard rather than bounce them into a setup screen that would also fail. */
+export async function hasCompletedOnboarding(email: string): Promise<boolean> {
+  const sql = db();
+  try {
+    const [r] = await sql`SELECT completed_at FROM user_profile WHERE email = ${email.trim().toLowerCase()}`;
+    return r ? r.completed_at != null : false;
+  } catch {
+    return true;
+  }
 }
 
 // Users whose digest is due now — opted in, and their cadence has elapsed since the last send.
@@ -90,6 +136,20 @@ export async function markDigestSent(email: string): Promise<void> {
   await db()`UPDATE user_profile SET last_digest_at = now() WHERE email = ${email.trim().toLowerCase()}`.catch(() => {});
 }
 
+/** Update just the digest opt-in and/or cadence for a seat. Upserts the row; leaves other fields
+ *  untouched (COALESCE with a typed null so a param we didn't pass keeps the stored value).
+ *  The digest/lead_cadence columns already exist, so this never runs DDL. */
+export async function setDigestPrefs(email: string, prefs: { digest?: boolean; cadence?: LeadCadence }): Promise<void> {
+  const sql = db();
+  const e = email.trim().toLowerCase();
+  await sql`
+    INSERT INTO user_profile (email, org, digest, lead_cadence)
+    VALUES (${e}, ${orgKey(e)}, ${prefs.digest ?? true}, ${prefs.cadence ?? "weekly"})
+    ON CONFLICT (email) DO UPDATE SET
+      digest = COALESCE(${prefs.digest ?? null}::boolean, user_profile.digest),
+      lead_cadence = COALESCE(${prefs.cadence ?? null}::text, user_profile.lead_cadence)`;
+}
+
 export async function getUserProfile(email: string): Promise<UserProfile | null> {
   const sql = db();
   try {
@@ -110,7 +170,9 @@ export async function getOrgProfile(org: string): Promise<OrgProfile | null> {
     if (!r) return null;
     return {
       org: r.org, companyType: r.company_type, cmsFocus: r.cms_focus ?? [],
-      trackOwnPerformance: r.track_own_performance, extras: r.extras,
+      trackOwnPerformance: r.track_own_performance,
+      providerName: r.provider_name ?? null, markets: r.markets ?? [],
+      extras: r.extras,
       createdBy: r.created_by, createdAt: new Date(r.created_at).toISOString(),
     };
   } catch { return null; }
@@ -126,6 +188,8 @@ export type OnboardingInput = {
   companyType?: CompanyType;
   cmsFocus?: string[];
   trackOwnPerformance?: boolean;
+  providerName?: string;          // if they're a payment provider, which gateway (drives their digest)
+  markets?: string[];             // ISO2 markets they operate in
   extras?: string;
   // per-user (always)
   leadCadence: LeadCadence;
@@ -142,8 +206,8 @@ export async function saveOnboarding(email: string, input: OnboardingInput): Pro
   const firstUser = !(await getOrgProfile(org));
 
   if (firstUser && input.companyType) {
-    await sql`INSERT INTO org_profile (org, company_type, cms_focus, track_own_performance, extras, created_by)
-      VALUES (${org}, ${input.companyType}, ${input.cmsFocus ?? []}, ${input.trackOwnPerformance ?? false}, ${input.extras ?? null}, ${e})
+    await sql`INSERT INTO org_profile (org, company_type, cms_focus, track_own_performance, provider_name, markets, extras, created_by)
+      VALUES (${org}, ${input.companyType}, ${input.cmsFocus ?? []}, ${input.trackOwnPerformance ?? false}, ${input.providerName ?? null}, ${input.markets ?? []}, ${input.extras ?? null}, ${e})
       ON CONFLICT (org) DO NOTHING`;
   }
   await sql`INSERT INTO user_profile (email, org, is_first_user, lead_cadence, lead_focus, ingestion, digest, completed_at)

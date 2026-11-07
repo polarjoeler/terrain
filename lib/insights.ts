@@ -44,8 +44,9 @@ export type InsightsData = {
     migrated: number;
     neverChecked: number;  // no liveness verdict yet
     checked30d: number;    // liveness-verified within 30 days (scan freshness)
-    paymentPct: number;    // % of REACHABLE stores with a verified gateway (matches /ops)
-    paymentReachable: number; // verified + never-probed — the honest payment denominator
+    paymentPct: number;    // HEADLINE: % of REACHABLE stores with a verified gateway (matches /ops)
+    paymentReachable: number; // verified + never-probed — the reachable payment denominator
+    paymentRawPct: number; // RAW: verified ÷ ALL live stores (a probed-no-gateway store counts against)
     launchPct: number;     // % of tracked stores with a known launch date
   };
   plusTotal: number;
@@ -85,6 +86,9 @@ export type InsightsData = {
     survival: number | null;
     migratedTo: { platform: string; n: number }[];   // Shopify → WooCommerce / Wix / … switch intel
   };
+  // Net platform migration for the market (cross-platform; ignores the platform filter): for each
+  // CMS, stores that moved TO it (gained) vs OFF it (lost), by the live_platform-vs-original signal.
+  migrations: { platform: string; gained: number; lost: number; net: number }[];
   // Present only when the WooCommerce platform is selected — the WordPress/Woo-native view
   // (store status, hosting, versions, plugins) instead of the Shopify-shaped sections.
   woo?: {
@@ -143,7 +147,7 @@ const cohortFilter = (tag?: string) =>
   !tag
     ? db()``
     : tag === "new"
-      ? db()`AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
+      ? db()`AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - (${NEW_STORE_DAYS}::int * INTERVAL '1 day')`
       : db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})`;
 
 // Published live stores for a market — the universe the insights describe.
@@ -153,6 +157,7 @@ const cohortFilter = (tag?: string) =>
 const LIVE = (country: string, tag?: string, platform: PlatformSel = "shopify") =>
   db()`published AND country = ${country}
        AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+       AND activity_tier IS DISTINCT FROM 'not_a_store'
        ${cohortFilter(tag)} ${platformClause(db(), platform)}`;
 
 // The 54 African ISO2 codes — the map + overview are Africa-only (our DB also holds many global
@@ -194,7 +199,7 @@ export async function africaOverview(
       COUNT(*) FILTER (WHERE live AND launch_date >= CURRENT_DATE - 30)::int AS launched30d
     FROM (
       SELECT country,
-        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${platformClause(sql, platform)}) AS live,
+        (published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store' ${platformClause(sql, platform)}) AS live,
         COALESCE(
           (CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
           launched_at
@@ -234,6 +239,7 @@ export async function availableCountries(): Promise<{ country: string; stores: n
           SELECT country, COUNT(*)::int n FROM imported_stores
           WHERE published AND country = ANY(${[...FOCUS_MARKETS]})
             AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+            AND activity_tier IS DISTINCT FROM 'not_a_store'
           GROUP BY country HAVING COUNT(*) >= ${COUNTRY_PICKER_FLOOR} ORDER BY n DESC`;
       });
       return rows.map((r) => ({ country: r.country, stores: Number(r.n) }));
@@ -332,6 +338,7 @@ export async function availablePlatforms(country?: string, minLive = 10): Promis
   const rows = await sql<{ p: string | null; n: number }[]>`
     SELECT lower(platform) p, COUNT(*)::int n FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store'
       ${country ? sql`AND country = ${country}` : sql``}
     GROUP BY 1`;
   // Fold platform NULL (unclassified CT discoveries) into Shopify, matching platformClause.
@@ -399,7 +406,9 @@ export async function cachedInsights(country = "ZA", tag?: string, platform: Pla
   const parse = (d: InsightsData | string): InsightsData => (typeof d === "string" ? JSON.parse(d) : d);
   // A cached row from an OLDER schema (before a new field was added) must not be served — reading
   // the missing field crashes the page. Treat it as stale so it recomputes with the current shape.
-  const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro;
+  // paymentRawPct is the newest field (two-track payment coverage) — requiring it means a pre-change
+  // cached row is treated as cold and recomputes with the current shape, so the raw% never shows blank.
+  const currentSchema = (d: InsightsData): boolean => !!d && !!d.launchedDistro && Array.isArray(d.migrations) && typeof d.coverage?.paymentRawPct === "number";
   // A row is "usable" only if it parses AND matches the current schema (an older-schema row would
   // crash the page reading a missing field, so it's treated as cold).
   const usable = row && currentSchema(parse(row.data)) ? parse(row.data) : null;
@@ -514,8 +523,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE live AND (payments IS NULL OR payments = '') AND payments_checked_at IS NULL AND woo_checkout_at IS NULL)::int AS cov_pay_neverprobed
     FROM (
       SELECT *,
-        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))) AS live,
-        (published AND country = ${country} ${inTag} ${platClause}) AS za,
+        (published AND country = ${country} ${inTag} ${platClause} AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store') AS live,
+        (published AND country = ${country} ${inTag} ${platClause} AND activity_tier IS DISTINCT FROM 'not_a_store') AS za,
         -- "new this week" = stores that genuinely LAUNCHED in the window. Keyed off the launch
         -- date (not discovered_at / created_at), so a bulk import or a payment backfill of
         -- historically-launched stores spreads across their real launch periods instead of
@@ -622,10 +631,10 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // so a bulk import or a payment-data backfill of historically-launched stores never inflates
   // the current period — it lands in each store's real launch period instead.
   const adoptRows = await sql<{ launch: Date | null; payments: string }[]>`
-    SELECT COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch, payments
+    SELECT COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launch, payments
     FROM imported_stores
     WHERE ${LIVE(country, tag, platform)} AND payments IS NOT NULL AND payments <> ''
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 365`;
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - 365`;
   const adoptChanges = await sql<{ changed_at: Date; added: string[] | null; removed: string[] | null }[]>`
     SELECT pc.changed_at, pc.added, pc.removed FROM payment_changes pc
     JOIN imported_stores i ON i.domain = pc.domain
@@ -708,6 +717,27 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     GROUP BY 1 ORDER BY n DESC`;
   const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
 
+  // NET platform migration for the market (cross-platform — ignores the platform filter): a store
+  // whose live_platform differs from its original platform has MOVED. Per CMS: gained (moved TO it)
+  // vs lost (moved OFF it). Normalised to a lower-case slug so 'shopify' and 'Shopify' net out.
+  const migRows = await sql<{ platform: string; gained: number; lost: number }[]>`
+    SELECT p AS platform,
+      COUNT(*) FILTER (WHERE dir = 'to')::int   AS gained,
+      COUNT(*) FILTER (WHERE dir = 'from')::int AS lost
+    FROM (
+      SELECT lower(live_platform) p, 'to' dir FROM imported_stores
+        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
+          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+      UNION ALL
+      SELECT lower(COALESCE(platform, 'shopify')) p, 'from' dir FROM imported_stores
+        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
+          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+    ) t GROUP BY 1`;
+  const migrations = migRows
+    .map((r) => ({ platform: r.platform, gained: Number(r.gained), lost: Number(r.lost), net: Number(r.gained) - Number(r.lost) }))
+    .filter((m) => m.gained + m.lost > 0)
+    .sort((a, b) => b.net - a.net);
+
   // WooCommerce-native distributions — only when the Woo platform is selected. WP/Woo world data
   // (store status, hosting, versions, plugins) that has no Shopify equivalent. LIVE() already
   // scopes to lower(platform) = 'woocommerce' here, so denominators + rows share the same filter.
@@ -783,10 +813,15 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       migrated: Number(t.cov_migrated),
       neverChecked: Number(t.cov_never_checked),
       checked30d: Number(t.cov_checked_30d),
-      // REACHABLE payment coverage (matches /ops): verified ÷ (verified + never-probed). Excludes
-      // stores probed-and-found-no-gateway (no completable checkout) from the denominator.
+      // Two tracks (shown side by side on the insights page):
+      //  • HEADLINE (paymentPct) — reachable coverage, matching /ops: denominator = verified +
+      //    never-probed, so a store we probed and found genuinely has NO completable checkout drops
+      //    out (it isn't coverable). This is the "how much of the addressable base have we read" %.
+      //  • RAW (paymentRawPct) — verified ÷ EVERY live store, so a probed-no-gateway store counts
+      //    against us. The honest floor; raising it needs real gateway detection, not a denominator.
       paymentReachable: verified + Number(t.cov_pay_neverprobed),
       paymentPct: pct(verified, verified + Number(t.cov_pay_neverprobed)),
+      paymentRawPct: pct(verified, storesTotal),
       launchPct: pct(Number(t.cov_has_launch), Number(t.churn_total)),
     },
     plusTotal: Number(t.plus_total),
@@ -815,6 +850,7 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       survival: Number(t.churn_checked) ? pct(Number(t.churn_active), Number(t.churn_checked)) : null,
       migratedTo,
     },
+    migrations,
     woo,
     magento,
   };
@@ -883,15 +919,18 @@ async function getHomeStatsUncached(country = "ZA", platform: PlatformSel = "sho
   const [t] = await sql`
     SELECT
       COUNT(*)::int                                                                       AS stores,
-      COUNT(*) FILTER (WHERE COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) >= CURRENT_DATE - 7)::int AS new_week,
+      COUNT(*) FILTER (WHERE COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) >= CURRENT_DATE - 7)::int AS new_week,
       COUNT(*) FILTER (WHERE email IS NOT NULL AND email <> '')::int                       AS with_email,
       COUNT(*) FILTER (WHERE plus)::int                                                    AS plus
     FROM imported_stores
     WHERE published AND country = ${country} ${platClause}
       AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
-  // Freshness = the discovery pipeline's last run (updates every pipeline pass),
-  // not the imported first_seen dates (historical) or created_at (frozen at import).
-  const [f] = await sql`SELECT MAX(enriched_at)::date AS d FROM store_fingerprints`;
+  // Freshness = the newest store our discovery pipeline has landed (advances every
+  // pass), not the imported first_seen dates (historical) or created_at (frozen at
+  // import). Reads imported_stores.discovered_at: the legacy store_fingerprints.enriched_at
+  // this used to read stalled on 2026-10-12 (that lane stopped writing it), which aged the
+  // stamp while discovery was in fact current.
+  const [f] = await sql`SELECT MAX(discovered_at)::date AS d FROM imported_stores WHERE published AND country = ${country}`;
 
   const stores = Number(t.stores);
   return {
@@ -1016,14 +1055,33 @@ const NON_PROVIDER_METHODS = new Set([
   "manual payment", "manual", "other", "eft", "instant eft",
 ]);
 
+export type AdoptionGranularity = "month" | "quarter" | "year";
+
 export type AdoptionSeries = {
-  years: number[];                       // the year axis (last N years, oldest → newest)
-  startYear: number; baselineYear: number; // baselineYear = the pre-window bucket folded into years[0]
-  providers: { label: string; type: PayType; total: number; cumulative: number[] }[]; // aligned to years
-  storesCumulative: number[];            // cumulative # of live stores launched by each year (the SHARE
+  granularity: AdoptionGranularity;
+  buckets: string[];                     // bucket axis, oldest → newest, as first-of-bucket ISO dates
+                                         // (YYYY-MM-DD). buckets[0] folds in every pre-window launch so
+                                         // the curves start at the right height.
+  providers: { label: string; type: PayType; total: number; cumulative: number[] }[]; // aligned to buckets
+  storesCumulative: number[];            // cumulative # of live stores launched by each bucket (the SHARE
                                          // denominator: provider.cumulative[i] / storesCumulative[i] = that
-                                         // provider's market penetration in year i)
+                                         // provider's market penetration at bucket i)
 };
+
+/** Truncate a date to the start of its granularity bucket (UTC). */
+function bucketStart(d: Date, g: AdoptionGranularity): Date {
+  const y = d.getUTCFullYear(), m = d.getUTCMonth();
+  if (g === "year") return new Date(Date.UTC(y, 0, 1));
+  if (g === "quarter") return new Date(Date.UTC(y, Math.floor(m / 3) * 3, 1));
+  return new Date(Date.UTC(y, m, 1));
+}
+/** Step a bucket-start date forward (or back, n<0) by n buckets of the granularity. */
+function bucketAdd(d: Date, g: AdoptionGranularity, n: number): Date {
+  const y = d.getUTCFullYear(), m = d.getUTCMonth();
+  if (g === "year") return new Date(Date.UTC(y + n, 0, 1));
+  if (g === "quarter") return new Date(Date.UTC(y, m + 3 * n, 1));
+  return new Date(Date.UTC(y, m + n, 1));
+}
 
 /** Provider ADOPTION over the last N years, as a BEST ESTIMATE of when each currently-live store
  *  chose its provider — we assume the choice was made at LAUNCH (real launch date: first product,
@@ -1037,23 +1095,34 @@ export type AdoptionSeries = {
  *  client picks the top N to draw and can filter by type, so a type toggle is instant (no refetch)
  *  and always shows the top providers WITHIN the selected type, not just the typed ones that made
  *  the overall top N. */
-export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", nYears = 10, cap = 40): Promise<AdoptionSeries> {
+export async function providerAdoptionSeries(country = "ZA", platform: PlatformSel = "all", granularity: AdoptionGranularity = "year", cap = 40): Promise<AdoptionSeries> {
   const sql = db();
   const cc = (country || "ZA").toUpperCase();
-  const nowYear = new Date().getUTCFullYear();
-  const startYear = nowYear - (nYears - 1);
-  const years = Array.from({ length: nYears }, (_, i) => startYear + i);
-  const baselineYear = startYear; // pre-window launches are credited here (curve's starting height)
+  // A ~5-year window bucketed at the chosen grain: year → 5, quarter → 20, month → 60 buckets.
+  const now = bucketStart(new Date(), granularity);
+  const nBuckets = granularity === "year" ? 5 : granularity === "quarter" ? 20 : 60;
+  const start = bucketAdd(now, granularity, -(nBuckets - 1));
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const buckets: string[] = Array.from({ length: nBuckets }, (_, i) => iso(bucketAdd(start, granularity, i)));
+  const idxOf = new Map(buckets.map((b, i) => [b, i]));
+  const startIso = buckets[0], lastIso = buckets[buckets.length - 1];
+  // Map any bucketed launch date to a column: pre-window folds into 0, future clamps to last.
+  const colFor = (b: string): number => {
+    const hit = idxOf.get(b);
+    if (hit != null) return hit;
+    return b < startIso ? 0 : b > lastIso ? nBuckets - 1 : -1;
+  };
 
-  // Aggregate in SQL (GROUP BY launch-year × provider), NOT by pulling every store's payments to JS
+  // Aggregate in SQL (GROUP BY launch-bucket × provider), NOT by pulling every store's payments to JS
   // — the market's whole live base is ~30k rows and streaming them all hit the pooler statement
   // timeout. unnest the gateway list, collapse the known sub-brand rails (Paystack Onsite → Paystack,
   // WigWag → Stitch) in SQL, and COUNT(DISTINCT domain) so a store carrying both rails counts once.
-  // Everything else stays a raw token for canonicalProvider() to clean/merge/drop in JS.
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
-  const rows = await sql<{ yr: number; prov: string; n: number }[]>`
-    SELECT yr, prov, COUNT(DISTINCT domain)::int AS n FROM (
-      SELECT i.domain, EXTRACT(YEAR FROM ${LAUNCH})::int AS yr,
+  // Everything else stays a raw token for canonicalProvider() to clean/merge/drop in JS. date_trunc's
+  // field is a bound text param (granularity is validated to the enum, so no injection).
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
+  const rows = await sql<{ b: string; prov: string; n: number }[]>`
+    SELECT b, prov, COUNT(DISTINCT domain)::int AS n FROM (
+      SELECT i.domain, to_char(date_trunc(${granularity}, ${LAUNCH}), 'YYYY-MM-DD') AS b,
         CASE
           WHEN lower(btrim(tok)) LIKE '%paystack%' THEN 'Paystack'
           WHEN lower(btrim(tok)) LIKE '%wigwag%' OR lower(btrim(tok)) ~ '\mstitch\M' THEN 'Stitch'
@@ -1065,50 +1134,50 @@ export async function providerAdoptionSeries(country = "ZA", platform: PlatformS
         AND i.payments_source IS DISTINCT FROM 'storecensus'  -- probe-verified only (canonical rule)
         ${platformClause(sql, platform)}
         AND ${LAUNCH} IS NOT NULL
-    ) s WHERE prov <> '' GROUP BY yr, prov`.catch(() => []);
+    ) s WHERE prov <> '' GROUP BY b, prov`.catch(() => []);
   // country is stored uppercase (index idx_is_live_universe) — match on `i.country = cc` directly;
   // wrapping it in UPPER() defeats the index and turned this into a ~75s full scan.
 
-  // provider → year → count (fold pre-window launches into baselineYear; canonicalise/drop noise)
-  const perProv = new Map<string, Map<number, number>>();
+  // provider → bucket-index → count (fold pre-window launches into buckets[0]; canonicalise/drop noise)
+  const perProv = new Map<string, number[]>();
   const totals = new Map<string, number>();
   for (const r of rows) {
     const label = canonicalProvider(r.prov);
     if (!label || NON_PROVIDER_METHODS.has(label.toLowerCase())) continue; // drop card-network/test noise + generic manual methods
-    const yr = Math.max(baselineYear, Math.min(nowYear, Number(r.yr)));
-    if (!perProv.has(label)) perProv.set(label, new Map());
-    const ym = perProv.get(label)!;
-    ym.set(yr, (ym.get(yr) ?? 0) + Number(r.n));
+    const col = colFor(r.b);
+    if (col < 0) continue;
+    if (!perProv.has(label)) perProv.set(label, new Array(nBuckets).fill(0));
+    perProv.get(label)![col] += Number(r.n);
     totals.set(label, (totals.get(label) ?? 0) + Number(r.n));
   }
 
   // All providers, sorted by total (capped) — tagged with type so the client can filter+slice.
   const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, cap).map(([label]) => label);
   const providers = ranked.map((label) => {
-    const ym = perProv.get(label)!;
+    const per = perProv.get(label)!;
     let run = 0;
-    const cumulative = years.map((y) => { run += ym.get(y) ?? 0; return run; });
+    const cumulative = per.map((c) => (run += c));
     return { label, type: classify(label), total: totals.get(label) ?? 0, cumulative };
   });
 
-  // SHARE denominator — live stores per launch year (each store once, no unnest, so cheap). Cumulative
-  // so it aligns with the providers' cumulative curves: share in year i = provider/storesCumulative[i].
-  const storeYears = await sql<{ yr: number; n: number }[]>`
-    SELECT EXTRACT(YEAR FROM ${LAUNCH})::int AS yr, COUNT(*)::int AS n
+  // SHARE denominator — live stores per launch bucket (each store once, no unnest, so cheap).
+  // Cumulative so it aligns with the providers' curves: share at i = provider/storesCumulative[i].
+  const storeBuckets = await sql<{ b: string; n: number }[]>`
+    SELECT to_char(date_trunc(${granularity}, ${LAUNCH}), 'YYYY-MM-DD') AS b, COUNT(*)::int AS n
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ${cc} AND payments IS NOT NULL AND payments <> ''
       AND payments_source IS DISTINCT FROM 'storecensus' AND ${LAUNCH} IS NOT NULL
     GROUP BY 1`.catch(() => []);
-  const storeYearMap = new Map<number, number>();
-  for (const r of storeYears) {
-    const yr = Math.max(baselineYear, Math.min(nowYear, Number(r.yr)));
-    storeYearMap.set(yr, (storeYearMap.get(yr) ?? 0) + Number(r.n));
+  const storePer = new Array(nBuckets).fill(0);
+  for (const r of storeBuckets) {
+    const col = colFor(r.b);
+    if (col >= 0) storePer[col] += Number(r.n);
   }
   let sRun = 0;
-  const storesCumulative = years.map((y) => { sRun += storeYearMap.get(y) ?? 0; return sRun; });
+  const storesCumulative = storePer.map((c) => (sRun += c));
 
-  return { years, startYear, baselineYear, providers, storesCumulative };
+  return { granularity, buckets, providers, storesCumulative };
 }
 
 /** A standalone, time-filtered report for one insights dimension. Each item shows its
@@ -1161,8 +1230,8 @@ async function paymentSnapshotReport(country: string, period: PeriodKey, back: n
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND country = ${cc} AND payments IS NOT NULL AND payments <> ''  -- country stored uppercase; UPPER() defeated the index (~2s scan)
       ${platformClause(sql, platform)}
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) > ${winStart}::date
-      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) <= ${vIso}::date`.catch(() => []);
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) > ${winStart}::date
+      AND COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) <= ${vIso}::date`.catch(() => []);
   const newBy = new Map<string, number>();
   for (const r of newRows) {
     const seen = new Set<string>();
@@ -1208,7 +1277,7 @@ export async function sectionReport(section: string, country = "ZA", period: Per
   // past launches), never an artefact of enrichment catching up on the existing base.
   const rows = await sql<{ val: string; launch_date: Date | null }[]>`
     SELECT ${sql(cfg.column)} AS val,
-      COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at) AS launch_date
+      COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launch_date
     FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND ${sql(cfg.column)} IS NOT NULL AND ${sql(cfg.column)} <> '' ${AND_C}

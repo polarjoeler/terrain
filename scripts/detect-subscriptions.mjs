@@ -49,6 +49,7 @@
  */
 
 import postgres from "postgres";
+import { ensureColumns } from "./lib/ensure-schema.mjs";
 
 const DRY = process.argv.includes("--dry");
 const arg = (name, def) => { const i = process.argv.indexOf(name); return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : def; };
@@ -197,8 +198,8 @@ async function main() {
   // Idempotent DDL — IF NOT EXISTS isn't atomic, so swallow a racing "already exists".
   const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
   try {
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS subscription_tools TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS subscriptions_checked_at TIMESTAMPTZ`);
+    await ensureColumns(sql, "imported_stores",
+      { subscription_tools: "TEXT", subscriptions_checked_at: "TIMESTAMPTZ" });
 
     // Platform scope: default both supported lanes; --platform narrows to one (woocommerce = the
     // un-rate-limited own-domain lane; shopify = shopify + unclassified CT discoveries).

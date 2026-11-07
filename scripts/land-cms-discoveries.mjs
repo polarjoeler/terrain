@@ -34,8 +34,11 @@ async function main() {
     if (!d || !platform) continue;
     const at = (r.seen_at || "").slice(0, 10) || today();
     const country = r.country ? String(r.country).toUpperCase() : null;
+    // Preserve the discovery source the feeder stamped (bulk_classify --source, e.g. common_crawl)
+    // so we can measure each feeder's yield; fall back to cms_dns for records that don't carry one.
+    const source = (r.source && String(r.source).trim()) || "cms_dns";
     const prev = seen.get(d);
-    if (!prev || at < prev.at) seen.set(d, { at, country, platform });
+    if (!prev || at < prev.at) seen.set(d, { at, country, platform, source });
   }
   if (!seen.size) { console.log("CMS discoveries file empty — nothing to land."); return; }
 
@@ -44,10 +47,10 @@ async function main() {
     const existing = new Set(
       (await sql`SELECT domain FROM imported_stores WHERE domain = ANY(${[...seen.keys()]})`).map((r) => r.domain),
     );
-    const records = [...seen.entries()].map(([domain, { at, country, platform }]) => ({
+    const records = [...seen.entries()].map(([domain, { at, country, platform, source }]) => ({
       domain, name: domain, country, discovered_at: at,
       published: false,               // banked — not surfaced until the platform is ready
-      source: "cms_dns", platform,
+      source, platform,
     }));
     const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform"];
     for (let i = 0; i < records.length; i += 400) {

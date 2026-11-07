@@ -20,12 +20,24 @@ const FOCUS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN
 const markets = process.argv.includes("--all-markets") ? FOCUS : arg("--markets", "ZA,KE,NG").toUpperCase().split(",");
 // Native ecommerce platforms: being live is sufficient to call it a store.
 const STORE_NATIVE = ["magento", "adobe_commerce", "prestashop", "bigcommerce", "ecwid", "cafe24",
-  "ec-cube", "opencart", "shopware", "shopstar", "salesforce commerce cloud", "futureshop", "makeshop", "shopserve"];
+  "ec-cube", "opencart", "shopware", "shopstar", "salesforce commerce cloud", "futureshop", "makeshop", "shopserve",
+  // Africa-first + cross-border builders (added 2026-10-29) so detected stores get promoted to
+  // published — otherwise they stay banked and never reach Insights/country reports (both dynamic).
+  "shoplazza", "shopline", "bumpa", "selar", "catlog",
+  "gumroad", "payhip", "paystack storefront", "flutterwave store", "medusa"];
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, connect_timeout: 15 });
 try {
   // What we'd promote, by platform (confirmed live + a real-store signal).
-  const promotable = sql`NOT published AND live_status = 'active' AND UPPER(country) = ANY(${markets}) AND (
+  // Path-based platforms (Selar/Catlog) live on ONE host, so we don't HTTP-crawl them to set
+  // live_status — a recent last_alive_at (the sitemap's own lastmod) is the liveness proxy instead.
+  // NOTE: country is still required, so a Selar store only promotes once country-enrich has assigned
+  // it a focus market — that enrichment (a paced store-page fetch → currency → country) is the gate.
+  const PATH_BASED = ["selar", "catlog"];
+  const promotable = sql`NOT published AND UPPER(country) = ANY(${markets})
+    AND (live_status = 'active'
+         OR (lower(platform) = ANY(${PATH_BASED}) AND last_alive_at >= now() - interval '12 months'))
+    AND (
       (lower(platform) = 'woocommerce' AND activity_tier IN ('selling','active'))
       OR lower(platform) = ANY(${STORE_NATIVE})
     )`;

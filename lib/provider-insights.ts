@@ -9,6 +9,7 @@
  *  real positions, not guesses. Trends over time come from provider_snapshots
  *  (see snapshotProviders), not from this point-in-time read. */
 
+import { cachedAgg } from "./agg-cache";
 import { db as sharedDb } from "./db";
 import type { InsightItem } from "./insights";
 import { realPaymentsClause, platformClause } from "./insights";
@@ -96,7 +97,7 @@ const salesBand = (n: number | null): string =>
 export async function providerInsights(provider: string, country?: string, platform: string = "all"): Promise<ProviderInsights> {
   const sql = db();
   const p = norm(canonicalProvider(provider) || provider);
-  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
   const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
   const AND_P = platformClause(sql, platform);
 
@@ -177,6 +178,24 @@ export async function providerInsights(provider: string, country?: string, platf
     allByYear.set(yearOf(r.launched_at), (allByYear.get(yearOf(r.launched_at)) ?? 0) + 1);
     const c = (r.country || "??").toUpperCase();
     verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
+  }
+  // The "Market share by market" breakdown must stay a COMPLETE, clickable country switcher even
+  // when the page is scoped to one market (the rows above were narrowed to it). So when a country
+  // filter is active, re-derive byCountry + its denominators across ALL markets with a lean pass —
+  // same JS canonicalisation as `mine`, so the counts stay consistent with the scoped totals.
+  if (country) {
+    const allRows = await sql<{ country: string | null; payments: string }[]>`
+      SELECT country, payments FROM imported_stores
+      WHERE ${LIVE} ${AND_P} AND payments IS NOT NULL AND payments <> ''
+        AND payments_source IS DISTINCT FROM 'storecensus' AND ${realPaymentsClause(sql)}`;
+    byCountry.clear(); verifiedByCountry.clear();
+    for (const r of allRows) {
+      const c = (r.country || "??").toUpperCase();
+      verifiedByCountry.set(c, (verifiedByCountry.get(c) ?? 0) + 1);
+      if (cleanPayments(String(r.payments).split(";")).some((g) => norm(g) === p)) {
+        byCountry.set(c, (byCountry.get(c) ?? 0) + 1);
+      }
+    }
   }
   // Competitors grouped by payment type (PSP / BNPL / APM).
   const coOccurrenceByType: Record<PayType, InsightItem[]> = { PSP: [], BNPL: [], APM: [] };
@@ -281,14 +300,21 @@ const NEW_SHARE_CFG: Record<NewSharePeriod, { trunc: string; window: string }> =
  *  payment data (so "chose you" is knowable). Sparse for recent months until dating catches up. */
 export async function providerNewShareSeries(
   provider: string, period: NewSharePeriod = "month", country?: string, platform: string = "all",
+  markets?: string[],
 ): Promise<NewShareBucket[]> {
   const sql = db();
   // Match whole checkout tokens, not substrings: ILIKE '%credit card%' also hit
   // "Mollie - Credit Card". Variants fold aliases ("wigwag-app") into the provider.
   const variants = providerVariants(provider);
   const cfg = NEW_SHARE_CFG[period] ?? NEW_SHARE_CFG.month;
-  const AND_C = country ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  // Scope: a chosen country wins; otherwise the provider's DECLARED service markets (so "All markets"
+  // means e.g. Peach's ZA/KE/MU, not the whole world); otherwise every market (no declared list).
+  const AND_C = country
+    ? sql`AND UPPER(country) = ${country.toUpperCase()}`
+    : markets && markets.length
+      ? sql`AND UPPER(country) = ANY(${markets.map((m) => m.toUpperCase())}::text[])`
+      : sql``;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql<{ b: Date; total: number; mine: number }[]>`
     SELECT date_trunc(${cfg.trunc}, ${LAUNCH})::date AS b,
            COUNT(*)::int AS total,
@@ -308,6 +334,46 @@ export async function providerNewShareSeries(
 }
 
 export type ProviderTrendPoint = { date: string; total: number; verifiedBase: number; share: number; topSpot: number; exclusive: number; newLast7: number };
+
+export type ProviderLaunchShare = { months: string[]; share: number[]; providerCum: number[]; baseCum: number[]; currentShare: number };
+
+/** Market share over time by LAUNCH COHORT — the catch-up-proof alternative to the daily snapshot.
+ *  For each month, of all currently-live, checkout-verified stores LAUNCHED by that month, the % that
+ *  carry this provider (cumulative). Because a store is credited to its real launch month, a batch of
+ *  newly-discovered old stores spreads across history instead of spiking today's share — so the curve
+ *  reflects real adoption, not when we happened to probe. Survivorship-adjusted (live stores only) and
+ *  always fresh (no snapshot dependency). Monthly granularity. */
+export async function providerLaunchShare(provider: string, country?: string, platform: string = "all", markets?: string[]): Promise<ProviderLaunchShare> {
+  const sql = db();
+  // Same scoping as the new-store curve: country wins, else the provider's declared markets, else all.
+  const ctry = country && country !== "ALL"
+    ? sql`AND UPPER(country) = ${country.toUpperCase()}`
+    : markets && markets.length
+      ? sql`AND UPPER(country) = ANY(${markets.map((m) => m.toUpperCase())}::text[])`
+      : sql``;
+  const plat = platformClause(sql, platform);
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
+  const VERIFIED = sql`payments IS NOT NULL AND payments <> '' AND payments_source IS DISTINCT FROM 'storecensus' AND ${realPaymentsClause(sql)}`;
+  const variants = providerVariants(provider);
+  const HASPROV = sql`EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`;
+  const SINCE = "2015-01-01"; // launch-dating + checkout verification are too thin before this to chart
+  const rows = await sql<{ b: string; base: number; mine: number }[]>`
+    SELECT to_char(date_trunc('month', ${LAUNCH}), 'YYYY-MM-DD') b,
+      count(*)::int base,
+      count(*) FILTER (WHERE ${HASPROV})::int mine
+    FROM imported_stores
+    WHERE ${LIVE} AND ${VERIFIED} AND ${LAUNCH} IS NOT NULL AND ${LAUNCH} >= ${SINCE}::date ${ctry} ${plat}
+    GROUP BY 1 ORDER BY 1`.catch(() => []);
+  const months: string[] = [], share: number[] = [], providerCum: number[] = [], baseCum: number[] = [];
+  let cb = 0, cm = 0;
+  for (const r of rows) {
+    cb += Number(r.base); cm += Number(r.mine);
+    months.push(r.b); baseCum.push(cb); providerCum.push(cm);
+    share.push(cb ? Math.round((10000 * cm) / cb) / 100 : 0);
+  }
+  return { months, share, providerCum, baseCum, currentShare: share.length ? share[share.length - 1] : 0 };
+}
 
 /** Snapshot the current metrics for every provider — run weekly so the trend lines
  *  on the provider dashboards accrue. Idempotent per (provider, date). */
@@ -454,10 +520,18 @@ export type MomentumPeriodKey = "day" | "week" | "month" | "quarter" | "year";
  *  in the PRIOR P days (the two windows compared). Launch-keyed (real launch date, not discovered_at)
  *  so it's consistent with the rest of insights and backfilling old stores can't move it. One
  *  2-year fetch, bucketed in JS per period. */
-export async function providerMomentumByPeriod(country = "ALL"): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+export function providerMomentumByPeriod(country = "ALL"): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
+  // Cached: this pulls TWO YEARS of launch+payments rows into JS to bucket them (~12s measured on
+  // ZA) and the result is viewer-agnostic. 30 minutes of freshness is safe even for the "day"
+  // window — a half-hour-old 24h adoption share is not a different answer.
+  return cachedAgg(`provmomentum:v1:${country.toUpperCase()}`, 30 * 60 * 1000,
+    () => computeProviderMomentumByPeriod(country));
+}
+
+export async function computeProviderMomentumByPeriod(country: string): Promise<Record<MomentumPeriodKey, ProviderMomentum[]>> {
   const sql = db();
   const AND_C = country !== "ALL" ? sql`AND UPPER(country) = ${country.toUpperCase()}` : sql``;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   const rows = await sql<{ launch_date: Date; payments: string }[]>`
     SELECT ${LAUNCH} AS launch_date, payments FROM imported_stores
     WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
@@ -594,7 +668,7 @@ export async function growthSeries(opts: {
   // oldest product, else the StoreLeads launch date) — NOT discovered_at, which counts old
   // stores we merely re-saw (a cert renewal) as "new". Floored at when tracking began so old
   // stores we backfill-discovered don't reappear as historical launches.
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   // Floor = when our FORWARD tracking began, so old stores we merely backfill-discovered don't
   // reappear as historical launches. Guard against bulk imports that carry historical
   // discovered_at (e.g. the BuiltWith Woo list, dated 2016-2019): Terrain didn't exist before
@@ -649,12 +723,13 @@ export async function growthSeries(opts: {
       ${to ? sql`AND pc.changed_at < (${to}::date + interval '1 day')` : sql``}
     GROUP BY 1 ORDER BY 1`.catch(() => []) : [];
 
-  // Current live store base — same definition as the "stores tracked" headline in insights
-  // (published, live, not dead/migrated), so the two figures always match. Provider filter
-  // narrows it to that PSP's live merchants.
+  // Current live store base — the SAME live definition used everywhere in insights (published, live,
+  // not dead/migrated, and NOT not_a_store), so this matches the "verified live" headline instead of
+  // showing a rogue count. Provider filter narrows it to that PSP's live merchants.
   const [gt] = await sql<{ n: number }[]>`
     SELECT COUNT(*)::int n FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) ${ctry} ${prov} ${plat}`.catch(() => [{ n: 0 }]);
+    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND activity_tier IS DISTINCT FROM 'not_a_store' ${ctry} ${prov} ${plat}`.catch(() => [{ n: 0 }]);
   const currentTotal = Number(gt?.n ?? 0);
 
   const foundMap = new Map(found.map((r) => [r.b, Number(r.n)]));
@@ -717,8 +792,8 @@ export async function platformGrowthSeries(country?: string, provider?: string):
   const prov = variants
     ? sql`AND EXISTS (SELECT 1 FROM unnest(string_to_array(payments, ';')) g WHERE lower(btrim(g)) = ANY(${variants}::text[]))`
     : sql``;
-  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
-  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), launched_at)`;
+  const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'`;
+  const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
   // "shopify" absorbs unclassified CT discoveries (platform NULL); every other CMS groups by its slug.
   const BUCKET = sql`CASE WHEN lower(platform) = 'shopify' OR platform IS NULL THEN 'shopify' ELSE lower(platform) END`;
   // Full vintage arc — live stores date back to ~2012; pre-2013 is negligible, so 2013 is a clean edge.

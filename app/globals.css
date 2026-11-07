@@ -16,8 +16,9 @@
   --color-cyan: #4cc9d4;
   --color-cyan-deep: #0c2b30;
 
-  --font-display: var(--font-instrument-serif), Georgia, serif;
-  --font-body: var(--font-inter), system-ui, sans-serif;
+  --font-display: var(--font-display-face), "Bricolage Grotesque", Georgia, serif;
+  --font-body: var(--font-body-face), system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, "JetBrains Mono", Menlo, monospace;
 
   /* Motion contract — three speeds, two curves. Everything in the UI picks one.
      press: hover/focus/active colour + border shifts (must feel instant)

@@ -35,6 +35,14 @@ export type Lead = {
   tiktok?: string | null;
   instagramFollowers?: number | null;
   facebookFollowers?: number | null;
+  /** Contact quality (scripts/contact-enrich.mjs). `email` is the best address we hold; this says
+   *  WHAT it is — 'named' | 'role_targeted' | 'role_generic' | 'form_only' | 'none' — so a
+   *  subscriber can tell a person's inbox from the info@ queue before spending a send on it. */
+  contactType?: string | null;
+  contactName?: string | null;
+  contactRole?: string | null;
+  whatsapp?: string | null;
+  contactFormUrl?: string | null;
 };
 
 export const sampleLeads: Lead[] = [

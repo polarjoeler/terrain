@@ -98,6 +98,25 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 -- rows per query and time out under worker write-load. (Added live 2026-09; kept here to persist.)
 CREATE INDEX IF NOT EXISTS idx_is_live_universe    ON imported_stores (country, platform, live_status) WHERE published;
 CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_checked_at DESC NULLS LAST);
+-- The customer-facing visibility gate (published AND real store), by country. The Explorer filters
+-- a PLAIN country=ANY(...) while insights/getHomeStats go through upper(country); both need an index
+-- or they fall to a 2.8M-row parallel seq scan (6.5-8s) that freezes the browse-cache warm job and
+-- takes the dashboard down (see the 2026-10-30 outage). Two partial indexes, one per casing path.
+CREATE INDEX IF NOT EXISTS idx_is_browse_country   ON imported_stores (country)        WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
+CREATE INDEX IF NOT EXISTS idx_is_browse_upper     ON imported_stores (upper(country)) WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store';
+-- The market-leaders traffic lens (lib/leaders-report) cannot use either index above: it
+-- deliberately does NOT gate on published, because the custom/headless traffic head is parked
+-- unpublished — and a partial index is only usable when the query implies its predicate. So it fell
+-- to a parallel seq scan (cost 406k, ~13s). Only 12.6% of rows carry a crux_rank, so a partial index
+-- on that subset is 2.8 MB and turns the cohort query into a 4.5ms index scan.
+-- ALREADY BUILT IN PRODUCTION with CREATE INDEX CONCURRENTLY; declared here so a fresh database
+-- gets it too. applySchema skips it when present, so this never runs a blocking build in prod.
+CREATE INDEX IF NOT EXISTS idx_is_leaders_crux     ON imported_stores (upper(country), crux_rank) WHERE crux_rank IS NOT NULL;
+-- Recent-activity reads for the /fleet live monitor (partial: only rows that have been touched),
+-- so "newest N enriched / hosting-resolved" is an index scan, not a 2.8M-row full scan.
+CREATE INDEX IF NOT EXISTS idx_is_ai_enriched      ON imported_stores (ai_enriched_at DESC) WHERE ai_enriched_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_is_hosting_checked  ON imported_stores (hosting_checked_at DESC) WHERE hosting_checked_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_is_text_mined       ON imported_stores (text_mined_at DESC) WHERE text_mined_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_is_catalog_checked  ON imported_stores (catalog_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_payments_checked ON imported_stores (payments_checked_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_is_launched         ON imported_stores (launched_at DESC NULLS LAST);
@@ -115,10 +134,14 @@ CREATE TABLE IF NOT EXISTS insights_cache (
 );
 -- Generic pre-aggregation cache (lib/agg-cache.ts) — /ops, /insights/africa, provider pages.
 CREATE TABLE IF NOT EXISTS agg_cache (
-  key         TEXT PRIMARY KEY,
-  data        JSONB NOT NULL,
-  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  key           TEXT PRIMARY KEY,
+  data          JSONB NOT NULL,
+  computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Single-flight lease: set while one instance refreshes this key, so other instances serve stale
+  -- instead of launching duplicate full-corpus scans. NULL = free. See lib/agg-cache.ts.
+  refreshing_at TIMESTAMPTZ
 );
+ALTER TABLE agg_cache ADD COLUMN IF NOT EXISTS refreshing_at TIMESTAMPTZ;
 -- Genuine "found first" date from the cert-transparency discovery engine (Sheet
 -- first_seen), synced by scripts/sync-sheet. Distinct from first_seen, which on
 -- the bulk StoreLeads import holds the store's historical launch date.
@@ -138,6 +161,48 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS est_revenue_usd NUMERIC;     -- our revenue estimate
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_email TEXT;          -- scraped from the store's own site
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+-- Contact QUALITY (scripts/contact-enrich.mjs). The complaint that drove this: competitor lead
+-- data is full of generic mailboxes, and a buyer can't tell which rows are worth a send until
+-- they've burnt one. So we crawl the contact surface (contact/about/policy pages, not just the
+-- homepage footer), keep EVERY address found, and store a verdict on each store's best one:
+--   contact_type: 'named'         — the address reaches an identifiable person (lerato@)
+--                 'role_targeted' — a decision-maker's role mailbox (owner@, accounts@, press@)
+--                 'role_generic'  — the info@/hello@/support@ queue
+--                 'form_only'     — no address, but a reachable contact form
+--                 'none'          — nothing to send to
+-- contact_email holds the best-ranked address and contact_source the page it came from.
+-- `contacts` keeps the whole ranked set so the UI can offer alternatives and nothing is lost.
+-- contact_name may be present even when the email is generic — that's the input a later
+-- permutation+verification pass needs, and on its own it personalises an outreach message.
+-- contact_name_source records HOW we know (jsonld | copy | atom | llm) — a name lifted from the
+-- site's own words is worth more than one a local model inferred, and the UI says which.
+-- contact_text banks the cleaned contact/about copy so a better extractor (or a better local
+-- model) can be re-run over it for free, without re-touching the store.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contacts JSONB;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_type TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_name TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_name_source TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_role TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_form_url TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_source TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_text TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_checked_at TIMESTAMPTZ;
+-- Deliverability + de-duplication of the chosen address (scripts/contact-mx.mjs). contact_mx_ok
+-- is FALSE only when the address's domain publishes no MX at all (a guaranteed bounce); NULL means
+-- unchecked/DNS-unanswered and must NOT be treated as undeliverable. contact_shared_count > 1 flags
+-- an address reused across tracked stores (agency / head office). lib/browse.ts filters on these.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_mx_ok BOOLEAN;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_mx_host TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_mx_provider TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_shared_count INTEGER;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_mx_checked_at TIMESTAMPTZ;
+-- Channels that actually get answered in our markets. WhatsApp outranks email for SA SMB
+-- outreach, and it is free to collect off the same pages.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS whatsapp TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS linkedin TEXT;
+-- Built CONCURRENTLY by scripts/contact-enrich.mjs --migrate (a plain build write-locks the table).
+CREATE INDEX IF NOT EXISTS idx_is_contact_type ON imported_stores(contact_type) WHERE published;
+CREATE INDEX IF NOT EXISTS idx_is_contact_checked ON imported_stores(contact_checked_at DESC NULLS LAST);
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS logistics_apps TEXT;         -- our homepage fingerprint scan
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS catalog_checked_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS logistics_checked_at TIMESTAMPTZ;

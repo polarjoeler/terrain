@@ -24,6 +24,9 @@ const CONC = Number(arg("--concurrency", 8));
 const REPROBE_DAYS = Number(arg("--reprobe-days", 90));
 const cArg = arg("--country", null);
 const platArg = (arg("--platform", null) || "").toLowerCase() || null;
+// Targeted re-scrape of a named set (e.g. the marquee giants), bypassing the platform/country/reprobe
+// gates — it fetches exactly these domains whatever their platform or last-enriched date.
+const DOMAINS = (arg("--domains", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MARKETS;
 
@@ -43,7 +46,19 @@ async function getHtml(domain, ms = 12000) {
 /* ---- extractors (regex over raw HTML) ------------------------------------- */
 // WordPress/Woo theme + plugins live in asset paths. Works for any WP-based store.
 const wpTheme = (h) => { const m = h.match(/wp-content\/themes\/([a-z0-9_-]+)/i); return m ? m[1].toLowerCase() : null; };
-const wpPlugins = (h) => [...new Set([...h.matchAll(/wp-content\/plugins\/([a-z0-9_-]+)/gi)].map((m) => m[1].toLowerCase()))];
+// Add-on/module slugs — NOT WordPress-only. WP/Woo expose plugins under wp-content/plugins; PrestaShop
+// and Drupal expose modules under /modules/<slug>/ (read only for those platforms — the path is too
+// generic to trust blind). Third-party apps (Klaviyo, Gorgias, …) are caught cross-platform by TECH_FP
+// into `technologies`, so every CMS gets its marketing/reviews/support stack regardless.
+function cmsPlugins(h, platform) {
+  const out = new Set();
+  for (const m of h.matchAll(/wp-content\/plugins\/([a-z0-9_-]+)/gi)) out.add(m[1].toLowerCase());
+  const p = (platform || "").toLowerCase();
+  if (p.includes("presta") || p.includes("drupal")) {
+    for (const m of h.matchAll(/\/modules\/([a-z][a-z0-9_-]{2,40})\//gi)) out.add(m[1].toLowerCase());
+  }
+  return [...out];
+}
 
 // Generic third-party tech/app fingerprints (script hosts + vendor strings) — platform-agnostic.
 const TECH_FP = [
@@ -84,11 +99,18 @@ const union = (existing, found) => {
 
 async function main() {
   if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
-  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONC + 1 });
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: CONC + 1,
+    connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 3000 } });
   const ddl = async (q) => { try { await q; } catch (e) { if (!/already exists/i.test(e?.message || "")) throw e; } };
+  const hasCol = async (c) => (await sql`SELECT 1 FROM information_schema.columns
+    WHERE table_name='imported_stores' AND column_name=${c} LIMIT 1`).length > 0;
   try {
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS homepage_text TEXT`);
-    await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS deep_enriched_at TIMESTAMPTZ`);
+    // A no-op ADD COLUMN IF NOT EXISTS STILL grabs ACCESS EXCLUSIVE and, behind a live writer, queues —
+    // jamming every other query on the table (the lock-jam class). So skip the ALTER when the column is
+    // already there (the normal case); the short lock_timeout above makes even a needed ALTER fail fast
+    // rather than freeze the table. Critical now that a 2nd machine (Lucy/Rain) runs this concurrently.
+    if (!(await hasCol("homepage_text"))) await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS homepage_text TEXT`);
+    if (!(await hasCol("deep_enriched_at"))) await ddl(sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS deep_enriched_at TIMESTAMPTZ`);
 
     // Default scope: every non-Shopify CMS (own-domain fetch, no Shopify-edge budget).
     const platFilter = platArg
@@ -106,7 +128,11 @@ async function main() {
     // vs ~1.8k for every other CMS combined) keeps jumping the queue with fresh discoveries and starves the
     // small platforms (Wix/Magento/Ecwid/…) for days. The candidate set is already filtered to published
     // non-Shopify (~14k rows), so the window-sort is cheap.
-    const rows = platArg
+    const rows = DOMAINS.length
+      ? await sql`
+          SELECT domain, platform, theme, plugins, technologies, subscription_tools
+          FROM imported_stores WHERE domain = ANY(${DOMAINS})`
+      : platArg
       ? await sql`
           SELECT domain, platform, theme, plugins, technologies, subscription_tools
           FROM imported_stores WHERE ${whereCond}
@@ -133,7 +159,7 @@ async function main() {
         if (!h) { unreachable++; if (!DRY) await sql`UPDATE imported_stores SET deep_enriched_at = now() WHERE domain = ${clean(r.domain)}`.catch(() => {}); continue; }
         ok++;
         const theme = wpTheme(h);
-        const plugins = wpPlugins(h);
+        const plugins = cmsPlugins(h, r.platform);
         const tech = techFingerprints(h);
         const st = subTools(h);
         if (st.length) subs++;

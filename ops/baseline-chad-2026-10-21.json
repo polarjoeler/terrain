@@ -1,0 +1,335 @@
+{
+  "captured_at": "2026-10-21T20:36:15.333Z",
+  "host": "MacBook-Pro-7.local",
+  "totals": {
+    "rows": 2745427,
+    "published": 1677880
+  },
+  "activity": {
+    "catalog_checked_at": {
+      "last24h": 0,
+      "last7d": 2046114,
+      "per_day_7d": 292302
+    },
+    "cert_checked_at": {
+      "last24h": 0,
+      "last7d": 221,
+      "per_day_7d": 32
+    },
+    "contact_checked_at": {
+      "last24h": 549,
+      "last7d": 4450,
+      "per_day_7d": 636
+    },
+    "contact_guess_checked_at": {
+      "last24h": 0,
+      "last7d": 14,
+      "per_day_7d": 2
+    },
+    "contact_mx_checked_at": {
+      "last24h": 0,
+      "last7d": 12509,
+      "per_day_7d": 1787
+    },
+    "country_checked_at": {
+      "last24h": 942,
+      "last7d": 8320,
+      "per_day_7d": 1189
+    },
+    "created_at": {
+      "last24h": 12947,
+      "last7d": 1414389,
+      "per_day_7d": 202056
+    },
+    "deep_enriched_at": {
+      "last24h": 0,
+      "last7d": 17875,
+      "per_day_7d": 2554
+    },
+    "discovered_at": {
+      "last24h": 11259,
+      "last7d": 1413277,
+      "per_day_7d": 201897
+    },
+    "first_verified_live_at": {
+      "last24h": 350,
+      "last7d": 7862,
+      "per_day_7d": 1123
+    },
+    "geo_checked_at": {
+      "last24h": 0,
+      "last7d": 317883,
+      "per_day_7d": 45412
+    },
+    "last_alive_at": {
+      "last24h": 746,
+      "last7d": 7660,
+      "per_day_7d": 1094
+    },
+    "launched_at": {
+      "last24h": 0,
+      "last7d": 14702,
+      "per_day_7d": 2100
+    },
+    "live_checked_at": {
+      "last24h": 89316,
+      "last7d": 833503,
+      "per_day_7d": 119072
+    },
+    "payments_checked_at": {
+      "last24h": 4015,
+      "last7d": 479389,
+      "per_day_7d": 68484
+    },
+    "social_checked_at": {
+      "last24h": 557,
+      "last7d": 17442,
+      "per_day_7d": 2492
+    },
+    "subscriptions_checked_at": {
+      "last24h": 0,
+      "last7d": 15459,
+      "per_day_7d": 2208
+    },
+    "woo_checkout_at": {
+      "last24h": 338,
+      "last7d": 1773,
+      "per_day_7d": 253
+    },
+    "wp_dated_at": {
+      "last24h": 334,
+      "last7d": 1769,
+      "per_day_7d": 253
+    }
+  },
+  "heartbeats": [
+    {
+      "machine": "health-check",
+      "task": "payment-backlog",
+      "mins_ago": 57,
+      "note": "OK · 138 focus stores unprobed (informational)"
+    },
+    {
+      "machine": "health-check",
+      "task": "cache:checkout_cache.json",
+      "mins_ago": 57,
+      "note": "OK · 37MB (crash at ~512MB)"
+    },
+    {
+      "machine": "health-check",
+      "task": "discovery",
+      "mins_ago": 57,
+      "note": "OK · last store landed 11m ago"
+    },
+    {
+      "machine": "health-check",
+      "task": "liveness",
+      "mins_ago": 57,
+      "note": "OK · last check 0h ago"
+    },
+    {
+      "machine": "health-check",
+      "task": "catalog/launch",
+      "mins_ago": 57,
+      "note": "OK · last write 50m ago (limit 26h)"
+    },
+    {
+      "machine": "health-check",
+      "task": "woo-checkout",
+      "mins_ago": 57,
+      "note": "OK · last write 23m ago (limit 3h)"
+    },
+    {
+      "machine": "health-check",
+      "task": "payments-probe",
+      "mins_ago": 57,
+      "note": "OK · last write 1h ago (limit 3h)"
+    },
+    {
+      "machine": "health-check",
+      "task": "__alert",
+      "mins_ago": 299,
+      "note": "clear"
+    },
+    {
+      "machine": "mac",
+      "task": "discovery",
+      "mins_ago": 25290,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "seed-discovery",
+      "mins_ago": 25297,
+      "note": "idle — tick complete"
+    },
+    {
+      "machine": "mac",
+      "task": "cert",
+      "mins_ago": 25305,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "country",
+      "mins_ago": 25351,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "subscriptions",
+      "mins_ago": 25351,
+      "note": "idle — done"
+    },
+    {
+      "machine": "mac",
+      "task": "social",
+      "mins_ago": 25359,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "woo-checkout",
+      "mins_ago": 25362,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "deep-enrich",
+      "mins_ago": 25363,
+      "note": "idle — done"
+    },
+    {
+      "machine": "mac",
+      "task": "woo-date",
+      "mins_ago": 25371,
+      "note": ""
+    },
+    {
+      "machine": "mac",
+      "task": "sync-experts",
+      "mins_ago": 25449,
+      "note": "pull experts"
+    },
+    {
+      "machine": "mac",
+      "task": "pipeline",
+      "mins_ago": 25595,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "discovery",
+      "mins_ago": 6,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "woo-checkout",
+      "mins_ago": 81,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "cert",
+      "mins_ago": 108,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "country",
+      "mins_ago": 169,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "woo-date",
+      "mins_ago": 239,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "social",
+      "mins_ago": 239,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "seed-discovery",
+      "mins_ago": 336,
+      "note": "idle — tick complete"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "confirm-cms",
+      "mins_ago": 347,
+      "note": "idle — done"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "payment-watch",
+      "mins_ago": 692,
+      "note": "idle — watch complete"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "payment-watch-done",
+      "mins_ago": 692,
+      "note": "watch complete: paystack,stitch,peach"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "subscriptions",
+      "mins_ago": 1956,
+      "note": "idle — done"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "deep-enrich",
+      "mins_ago": 1988,
+      "note": "idle — done"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "cms-probe",
+      "mins_ago": 2062,
+      "note": "idle — done"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "sync-experts",
+      "mins_ago": 2409,
+      "note": "pull experts"
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "pipeline",
+      "mins_ago": 7983,
+      "note": ""
+    },
+    {
+      "machine": "macbook-pro-7",
+      "task": "recall-report",
+      "mins_ago": 29679,
+      "note": "monthly shopify recall"
+    },
+    {
+      "machine": "peter-johns-macbook-pro-2",
+      "task": "launch",
+      "mins_ago": 12,
+      "note": ""
+    },
+    {
+      "machine": "peter-johns-macbook-pro-2",
+      "task": "woo",
+      "mins_ago": 26,
+      "note": "processing 13 queued"
+    },
+    {
+      "machine": "vps",
+      "task": "sheet-discovery",
+      "mins_ago": 7982,
+      "note": "sheet sync: 1306 rows, 0 new, 1306 updated · newest find 2026-09-10"
+    }
+  ]
+}
