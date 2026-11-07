@@ -10,6 +10,9 @@
  *
  *   import { buildFp, ensureFpTable, upsertFp } from "./lib/catalog-fp.mjs";
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 /** Markets we fingerprint. Global is out of scope: ~985k catalogues / 373M products would need a
  *  bigger DB tier and far more proxy bandwidth (decided 2026-11-07). */
@@ -114,3 +117,23 @@ export async function deferFp(sql, domain, ageDays) {
 }
 
 export const EMPTY_FP = { n: 0, img: [], sku: [], handle: [], title: [], price: [] };
+
+/** Official domains from the brand watchlist (shopify-radar/brands.txt, `Brand | a.co.za,b.com`).
+ *  These are the catalogues a clone would copy, so the --fp lane fingerprints them first. Missing
+ *  file → [] (the Peach / Plus tiers still apply). Override the path with BRANDS_FILE. */
+export function loadBrandDomains(file = process.env.BRANDS_FILE || path.join(os.homedir(), "shopify-radar", "brands.txt")) {
+  try {
+    const out = new Set();
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#") || !t.includes("|")) continue;
+      for (const d of t.split("|")[1].split(",")) {
+        const dom = d.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+        if (dom) { out.add(dom); out.add(`www.${dom}`); }
+      }
+    }
+    return [...out];
+  } catch {
+    return [];
+  }
+}

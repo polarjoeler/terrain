@@ -14,7 +14,7 @@
  */
 import postgres from "postgres";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
-import { buildFp, ensureFpTable, upsertFp, deferFp, EMPTY_FP, FP_MARKETS, FP_STALE_DAYS } from "./lib/catalog-fp.mjs";
+import { buildFp, ensureFpTable, upsertFp, deferFp, EMPTY_FP, FP_MARKETS, FP_STALE_DAYS, loadBrandDomains } from "./lib/catalog-fp.mjs";
 
 const ALL = process.argv.includes("--all");
 // --recheck re-runs stores the first pass measured with the two known bugs: product_count pinned at
@@ -143,17 +143,23 @@ async function main() {
     const [col] = await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'imported_stores' AND column_name = 'catalog_checked_at'`;
     if (!col) await sql`ALTER TABLE imported_stores ADD COLUMN catalog_checked_at TIMESTAMPTZ`;
     await ensureFpTable(sql);
+    const brandDomains = FP ? loadBrandDomains() : [];
     const rows = FP ? await sql`
       -- Fingerprint backfill / refresh: focus-market stores known to have a catalogue whose
-      -- fingerprint is missing or stale — missing first, then the biggest stores (brands worth
-      -- protecting, and the likeliest to be cloned).
+      -- fingerprint is missing or stale. Shopify refuses most products.json reads, so the fetches
+      -- we do get go to the fraud pilot first: Peach's own merchants and the watchlist brands, then
+      -- Shopify Plus + marquee brands, then the rest by sales. Within a tier, stores with no usable
+      -- fingerprint yet (never tried, or parked after a 429) come before monthly refreshes.
       SELECT s.domain, s.country FROM imported_stores s
       LEFT JOIN store_catalog_fp f ON f.domain = s.domain
       WHERE s.published AND (s.live_status IS NULL OR s.live_status NOT IN ('dead','migrated'))
         AND upper(s.country) = ANY(${COUNTRIES ?? FP_MARKETS}) AND s.product_count > 0
         AND lower(s.platform) IS DISTINCT FROM 'woocommerce'
         AND (f.domain IS NULL OR f.fp_at < now() - make_interval(days => ${FP_STALE_DAYS}))
-      ORDER BY (f.domain IS NULL) DESC, s.estimated_monthly_sales DESC NULLS LAST, s.domain
+      ORDER BY CASE WHEN s.payments ILIKE '%peach%' OR s.domain = ANY(${brandDomains}::text[]) THEN 0
+                    WHEN s.plan ILIKE '%plus%' OR s.source = 'manual_marquee' THEN 1 ELSE 2 END,
+               (f.domain IS NULL OR f.n_products < 0) DESC,
+               s.estimated_monthly_sales DESC NULLS LAST, s.domain
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}` : await sql`
       SELECT domain, country FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
