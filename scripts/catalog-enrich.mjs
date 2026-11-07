@@ -7,6 +7,7 @@
  *   node --env-file=.env.local scripts/catalog-enrich.mjs [--limit 3000] [--all] [--country ZA,KE]
  *   node … scripts/catalog-enrich.mjs --recheck --all   # re-enrich rows the old (buggy) pass got wrong
  *   node … scripts/catalog-enrich.mjs --fp --limit 500  # (re)fingerprint ZA/KE/NG catalogues
+ *   node … scripts/catalog-enrich.mjs --fp --domains a.co.za,b.co.za  # fingerprint named stores now
  *
  *  Fingerprints (store_catalog_fp, see lib/catalog-fp.mjs) ride on the same products.json download:
  *  a ZA/KE/NG store gets one on its first catalog pass at no extra fetch. --fp is the backfill for
@@ -14,7 +15,7 @@
  */
 import postgres from "postgres";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
-import { buildFp, ensureFpTable, upsertFp, deferFp, EMPTY_FP, FP_MARKETS, FP_STALE_DAYS, loadBrandDomains } from "./lib/catalog-fp.mjs";
+import { buildFp, ensureFpTable, upsertFp, deferFp, EMPTY_FP, FP_MARKETS, FP_STALE_DAYS, loadBrandDomains, buildVendors, ensureVendorTable, upsertVendors } from "./lib/catalog-fp.mjs";
 
 const ALL = process.argv.includes("--all");
 // --recheck re-runs stores the first pass measured with the two known bugs: product_count pinned at
@@ -28,6 +29,10 @@ const LIMIT = ALL ? 0 : li > -1 ? Number(process.argv[li + 1]) : 3000;
 // per-country), so we don't spend the run enriching the globally-banked ccTLD stores first.
 const ci = process.argv.indexOf("--country");
 const COUNTRIES = ci > -1 ? process.argv[ci + 1].split(",").map((c) => c.trim().toUpperCase()).filter(Boolean) : null;
+// --domains a,b (with --fp): fingerprint exactly these stores — a brand and its suspects for a
+// pilot check — whatever their market or fingerprint age. Same single polite attempt per store.
+const di = process.argv.indexOf("--domains");
+const DOMAINS = di > -1 ? process.argv[di + 1].split(",").map((d) => d.trim().toLowerCase()).filter(Boolean) : null;
 // Low concurrency + a per-request pause: hitting products.json too fast gets our IP
 // HTTP 429'd (Shopify/Cloudflare throttle), which was tanking the hit rate. --recheck is
 // pagination-heavy (it targets large catalogues by design), so it paces gentler by default.
@@ -143,8 +148,10 @@ async function main() {
     const [col] = await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'imported_stores' AND column_name = 'catalog_checked_at'`;
     if (!col) await sql`ALTER TABLE imported_stores ADD COLUMN catalog_checked_at TIMESTAMPTZ`;
     await ensureFpTable(sql);
+    await ensureVendorTable(sql);
     const brandDomains = FP ? loadBrandDomains() : [];
-    const rows = FP ? await sql`
+    const rows = FP && DOMAINS ? await sql`
+      SELECT domain, country FROM imported_stores WHERE domain = ANY(${DOMAINS}::text[])` : FP ? await sql`
       -- Fingerprint backfill / refresh: focus-market stores known to have a catalogue whose
       -- fingerprint is missing or stale. Shopify refuses most products.json reads, so the fetches
       -- we do get go to the fraud pilot first: Peach's own merchants and the watchlist brands, then
@@ -197,7 +204,10 @@ async function main() {
                     platform = COALESCE(platform, 'Shopify'),
                     catalog_checked_at = now()
                     WHERE domain = ${domain}`;
-          if (wantFp) { await upsertFp(sql, domain, buildFp(r.products), r.launched); fps++; }
+          if (wantFp) {
+            await upsertFp(sql, domain, buildFp(r.products), r.launched); fps++;
+            await upsertVendors(sql, domain, buildVendors(r.products));   // brand index (store_vendors)
+          }
           ok++;
         } else if (!r.retriable) {
           // Terminal (not Shopify / gone) — mark done so we don't keep trying it.

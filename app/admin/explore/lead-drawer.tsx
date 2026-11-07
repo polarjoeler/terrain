@@ -111,7 +111,11 @@ function Stat({ label, value, sub, accent }: { label: string; value: string; sub
 }
 
 /** Slide-in panel showing EVERY field we know about one store. */
-export function LeadDrawer({ domain, onClose, onOpen }: { domain: string | null; onClose: () => void; onOpen?: (domain: string) => void }) {
+export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
+  domain: string | null; onClose: () => void; onOpen?: (domain: string) => void;
+  /** Filter the Explorer to this group's stores. */
+  onShowGroup?: (groupId: string, label: string) => void;
+}) {
   const [data, setData] = useState<LeadDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -306,9 +310,17 @@ export function LeadDrawer({ domain, onClose, onOpen }: { domain: string | null;
                       );
                     })}
                   </ul>
-                  {group.sites - 1 > group.others.length && (
-                    <p className="mt-2 font-mono text-[11px] text-cream/35">+{group.sites - 1 - group.others.length} more in this group</p>
-                  )}
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    {group.sites - 1 > group.others.length
+                      ? <p className="font-mono text-[11px] text-cream/35">+{group.sites - 1 - group.others.length} more in this group</p>
+                      : <span />}
+                    {onShowGroup && (
+                      <button type="button" onClick={() => onShowGroup(group.groupId, `${data.name || data.domain}'s group`)}
+                        className="shrink-0 rounded-full border border-cyan/30 px-3 py-1 text-xs text-cyan transition hover:bg-cyan/10">
+                        Show all {group.sites} in the list →
+                      </button>
+                    )}
+                  </div>
                 </section>
               )}
 
@@ -336,6 +348,21 @@ export function LeadDrawer({ domain, onClose, onOpen }: { domain: string | null;
                 [data.platform?.toLowerCase() === "magento" ? "Magento version" : "Woo version", data.platform === "woocommerce" || data.platform?.toLowerCase() === "magento" ? data.platform_version : null],
                 ["Hosting", (data.platform === "woocommerce" || data.platform?.toLowerCase() === "magento") && data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null],
               ]} />
+
+              {data.brands && data.brands.brands.length > 0 && (
+                <Card title="Brands stocked">
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {data.brands.brands.map((b) => (
+                      <span key={b.key} className="inline-flex items-baseline gap-1 rounded-full border border-orange/20 bg-orange/[0.06] px-2 py-0.5 text-xs text-cream/80">
+                        {b.vendor}<span className="font-mono text-[10px] text-cream/40">{b.products}</span>
+                      </span>
+                    ))}
+                    {data.brands.total > data.brands.brands.length && (
+                      <span className="px-1 py-0.5 font-mono text-[11px] text-cream/35">+{data.brands.total - data.brands.brands.length} more</span>
+                    )}
+                  </div>
+                </Card>
+              )}
 
               {normalizeTechStack(data).length > 0 && (
                 <Card title="Apps & tech">

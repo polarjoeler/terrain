@@ -52,6 +52,7 @@ export default async function Admin() {
         { href: "/admin/churn", title: "Churn & liveness", blurb: "Stores going dark: frozen checkouts, dead domains, migrations." },
         { href: "/admin/providers", title: "Provider reports", blurb: "Shareable payment / shipping / subscription share dashboards." },
         { href: "/admin/radar", title: "Radar detections", blurb: "Clone-store and brand-abuse matches awaiting review.", accent: true },
+        { href: "/admin/brands", title: "Brand index", blurb: "Which stores sell each brand, which site looks official, and who uses its name." },
       ],
     },
     {
