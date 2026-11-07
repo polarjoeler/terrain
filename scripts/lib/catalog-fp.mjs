@@ -141,6 +141,24 @@ export async function deferFp(sql, domain, ageDays) {
 
 export const EMPTY_FP = { n: 0, img: [], sku: [], handle: [], title: [], price: [] };
 
+// ---- Site identity ----
+// shop.dartsco.co.za and dartsco.co.za are one shop, so the sweep compares registrable domains.
+// Second-level ccTLD suffixes (co.za, com.ng, co.ke …) keep three labels. Shared hosting domains
+// are the exception: every subdomain of myshopify.com is a different merchant, so there the full
+// host is the site.
+const SLD = /^(?:co|com|org|net|ac|gov|edu|or|ne|web|ltd|plc|biz|info)\.[a-z]{2}$/;
+const SHARED_HOSTS = new Set(["myshopify.com", "wixsite.com", "squarespace.com", "webflow.io", "business.site",
+  "shop.app", "wordpress.com", "blogspot.com", "netlify.app", "vercel.app", "github.io", "square.site",
+  "mystrikingly.com", "bigcartel.com", "myshopline.com", "ueniweb.com", "catlog.shop", "selar.co"]);
+export function siteOf(domain) {
+  const host = domain.trim().toLowerCase().replace(/^www\./, "");
+  const l = host.split(".");
+  if (l.length <= 2) return host;
+  const two = l.slice(-2).join(".");
+  if (SHARED_HOSTS.has(two)) return host;
+  return l.slice(SLD.test(two) ? -3 : -2).join(".");
+}
+
 // ---- Pair scoring (clone-sweep and one-off checks share this) ----
 // Brand Audit weights (lib/radar/catalog.ts): image 34 / sku 26 / handle 22 / title 18,
 // ×(1+0.15·price mirror), each kind's overlap as containment vs the smaller catalogue.
