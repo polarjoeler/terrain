@@ -176,6 +176,8 @@ async function main() {
           : sql`AND catalog_checked_at IS NULL`}
         AND lower(platform) IS DISTINCT FROM 'woocommerce'   -- Woo has its own probe; products.json is Shopify-only
         ${COUNTRIES ? sql`AND country = ANY(${COUNTRIES})` : sql``}
+      -- A 'cert' launched_at is a placeholder (usually a renewal), so it ranks as undated and the
+      -- earliest product date replaces it below.
       -- Priority for the LAUNCH metric: catalog-enrich fills launched_at (= earliest product date)
       -- only where it's missing, so stores with NO launch date come first — they're what actually
       -- moves the "new stores launched" count. Confirmed Shopify before unconfirmed (platform NULL),
@@ -184,7 +186,7 @@ async function main() {
       -- ZA-first: the focus markets we sell into lead (the launch metric is per-country and this is
       -- where coverage matters), then stores missing a launch date, then confirmed Shopify before the
       -- unconfirmed NULL bucket (banked ccTLD certs that time out and tank throughput).
-      ORDER BY (upper(country) = ANY(ARRAY['ZA','KE','NG'])) DESC, (launched_at IS NULL) DESC, (platform = 'Shopify') DESC,
+      ORDER BY (upper(country) = ANY(ARRAY['ZA','KE','NG'])) DESC, (launched_at IS NULL OR launched_source = 'cert') DESC, (platform = 'Shopify') DESC,
                discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
     console.log(`${FP ? "Fingerprinting" : "Catalog-enriching"} ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY}${PROXIED ? `, fanned across ${PROXIES.length} proxies` : ", DIRECT single-IP"})…`);
