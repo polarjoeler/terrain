@@ -225,7 +225,10 @@ export function summary(s: OnboardingState, platformLabels: Record<string, strin
     const notReady = s.delivery.channels.filter((c) => !CHANNEL_READY[c]);
     out.push({ key: "delivery", text: `Delivery by ${andList(names)}${notReady.length ? " (some need setup)" : ""}` });
   }
-  if (s.seats && s.seats.count > 0) out.push({ key: "seats", text: `${s.seats.count} seat${s.seats.count === 1 ? "" : "s"} (billing pending)` });
+  // No "(billing pending)" here: seats ARE purchasable, and this module is pure (it runs in the
+  // browser too) so it can't know the plan's allowance. Stage 5 quotes the real price; this is
+  // just the requested total.
+  if (s.seats && s.seats.count > 0) out.push({ key: "seats", text: `${s.seats.count} seat${s.seats.count === 1 ? "" : "s"} for your team` });
   return out;
 }
 

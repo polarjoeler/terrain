@@ -11,8 +11,13 @@ import {
   type Channel, type DigestCadence, type Delivery,
 } from "@/lib/onboarding";
 
+/** What the plan actually includes, so stage 5 can quote real numbers. Null when the account has
+ *  no subscription yet — then we say seats come with the plan rather than inventing a price. */
+export type SeatInfo = { planLabel: string; included: number; extraUsd: number };
+
 type Props = {
   email: string; firstUser: boolean; orgName: string;
+  seatInfo: SeatInfo | null;
   initialState: OnboardingState | null;
   platforms: { id: string; label: string }[];
   categories: string[];
@@ -55,7 +60,7 @@ function Field({ label, children, hint }: { label: string; children: React.React
 const inputCls = "w-full rounded-xl border border-cream/15 bg-cream/[0.03] px-4 py-2.5 text-sm text-cream placeholder:text-cream/30 outline-none transition focus:border-mint/60 focus:bg-cream/[0.05]";
 
 /* ------------------------------------------------------------- the flow --- */
-export function OnboardingFlow({ email, firstUser, orgName, initialState, platforms, categories, markets }: Props) {
+export function OnboardingFlow({ email, firstUser, orgName, seatInfo, initialState, platforms, categories, markets }: Props) {
   const router = useRouter();
   const [state, setState] = useState<OnboardingState>(() => ({ ...emptyState(), ...(initialState ?? {}), companyName: initialState?.companyName ?? orgName }));
   const [view, setView] = useState<StageIndex>((initialState?.stage as StageIndex) || 1);
@@ -147,7 +152,7 @@ export function OnboardingFlow({ email, firstUser, orgName, initialState, platfo
           {view === 2 && <Stage2 state={state} patch={patch} platforms={platforms} categories={categories} markets={markets} />}
           {view === 3 && <Stage3 state={state} patch={patch} platforms={platforms} markets={markets} />}
           {view === 4 && <Stage4 state={state} patch={patch} email={email} />}
-          {view === 5 && <Stage5Review state={state} firstUser={firstUser} patch={patch} platLabels={platLabels} summaryLines={summaryLines} />}
+          {view === 5 && <Stage5Review state={state} firstUser={firstUser} seatInfo={seatInfo} patch={patch} platLabels={platLabels} summaryLines={summaryLines} />}
 
           {err && <p className="mt-4 rounded-xl border border-orange/30 bg-orange/10 px-4 py-2 text-sm text-orange">{err}</p>}
 
@@ -651,7 +656,10 @@ function Stage4({ state, patch, email }: { state: OnboardingState; patch: (p: Pa
 }
 
 /* ------------------------------------------------------------- Stage 5 --- */
-function Stage5Review({ state, firstUser, patch, summaryLines }: { state: OnboardingState; firstUser: boolean; patch: (p: Partial<OnboardingState>) => void; platLabels: Record<string, string>; summaryLines: { key: string; text: string }[] }) {
+function Stage5Review({ state, firstUser, seatInfo, patch, summaryLines }: { state: OnboardingState; firstUser: boolean; seatInfo: SeatInfo | null; patch: (p: Partial<OnboardingState>) => void; platLabels: Record<string, string>; summaryLines: { key: string; text: string }[] }) {
+  // Seats beyond the plan's own allowance — what the customer would actually pay for.
+  const extraSeats = seatInfo ? Math.max(0, (state.seats?.count ?? 1) - seatInfo.included) : 0;
+
   return (
     <div className="space-y-6">
       <div>
@@ -669,17 +677,27 @@ function Stage5Review({ state, firstUser, patch, summaryLines }: { state: Onboar
       {firstUser && (
         <div className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5">
           <div className="text-sm font-medium text-cream/80">Team seats</div>
-          <p className="mt-1 text-xs text-cream/45">How many seats do you need in total (including yours)?</p>
+          <p className="mt-1 text-xs text-cream/45">
+            {seatInfo
+              ? `Your ${seatInfo.planLabel} plan includes ${seatInfo.included} seat${seatInfo.included === 1 ? "" : "s"}. How many do you need in total, including yours?`
+              : "How many seats do you need in total (including yours)?"}
+          </p>
           <div className="mt-3 flex items-center gap-3">
             <input type="number" min={1} value={state.seats?.count ?? 1} onChange={(e) => patch({ seats: { count: Math.max(1, Number(e.target.value) || 1), includesSelf: true, pending: true } })}
               className={inputCls + " w-28"} />
             <span className="text-xs text-cream/40">includes your own seat</span>
           </div>
-          <p className="mt-2 text-xs text-cream/35">Seat billing isn't set up yet — we'll save your requested count and follow up before any charge. No card required to launch.</p>
+          <p className="mt-2 text-xs text-cream/35">
+            {!seatInfo
+              ? "Seats come with your plan; you can add more from your account page at any time."
+              : extraSeats > 0
+                ? `That's ${extraSeats} extra seat${extraSeats === 1 ? "" : "s"} beyond your plan — $${extraSeats * seatInfo.extraUsd}/month. Add them on your account page after launch; nothing is charged now.`
+                : "Covered by your plan — no extra charge."}
+          </p>
         </div>
       )}
 
-      <p className="text-xs text-cream/35">Launching sets up your workspace now. Anything that needs a connection (Slack, WhatsApp, fraud monitoring, billing) will be clearly marked as pending — nothing is charged or connected until you complete it.</p>
+      <p className="text-xs text-cream/35">Launching sets up your workspace now. Anything that needs a connection (Slack, WhatsApp, fraud monitoring) will be clearly marked as pending — nothing is charged or connected until you complete it.</p>
     </div>
   );
 }

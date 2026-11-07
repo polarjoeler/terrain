@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import { orgHasProfile, orgKey } from "@/lib/profile";
 import { loadOnboardingState } from "@/lib/onboarding-store";
+import { getSubscriber } from "@/lib/subscriptions";
+import { planOf, EXTRA_SEAT_USD } from "@/lib/plans";
 import { cachedAgg } from "@/lib/agg-cache";
 import { db } from "@/lib/db";
 import { PLATFORMS } from "@/lib/platforms";
@@ -34,6 +36,13 @@ export default async function OnboardingPage() {
   const firstUser = await orgHasProfile(email).then((has) => !has).catch(() => true);
   const saved = await loadOnboardingState(email).catch((): OnboardingState | null => null);
   const categories = await topCategories();
+  // Seats are real and purchasable (#104), so stage 5 quotes the plan's own allowance and the
+  // live per-seat price rather than telling people billing isn't set up. lib/plans stays the
+  // single source of truth for both.
+  const sub = await getSubscriber(email).catch(() => null);
+  const seatInfo = sub
+    ? { planLabel: planOf(sub.plan).label, included: planOf(sub.plan).seats, extraUsd: EXTRA_SEAT_USD }
+    : null;
 
   const org = orgKey(email);
   const orgName = org.includes("@") ? "" : org;
@@ -49,6 +58,7 @@ export default async function OnboardingPage() {
       <OnboardingFlow
         email={email}
         firstUser={firstUser}
+        seatInfo={seatInfo}
         orgName={orgName}
         initialState={saved}
         platforms={platforms}
