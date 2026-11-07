@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PLANS, PLAN_ORDER, ADDON_RADAR_PARTNERS_USD, type PlanKey } from "@/lib/plans";
+import { PLANS, PLAN_ORDER, ADDON_RADAR_PARTNERS_USD, EXTRA_SEAT_USD, EXTRA_SEAT_ANNUAL_USD, MAX_EXTRA_SEATS, type PlanKey } from "@/lib/plans";
 
 /** What each tier unlocks beyond the row count, in the customer's words. The entitlements
  *  themselves live in lib/plans.ts — this is only how they READ. */
@@ -17,8 +17,12 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
   canAnnual?: boolean;
 }) {
   const [period, setPeriod] = useState<"month" | "year">("month");
+  const [extraSeats, setExtraSeats] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+
+  // Seats are billed per interval, so the price shown has to follow the toggle.
+  const seatUsd = period === "year" ? EXTRA_SEAT_ANNUAL_USD : EXTRA_SEAT_USD;
 
   async function subscribe(plan: PlanKey) {
     setBusy(plan);
@@ -29,7 +33,7 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
       const p = PLANS[plan].annualUsd == null ? "month" : period;
       const res = await fetch("/api/checkout", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan, period: p }),
+        body: JSON.stringify({ plan, period: p, extraSeats }),
       });
       const json = await res.json();
       if (!res.ok || !json.url) {
@@ -59,7 +63,23 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
         </div>
       )}
 
-      <div className="mt-8 grid gap-4 lg:grid-cols-3">
+      <div className="mt-4 flex justify-center">
+        <div className="inline-flex items-center gap-4 rounded-full border border-cream/15 bg-cream/[0.03] px-5 py-2 text-sm">
+          <span className="text-cream/60">Extra seats</span>
+          <span className="inline-flex items-center gap-1">
+            <button type="button" aria-label="One fewer seat" onClick={() => setExtraSeats((n) => Math.max(0, n - 1))}
+              disabled={extraSeats === 0}
+              className="grid h-6 w-6 place-items-center rounded-full border border-cream/20 text-cream/70 transition hover:border-cream/50 hover:text-cream disabled:opacity-30">−</button>
+            <span className="w-7 text-center tabular-nums text-cream">{extraSeats}</span>
+            <button type="button" aria-label="One more seat" onClick={() => setExtraSeats((n) => Math.min(MAX_EXTRA_SEATS, n + 1))}
+              disabled={extraSeats >= MAX_EXTRA_SEATS}
+              className="grid h-6 w-6 place-items-center rounded-full border border-cream/20 text-cream/70 transition hover:border-cream/50 hover:text-cream disabled:opacity-30">+</button>
+          </span>
+          <span className="text-cream/40">${seatUsd.toLocaleString()}{period === "year" ? "/yr" : "/mo"} each</span>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
         {PLAN_ORDER.map((key) => {
           const plan = PLANS[key];
           const annual = period === "year" && plan.annualUsd != null;
@@ -89,11 +109,20 @@ export function PlanPicker({ currentPlan, canAnnual = true }: {
                     ? `or $${plan.annualUsd.toLocaleString()}/year — 4 months free`
                     : "Monthly only"}
               </div>
+              {extraSeats > 0 && (
+                <div className="mt-1 text-xs font-medium text-ink/70">
+                  + ${(extraSeats * (annual ? EXTRA_SEAT_ANNUAL_USD : EXTRA_SEAT_USD)).toLocaleString()} for {extraSeats} extra seat{extraSeats === 1 ? "" : "s"} ={" "}
+                  ${(amount + extraSeats * (annual ? EXTRA_SEAT_ANNUAL_USD : EXTRA_SEAT_USD)).toLocaleString()}{annual ? "/year" : "/month"}
+                </div>
+              )}
 
               <ul className="mt-5 space-y-2 text-sm text-ink/70">
                 <li>{plan.platforms ? plan.platforms.join(" + ") : "Every platform we track"}</li>
                 <li>{plan.exportLimit == null ? "Unlimited lead exports" : `${plan.exportLimit.toLocaleString()} lead exports/month`}</li>
-                <li>{plan.seats} seat{plan.seats === 1 ? "" : "s"} · ${plan.extraSeatUsd}/mo each after</li>
+                <li>
+                  {plan.seats + extraSeats} seat{plan.seats + extraSeats === 1 ? "" : "s"}
+                  {extraSeats > 0 ? ` (${plan.seats} included + ${extraSeats})` : ` · $${plan.extraSeatUsd}/mo each after`}
+                </li>
                 <li>{INSIGHTS_COPY[key]}</li>
               </ul>
 

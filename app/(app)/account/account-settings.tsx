@@ -4,13 +4,25 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { AccountInfo, Member, Invite } from "@/lib/account";
-import { saveProfileAction, saveWorkspaceAction, inviteMemberAction, cancelInviteAction } from "./actions";
+import { saveProfileAction, saveWorkspaceAction, inviteMemberAction, cancelInviteAction, setSeatsAction } from "./actions";
+import { EXTRA_SEAT_ANNUAL_USD, MAX_EXTRA_SEATS } from "@/lib/plans";
+
+type Seats = {
+  capacity: number;
+  used: number;
+  extraSeats: number;
+  included: number;
+  seatUsd: number;
+  canManage: boolean;
+  viaSeat: string | null;
+};
 
 type Props = {
   account: AccountInfo;
   members: Member[];
   invites: Invite[];
   plan: { label: string; status: string; used: number; limit: number | null; remaining: number | null } | null;
+  seats: Seats | null;
 };
 
 const inputCls = "w-full rounded-xl border border-cream/15 bg-cream/[0.03] px-4 py-2.5 text-sm text-cream placeholder:text-cream/30 outline-none transition focus:border-mint/60 focus:bg-cream/[0.05]";
@@ -49,11 +61,12 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium capitalize ${map[role] ?? map.member}`}>{role}</span>;
 }
 
-export function AccountSettings({ account, members, invites, plan }: Props) {
+export function AccountSettings({ account, members, invites, plan, seats }: Props) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [name, setName] = useState(account.name);
   const [workspace, setWorkspace] = useState(account.workspace);
+  const [extraSeats, setExtraSeats] = useState(seats?.extraSeats ?? 0);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
   const [msg, setMsg] = useState<{ k: string; ok: boolean; text: string } | null>(null);
@@ -70,8 +83,13 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
   });
   const sendInvite = () => start(async () => {
     const r = await inviteMemberAction(inviteEmail, inviteRole);
-    if (r.ok) { flash("invite", true, "Invite saved — we'll email it once team invites go live."); setInviteEmail(""); router.refresh(); }
+    if (r.ok) { flash("invite", true, "Invited — they get in as soon as they sign in. Tell them; we don't email it yet."); setInviteEmail(""); router.refresh(); }
     else flash("invite", false, r.error);
+  });
+  const saveSeats = () => start(async () => {
+    const r = await setSeatsAction(extraSeats);
+    if (r.ok) { flash("seats", true, "Seats updated — your next invoice is prorated."); router.refresh(); }
+    else flash("seats", false, r.error);
   });
   const cancel = (id: string) => start(async () => {
     const r = await cancelInviteAction(id);
@@ -118,7 +136,7 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
             <input className={`${inputCls} ${account.isOwner ? "" : "cursor-not-allowed opacity-70"}`} value={workspace} onChange={(e) => setWorkspace(e.target.value)} readOnly={!account.isOwner} maxLength={80} />
           </Field>
           {account.domain && (
-            <Field label="Domain" hint="Teammates with this email domain join this workspace automatically.">
+            <Field label="Domain" hint="Teammates on this domain share this workspace — but a seat comes from an invite below, not from the domain alone.">
               <input className={`${inputCls} cursor-not-allowed opacity-70`} value={account.domain} readOnly />
             </Field>
           )}
@@ -153,6 +171,56 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
         </div>
       </Section>
 
+      {/* Seats */}
+      {seats && (
+        <Section title="Seats" desc="Each seat is one person who can sign in and use this workspace."
+          aside={<span className="rounded-full border border-cream/15 bg-cream/[0.04] px-3 py-1 text-xs text-cream/70">{seats.used} of {seats.capacity} used</span>}>
+          <div className="space-y-4">
+            <div className="h-1.5 overflow-hidden rounded-full bg-cream/10">
+              <div className="h-full rounded-full bg-mint transition-all"
+                style={{ width: `${Math.min(100, Math.round((seats.used / Math.max(1, seats.capacity)) * 100))}%` }} />
+            </div>
+            <p className="text-xs text-cream/40">
+              {seats.included} included with your plan{seats.extraSeats > 0 ? ` + ${seats.extraSeats} bought` : ""}.
+            </p>
+
+            {seats.canManage ? (
+              <div className="rounded-xl border border-cream/10 bg-cream/[0.02] p-4">
+                <div className="mb-3 text-sm font-medium text-cream/80">Extra seats</div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="inline-flex items-center gap-1">
+                    <button type="button" aria-label="One fewer seat" onClick={() => setExtraSeats((n) => Math.max(0, n - 1))}
+                      disabled={pending || extraSeats === 0}
+                      className="grid h-7 w-7 place-items-center rounded-full border border-cream/20 text-cream/70 transition hover:border-cream/50 hover:text-cream disabled:opacity-30">−</button>
+                    <span className="w-8 text-center text-sm tabular-nums text-cream">{extraSeats}</span>
+                    <button type="button" aria-label="One more seat" onClick={() => setExtraSeats((n) => Math.min(MAX_EXTRA_SEATS, n + 1))}
+                      disabled={pending || extraSeats >= MAX_EXTRA_SEATS}
+                      className="grid h-7 w-7 place-items-center rounded-full border border-cream/20 text-cream/70 transition hover:border-cream/50 hover:text-cream disabled:opacity-30">+</button>
+                  </span>
+                  <button onClick={saveSeats} disabled={pending || extraSeats === seats.extraSeats}
+                    className="rounded-full bg-mint px-5 py-2 text-sm font-semibold text-ink transition hover:brightness-105 disabled:opacity-50">
+                    {pending ? "Updating…" : extraSeats > seats.extraSeats ? `Add ${extraSeats - seats.extraSeats} seat${extraSeats - seats.extraSeats === 1 ? "" : "s"}` : extraSeats < seats.extraSeats ? `Remove ${seats.extraSeats - extraSeats}` : "Update seats"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-cream/35">
+                  ${seats.seatUsd}/mo each, or ${EXTRA_SEAT_ANNUAL_USD}/yr on an annual plan. Changes apply to your live
+                  subscription straight away and are prorated by Stripe.
+                </p>
+                {/* inline rather than <Msg>: that helper trips react-hooks/immutability, and the
+                    three existing uses are enough of that without adding a fourth. */}
+                {msg?.k === "seats" && <p className={`mt-2 text-xs ${msg.ok ? "text-mint" : "text-orange"}`}>{msg.text}</p>}
+              </div>
+            ) : (
+              <p className="text-xs text-cream/40">
+                {seats.viaSeat
+                  ? `You're on a seat paid for by ${seats.viaSeat} — they manage seats for this workspace.`
+                  : "Extra seats are added to a live subscription. Start one on the billing page and they'll appear here."}
+              </p>
+            )}
+          </div>
+        </Section>
+      )}
+
       {/* Team */}
       <Section title="Team" desc={account.isCompanyOrg ? "People in your workspace." : "Personal workspace — sign in with a company email to invite a team."}>
         {account.isCompanyOrg ? (
@@ -174,14 +242,16 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
 
             {invites.length > 0 && (
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cream/40">Pending invites</div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-cream/40">Invited</div>
                 <ul className="space-y-2">
                   {invites.map((iv) => (
                     <li key={iv.id} className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-cream/15 px-4 py-2.5">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="truncate text-sm text-cream/80">{iv.email}</span>
                         <RoleBadge role={iv.role} />
-                        <span className="rounded-full bg-cream/5 px-2 py-0.5 text-[10px] uppercase tracking-wide text-cream/40">Pending</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${iv.status === "accepted" ? "bg-mint/10 text-mint/80" : "bg-cream/5 text-cream/40"}`}>
+                          {iv.status === "accepted" ? "Signed in" : "Not yet signed in"}
+                        </span>
                       </div>
                       <button onClick={() => cancel(iv.id)} disabled={pending} className="shrink-0 text-xs text-cream/45 transition hover:text-orange disabled:opacity-50">Cancel</button>
                     </li>
@@ -205,7 +275,7 @@ export function AccountSettings({ account, members, invites, plan }: Props) {
                   {pending ? "Saving…" : "Save invite"}
                 </button>
               </div>
-              <p className="mt-2 text-xs text-cream/35">Invites are saved as pending for now — email delivery and seat billing arrive with the billing update. Nothing is charged.</p>
+              <p className="mt-2 text-xs text-cream/35">An invite takes one of your seats and lets them in as soon as they sign in at heyterrain.com/login. We don&apos;t email it yet, so tell them yourself.</p>
               <Msg k="invite" />
             </div>
           </div>

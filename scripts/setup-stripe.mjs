@@ -19,7 +19,7 @@
  *  Prints the env block for .env.local AND Vercel. Nothing is written to either.
  */
 import Stripe from "stripe";
-import { PLANS, PLAN_ORDER, ADDON_RADAR_PARTNERS_USD, EXTRA_SEAT_USD } from "../lib/plans.ts";
+import { PLANS, PLAN_ORDER, ADDON_RADAR_PARTNERS_USD, EXTRA_SEAT_USD, EXTRA_SEAT_ANNUAL_USD, ANNUAL_MONTHS_BILLED } from "../lib/plans.ts";
 
 const COMMIT = process.argv.includes("--commit");
 const REPLACE = process.argv.includes("--replace");
@@ -76,6 +76,14 @@ SPECS.push({
   interval: "month",
   usd: EXTRA_SEAT_USD,
   note: "billed as an extra subscription item, quantity = seats over the plan's included count",
+});
+SPECS.push({
+  env: "STRIPE_PRICE_SEAT_YEAR",
+  lookup: "terrain_seat_year",
+  product: "Terrain extra seat",            // same product, second price
+  interval: "year",
+  usd: EXTRA_SEAT_ANNUAL_USD,
+  note: `required for seats on an annual plan — Stripe refuses to mix billing intervals in one subscription (${ANNUAL_MONTHS_BILLED}x monthly, same 4-months-free promo)`,
 });
 SPECS.push({
   env: "STRIPE_PRICE_ADDON_RADAR",

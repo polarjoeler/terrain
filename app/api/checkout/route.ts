@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { PLANS, resolvePlan } from "@/lib/plans";
 import type { Period } from "@/lib/stripe";
 import { currentUser } from "@/lib/auth";
-import { createCheckoutSession } from "@/lib/stripe";
+import { createCheckoutSession, normaliseSeats } from "@/lib/stripe";
 import { type PlanKey } from "@/lib/subscriptions";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export async function POST(req: Request) {
-  let body: { email?: string; plan?: string; period?: string };
+  let body: { email?: string; plan?: string; period?: string; extraSeats?: number };
   try {
     body = await req.json();
   } catch {
@@ -41,10 +41,13 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  // Seats beyond the plan's own allowance, as a second line item. normaliseSeats clamps it, so a
+  // hand-rolled request can't start a subscription with a four-figure seat count.
+  const extraSeats = normaliseSeats(body.extraSeats);
   const origin = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
 
   try {
-    const url = await createCheckoutSession({ email, plan, period, origin });
+    const url = await createCheckoutSession({ email, plan, period, extraSeats, origin });
     return NextResponse.json({ url });
   } catch (err) {
     console.error("[terrain] stripe checkout failed:", err);

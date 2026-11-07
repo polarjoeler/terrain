@@ -8,7 +8,7 @@
 
 import Stripe from "stripe";
 import { TRIAL_DAYS, type PlanKey, type Status } from "./subscriptions";
-import { resolvePlan } from "./plans";
+import { MAX_EXTRA_SEATS, resolvePlan } from "./plans";
 
 let _stripe: Stripe | null = null;
 
@@ -52,6 +52,82 @@ export const ADDON_RADAR_PRICE_ENV = "STRIPE_PRICE_ADDON_RADAR";
 
 export type Period = "month" | "year";
 
+/** Seat lookup keys, per interval. Stripe refuses to mix billing intervals within one
+ *  subscription, so an annual plan can only take an annual seat — adding the monthly seat price
+ *  to it fails outright rather than prorating. Same lookup-key discipline as the plans above. */
+const SEAT_LOOKUP: Record<Period, string> = { month: "terrain_seat_month", year: "terrain_seat_year" };
+
+/** The seat price for an interval, or undefined when it hasn't been created in this Stripe mode. */
+export async function seatPriceId(period: Period = "month"): Promise<string | undefined> {
+  // The env override applies to the monthly seat only — it predates annual seats, and a single
+  // pinned id can't serve both intervals.
+  const pinned = period === "month" ? process.env[SEAT_PRICE_ENV] : undefined;
+  if (pinned) return pinned;
+  const key = SEAT_LOOKUP[period];
+  const cached = _priceCache.get(key);
+  if (cached) return cached;
+  const found = await stripe().prices.list({ lookup_keys: [key], active: true, limit: 1 });
+  const id = found.data[0]?.id;
+  if (id) _priceCache.set(key, id);
+  return id;
+}
+
+/** Clamp a requested seat count to something chargeable. */
+export function normaliseSeats(n: unknown): number {
+  const v = Math.trunc(Number(n));
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(MAX_EXTRA_SEATS, v);
+}
+
+const isSeatItem = (item: Stripe.SubscriptionItem): boolean =>
+  Object.values(SEAT_LOOKUP).includes(item.price?.lookup_key ?? "");
+
+/** The subscription's seat line item, if any. Identified by the price's LOOKUP KEY rather than by
+ *  a resolved id, so it costs no API call and cannot mismatch across test/live. */
+export const seatItemOf = (sub: Stripe.Subscription): Stripe.SubscriptionItem | undefined =>
+  sub.items?.data?.find(isSeatItem);
+
+/** The plan line item. Not `items.data[0]` — once a seat item exists, the order is Stripe's. */
+export const planItemOf = (sub: Stripe.Subscription): Stripe.SubscriptionItem | undefined =>
+  sub.items?.data?.find((i) => !isSeatItem(i)) ?? sub.items?.data?.[0];
+
+/** Seats bought on top of the plan's included count. */
+export const seatQuantityOf = (sub: Stripe.Subscription): number => seatItemOf(sub)?.quantity ?? 0;
+
+/** Set the paid extra-seat count on a live subscription, prorating the difference.
+ *
+ *  Adds the item, changes its quantity, or removes it at zero. The interval is taken from the
+ *  PLAN item rather than assumed, so an annual subscriber gets the annual seat price. */
+export async function setSeatQuantity(subscriptionId: string, extraSeats: number): Promise<number> {
+  const seats = normaliseSeats(extraSeats);
+  const sub = await stripe().subscriptions.retrieve(subscriptionId);
+  const existing = seatItemOf(sub);
+
+  if (seats === 0) {
+    if (existing) await stripe().subscriptionItems.del(existing.id, { proration_behavior: "create_prorations" });
+    return 0;
+  }
+
+  if (existing) {
+    if (existing.quantity === seats) return seats;
+    await stripe().subscriptionItems.update(existing.id, { quantity: seats, proration_behavior: "create_prorations" });
+    return seats;
+  }
+
+  const period: Period = planItemOf(sub)?.price?.recurring?.interval === "year" ? "year" : "month";
+  const price = await seatPriceId(period);
+  if (!price) {
+    throw new Error(
+      `No Stripe seat price for ${period}ly billing (lookup key '${SEAT_LOOKUP[period]}'). ` +
+        "Run scripts/setup-stripe.mjs --commit in this Stripe mode.",
+    );
+  }
+  await stripe().subscriptionItems.create({
+    subscription: subscriptionId, price, quantity: seats, proration_behavior: "create_prorations",
+  });
+  return seats;
+}
+
 export async function priceIdFor(plan: PlanKey, period: Period = "month"): Promise<string | undefined> {
   // 1. An explicit id in env always wins — the escape hatch for a one-off price.
   const envName = period === "year" ? PRICE_ENV[plan].year : PRICE_ENV[plan].month;
@@ -81,6 +157,8 @@ export async function createCheckoutSession(opts: {
   plan: PlanKey;
   /** month (default) or the 2027 annual price, where the plan offers one. */
   period?: Period;
+  /** Seats beyond the plan's included count, billed as a second line item. */
+  extraSeats?: number;
   origin: string;
 }): Promise<string> {
   const period = opts.period ?? "month";
@@ -92,9 +170,22 @@ export async function createCheckoutSession(opts: {
         `in this Stripe mode — run scripts/setup-stripe.mjs, or set ${PRICE_ENV[opts.plan].month}.`,
     );
   }
+  const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price, quantity: 1 }];
+  const seats = normaliseSeats(opts.extraSeats);
+  if (seats > 0) {
+    // Matched to the plan's interval — Stripe rejects a subscription whose items disagree.
+    const seatPrice = await seatPriceId(period);
+    if (!seatPrice) {
+      throw new Error(
+        `No Stripe seat price for ${period}ly billing (lookup key '${SEAT_LOOKUP[period]}'). ` +
+          "Run scripts/setup-stripe.mjs --commit in this Stripe mode.",
+      );
+    }
+    line_items.push({ price: seatPrice, quantity: seats });
+  }
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",
-    line_items: [{ price, quantity: 1 }],
+    line_items,
     customer_email: opts.email,
     // Card up front, even though the first 7 days are free.
     payment_method_collection: "always",
@@ -102,7 +193,7 @@ export async function createCheckoutSession(opts: {
       trial_period_days: TRIAL_DAYS,
       metadata: { plan: opts.plan, period, product: "terrain" },
     },
-    metadata: { plan: opts.plan, period, email: opts.email },
+    metadata: { plan: opts.plan, period, email: opts.email, extra_seats: String(seats) },
     allow_promotion_codes: true,
     success_url: `${opts.origin}/dashboard?welcome=1`,
     cancel_url: `${opts.origin}/billing`,
