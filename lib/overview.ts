@@ -16,7 +16,11 @@ export type OverviewPulse = {
   migWeek: number; migPrev: number;        // migrated off-platform this week vs prior
   totalLive: number;                       // live store base across focus markets
 };
-export type LaunchItem = { domain: string; name: string | null; country: string | null; platform: string | null; launchedAt: string };
+export type LaunchItem = {
+  domain: string; name: string | null; country: string | null; platform: string | null; launchedAt: string;
+  // For per-user focus ranking on the page (lib/focus) — the cache itself stays viewer-agnostic.
+  category: string | null; estMonthlySales: number | null; productCount: number | null;
+};
 export type DayBucket = { day: string; shopify: number; woo: number; other: number };
 export type MarketCell = { country: string; live: number; newWeek: number };
 export type OverviewData = { pulse: OverviewPulse; launches: LaunchItem[]; trend: DayBucket[]; markets: MarketCell[]; updatedAt: string };
@@ -27,7 +31,7 @@ const EMPTY: OverviewData = {
 };
 
 export async function overviewData(): Promise<OverviewData> {
-  return cachedAgg("overview:cmd:v2", 10 * 60 * 1000, async () => {
+  return cachedAgg("overview:cmd:v3", 10 * 60 * 1000, async () => {
     const sql = db();
     // 1) Pulse — one scan, launch-dated this-week-vs-prior.
     const [p] = await sql.begin(async (t) => {
@@ -53,23 +57,28 @@ export async function overviewData(): Promise<OverviewData> {
       FROM imported_stores
       WHERE published AND country = ANY(${FOCUS}) AND launched_at > now()-interval '90 days'
       GROUP BY 1 ORDER BY 1`.catch(() => []);
-    // 3) Recent launches — the honest "what's new" feed (launch-dated, not discovery).
-    const launches = await sql<{ domain: string; name: string | null; country: string | null; platform: string | null; launched_at: string }[]>`
-      SELECT domain, name, upper(country) country, platform, launched_at
+    // 3) Recent launches — the honest "what's new" feed (launch-dated, not discovery). A pool of 80,
+    //    not the 7 shown: the page ranks it by each viewer's focus, and a narrow focus needs depth.
+    const launches = await sql<{ domain: string; name: string | null; country: string | null; platform: string | null; launched_at: string; category: string | null; estimated_monthly_sales: string | null; product_count: number | null }[]>`
+      SELECT domain, name, upper(country) country, platform, launched_at, category, estimated_monthly_sales, product_count
       FROM imported_stores
       WHERE published AND country = ANY(${FOCUS}) AND launched_at > now()-interval '14 days'
-      ORDER BY launched_at DESC NULLS LAST LIMIT 7`.catch(() => []);
-    // 4) Market pulse — live base + this week's launches.
+      ORDER BY launched_at DESC NULLS LAST LIMIT 80`.catch(() => []);
+    // 4) Market pulse — live base + this week's launches. Every focus market (≤28 rows), not a top 6:
+    //    the page leads with the viewer's own markets, which may be small.
     const markets = await sql<{ country: string; live: number; new_w: number }[]>`
       SELECT upper(country) country, count(*)::int live,
         count(*) FILTER (WHERE launched_at > now()-interval '7 days')::int new_w
       FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND country = ANY(${FOCUS})
-      GROUP BY 1 HAVING count(*) >= 50 ORDER BY live DESC LIMIT 6`.catch(() => []);
+      GROUP BY 1 ORDER BY live DESC`.catch(() => []);
 
     return {
       pulse: { newWeek: p.new_w, newPrev: p.new_pw, plusWeek: p.plus_w, churnWeek: p.churn_w, churnPrev: p.churn_pw, migWeek: p.mig_w, migPrev: p.mig_pw, totalLive: p.live },
-      launches: launches.map((r) => ({ domain: r.domain, name: r.name, country: r.country, platform: r.platform, launchedAt: new Date(r.launched_at).toISOString() })),
+      launches: launches.map((r) => ({
+        domain: r.domain, name: r.name, country: r.country, platform: r.platform, launchedAt: new Date(r.launched_at).toISOString(),
+        category: r.category, estMonthlySales: r.estimated_monthly_sales != null ? Number(r.estimated_monthly_sales) : null, productCount: r.product_count,
+      })),
       trend: trendRows.map((r) => ({ day: new Date(r.d).toISOString().slice(0, 10), shopify: r.shopify, woo: r.woo, other: r.other })),
       markets: markets.map((r) => ({ country: r.country, live: r.live, newWeek: r.new_w })),
       updatedAt: new Date().toISOString(),
