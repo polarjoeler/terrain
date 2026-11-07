@@ -34,6 +34,8 @@ export type LeadDetail = {
   crux_rank: number | null; crux_rank_month: string | null; crux_trend: string | null;
   /** Ballpark revenue band + its confidence (see scripts/revenue-ballpark.mjs). */
   revenue_band: string | null; revenue_confidence: string | null;
+  /** Set by /api/lead: the viewer is an admin (may edit; sees vendor estimates). */
+  canEdit?: boolean;
   /** Curated tags (store_tags) — shown + editable in the admin drawer. */
   tags: string[];
   /** Other stores run by the same operator (scripts/build-store-groups.mjs), or null. */
