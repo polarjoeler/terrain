@@ -195,7 +195,9 @@ export async function createCheckoutSession(opts: {
     },
     metadata: { plan: opts.plan, period, email: opts.email, extra_seats: String(seats) },
     allow_promotion_codes: true,
-    success_url: `${opts.origin}/dashboard?welcome=1`,
+    // {CHECKOUT_SESSION_ID} is substituted by Stripe. /welcome uses it to identify a buyer
+    // who checked out without being signed in; a signed-in visitor is identified by cookie.
+    success_url: `${opts.origin}/welcome?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${opts.origin}/billing`,
   });
   if (!session.url) throw new Error("Stripe returned no checkout URL");
