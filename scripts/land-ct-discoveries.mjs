@@ -146,16 +146,12 @@ async function main() {
       // landing. Stamping it here means fresh leads are classified the instant they land — no
       // waiting on a probe — so insights counts + the "new this week" tile are honest immediately.
       platform: "Shopify",
-      // TLS cert issuance date (nullable).
+      // TLS cert issuance date (nullable). Kept as raw evidence only — NOT stamped as launched_at:
+      // most certs we see are renewals (≈ when we found the store), and cert dates showed stores as
+      // launched on the day we saw them (2026-11-03/07). launched_at comes from earliest product.
       cert_not_before: certNotBefore,
-      // Launch estimate from the cert date. Sound for OUR CT finds: we tail CT continuously, so
-      // we catch certs at issuance — measured 73% within 30d of discovery, 0.006% old-renewal
-      // artifacts (2026-10-29). launched_at_source='cert' keeps it distinct from a precise import
-      // date; the COALESCE below keeps the EARLIEST, so a renewal never moves an existing date.
-      launched_at: certNotBefore,
-      launched_source: certNotBefore ? "cert" : null,
     }));
-    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before", "launched_at", "launched_source"];
+    const cols = ["domain", "name", "country", "discovered_at", "published", "source", "platform", "cert_not_before"];
     for (let i = 0; i < records.length; i += 400) {
       const batch = records.slice(i, i + 400);
       // Insert new; for existing, only backfill discovered_at + platform-if-unset + cert_not_before-if-unset
@@ -165,11 +161,7 @@ async function main() {
         ON CONFLICT (domain) DO UPDATE SET
           discovered_at     = COALESCE(imported_stores.discovered_at, EXCLUDED.discovered_at),
           platform          = COALESCE(imported_stores.platform, EXCLUDED.platform),
-          cert_not_before   = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before),
-          -- Keep the EARLIEST launch date (never let a renewal move it), and only adopt the cert
-          -- estimate when we don't already hold a date — a precise import date always wins.
-          launched_at    = COALESCE(imported_stores.launched_at, EXCLUDED.launched_at),
-          launched_source= COALESCE(imported_stores.launched_source, EXCLUDED.launched_source)
+          cert_not_before   = COALESCE(imported_stores.cert_not_before, EXCLUDED.cert_not_before)
         -- Only write when a COALESCE would actually change something. Without this the
         -- run re-upserted all 201,133 rows every 30 minutes (~9.6M/day) where the
         -- COALESCEs were no-ops — Postgres still writes a new row version per upsert,
@@ -177,8 +169,7 @@ async function main() {
         -- an already CPU-starved instance, for no change.
         WHERE imported_stores.discovered_at IS NULL
            OR imported_stores.platform IS NULL
-           OR imported_stores.cert_not_before IS NULL
-           OR (imported_stores.launched_at IS NULL AND EXCLUDED.launched_at IS NOT NULL)`);
+           OR imported_stores.cert_not_before IS NULL`);
     }
 
     const overlap = seen.size - fresh.length;
