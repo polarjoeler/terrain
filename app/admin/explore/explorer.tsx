@@ -178,6 +178,7 @@ export type ExploreInitial = {
   platform?: string[]; apps?: string[]; plugins?: string[]; tech?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
+  grouped?: boolean; group?: string; groupLabel?: string;   // store groups: multi-store operators / one group
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
   status?: "migrated" | "dead"; checkedDays?: number;
 };
@@ -228,6 +229,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   const [contactType, setContactType] = useState<Set<string>>(new Set(initial?.contactType));
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
+  // Store groups: "runs other stores" toggle, and one group's stores (from a row badge or the drawer).
+  const [groupedOnly, setGroupedOnly] = useState(initial?.grouped ?? false);
+  const [group, setGroup] = useState<{ id: string; label: string } | null>(initial?.group ? { id: initial.group, label: initial.groupLabel ?? "this group" } : null);
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
   const [sort, setSort] = useState<SortKey>((initial?.sort as SortKey) ?? "new");
@@ -271,11 +275,13 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     contactType: contactType.size ? [...contactType] : undefined,
     noPayment: noPaymentOnly || undefined,
     tier: tier || undefined,
+    grouped: groupedOnly || undefined,
+    group: group?.id,
     launchedDays: launched ? LAUNCH_OPTS.find((o) => o.key === launched)?.days : undefined,
     discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, launched, recency, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
@@ -329,10 +335,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     email: data.stats.email,
     reachable: data.stats.reachable,
     willBounce: data.stats.willBounce,
+    operators: data.stats.operators,
   };
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setRecency(""); setLaunched(""); setLimit(PAGE); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
@@ -422,6 +429,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
       reachable: reachableOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
+      grouped: groupedOnly || undefined, group: group?.id, groupLabel: group?.label,
       sort: sort !== "new" ? sort : undefined,
     };
   };
@@ -474,6 +482,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet
+          </button>
+          <button onClick={() => setGroupedOnly((p) => !p)} title="The same operator runs other stores too — one conversation covers several" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${groupedOnly ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${groupedOnly ? "border-cyan bg-cyan" : "border-cream/25"}`} /> Runs other stores
           </button>
           {/* Curated Top 100 / Top 500 — mutually exclusive (Top 100 is the elite subset). */}
           <div className="flex gap-1 pt-1">
@@ -566,6 +577,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
               <div className="mt-1 text-xs font-semibold uppercase tracking-wide text-cream/50">
                 {activeCount > 0 ? "Stores matching" : "Stores tracked"}
               </div>
+              {liveStats.operators != null && liveStats.operators > 0 && liveStats.operators < liveStats.shown && (
+                <div className="mt-0.5 text-[11px] text-cream/35" title="Stores run by the same operator count once">
+                  run by <span className="text-cyan/80">{liveStats.operators.toLocaleString()}</span> operators
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -582,6 +598,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
             <b className="text-cream">{data.total.toLocaleString()}</b> of {data.universe.toLocaleString()} leads
             {loading && <span className="ml-1 text-cream/35">· updating…</span>}
           </span>
+          {group && (
+            <button onClick={() => setGroup(null)} className="inline-flex items-center gap-1.5 rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs text-cyan hover:bg-cyan/20" title="Clear the group filter">
+              <span className="text-[10px]">✦</span> {group.label} <span className="text-cyan/60">✕</span>
+            </button>
+          )}
           <div className="ml-auto flex items-center gap-2">
             {savedMsg && <span className="text-xs text-mint">{savedMsg}</span>}
             {picked.size > 0 && (
@@ -663,6 +684,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                           <div className="flex items-center gap-1.5 font-medium text-cream">
                             <span className="truncate">{l.name ?? l.domain}</span>
                             {l.plus && <span className="shrink-0 rounded bg-lilac/20 px-1 py-0.5 text-[8px] font-bold text-lilac">PLUS</span>}
+                            {l.groupId && l.groupSites != null && (
+                              <button type="button" onClick={(e) => { e.stopPropagation(); setGroup({ id: l.groupId!, label: `${l.name ?? l.domain}'s group` }); setLimit(PAGE); }}
+                                title={`The same operator runs ${l.groupSites} stores — show them all`}
+                                className="shrink-0 rounded bg-cyan/15 px-1 py-0.5 text-[8px] font-bold text-cyan hover:bg-cyan/25">✦ {l.groupSites} STORES</button>
+                            )}
                             {l.activityTier && l.activityTier !== "not_a_store" && (
                               <span className={`shrink-0 rounded px-1 py-0.5 text-[8px] font-bold uppercase ${l.activityTier === "selling" ? "bg-mint/20 text-mint" : l.activityTier === "active" ? "bg-cyan/20 text-cyan" : "bg-orange/20 text-orange"}`}>{l.activityTier}</span>
                             )}
@@ -725,7 +751,8 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
         )}
       </main>
 
-      <LeadDrawer domain={selected} onClose={() => setSelected(null)} onOpen={setSelected} />
+      <LeadDrawer domain={selected} onClose={() => setSelected(null)} onOpen={setSelected}
+        onShowGroup={(id, label) => { setGroup({ id, label }); setLimit(PAGE); setSelected(null); }} />
     </div>
   );
 }

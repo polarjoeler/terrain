@@ -66,6 +66,9 @@ export type BrowseFilters = {
   /** Drop addresses whose domain publishes no MX — the bounce list. */
   deliverable?: boolean;
   tier?: "top100" | "top500";
+  /** Store groups (scripts/build-store-groups.mjs): `grouped` = stores whose operator runs other
+   *  stores too; `group` = every store in one group (the drawer's "show all"). */
+  grouped?: boolean; group?: string;
   domains?: string[];         // explicit selection (export the ticked rows), overrides the broad filter
   launchedDays?: number;      // launched within N days
   discoveredDays?: number;    // we first tracked it within N days
@@ -99,6 +102,9 @@ export type BrowseRow = {
   contactMxOk: boolean | null; contactSharedCount: number | null;
   launchedAt: string | null; discoveredAt: string | null;
   top100: boolean; top500: boolean;
+  /** The store's group when its operator runs other stores (null otherwise): id for the
+   *  group filter, sites = how many stores one conversation covers. */
+  groupId: string | null; groupSites: number | null;
   /** CrUX traffic-rank bucket (1000 = top 1k, lower is bigger) and the CrUX month it came from,
    *  so the table can show both the ranking and how fresh it is. `cruxTrend` is the move since
    *  the previous month we hold: up | down | flat | new. */
@@ -108,12 +114,19 @@ export type BrowseRow = {
 
 export type Facet = { value: string; count: number }[];
 
+export type BrowseStats = {
+  plus: number; email: number; reachable: number; willBounce: number;
+  /** Distinct operators behind the filtered set (a store group counts once): "500 stores, N
+   *  conversations". Undefined on aggregates cached before it shipped. */
+  operators?: number;
+};
+
 export type BrowseResult = {
   rows: BrowseRow[];
   total: number;              // true count for the current filters
   universe: number;           // true count with no filters at all
   // Live-stat tiles — true over the whole filtered set, not just the page.
-  stats: { plus: number; email: number; reachable: number; willBounce: number };
+  stats: BrowseStats;
   facets: {
     country: Facet; platform: Facet; band: Facet; contactType: Facet;
     category: Facet; city: Facet; theme: Facet;
@@ -125,6 +138,16 @@ export type BrowseResult = {
     discovered: Record<number, number>;
   };
 };
+
+// Stores that belong to a real multi-store operator (review-flagged groups are hidden, as in
+// lib/store-groups.ts). GROUP_JOIN exposes g_id / g_sites — names that can't collide with an
+// imported_stores column the shared WHERE refers to. A join, not a per-row subquery: the
+// correlated form cost ~8s on the full-table aggregate, the join ~0.
+const GROUPED_SET = `(SELECT m.domain FROM store_group_members m JOIN store_groups g ON g.group_id = m.group_id
+  WHERE NOT g.review AND g.n_sites > 1)`;
+const GROUP_JOIN = `LEFT JOIN (SELECT m.domain AS g_domain, g.group_id AS g_id, g.n_sites AS g_sites
+  FROM store_group_members m JOIN store_groups g ON g.group_id = m.group_id
+  WHERE NOT g.review AND g.n_sites > 1) grp ON grp.g_domain = imported_stores.domain`;
 
 const d = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 10) : null);
 
@@ -186,6 +209,8 @@ function buildWhere(f: BrowseFilters) {
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
+  if (f.grouped) conds.push(sql.unsafe(`domain IN ${GROUPED_SET}`));
+  if (f.group) conds.push(sql`domain IN (SELECT domain FROM store_group_members WHERE group_id = ${f.group})`);
   if (f.tier) conds.push(sql`domain IN (SELECT domain FROM store_tags WHERE tag = ${f.tier === "top100" ? "top-100" : "top-500"})`);
   if (f.launchedDays) conds.push(sql`${launchExpr} >= CURRENT_DATE - ${f.launchedDays}::int`);
   if (f.discoveredDays) conds.push(sql`discovered_at >= CURRENT_DATE - ${f.discoveredDays}::int`);
@@ -223,7 +248,7 @@ async function universeCount(): Promise<number> {
 // for facet counts); the universe count has its own cache above.
 type AggParsed = {
   total: number;
-  stats: { plus: number; email: number; reachable: number; willBounce: number };
+  stats: BrowseStats;
   facets: BrowseResult["facets"];
   recency: BrowseResult["recency"];
 };
@@ -329,14 +354,16 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), launched_at) AS launched_on,
-             discovered_at
-      FROM imported_stores WHERE ${where}
+             discovered_at,
+             COALESCE(g_id, domain) AS operator
+      FROM imported_stores ${sql.unsafe(GROUP_JOIN)} WHERE ${where}
     )
     SELECT (SELECT count(*)::int FROM f) AS total,
            (SELECT (count(*) FILTER (WHERE plus))::int FROM f)       AS c_plus,
            (SELECT (count(*) FILTER (WHERE has_email))::int FROM f)  AS c_email,
            (SELECT (count(*) FILTER (WHERE reachable))::int FROM f)   AS c_reachable,
            (SELECT (count(*) FILTER (WHERE will_bounce))::int FROM f) AS c_bounce,
+           (SELECT count(DISTINCT operator)::int FROM f)              AS c_operators,
            ${sql.unsafe(facetSub("contact_type"))}  AS f_contact,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
            ${sql.unsafe(facetSub("platform"))}      AS f_platform,
@@ -362,7 +389,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
     A = {
       total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0) },
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0) },
       facets: {
         country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
         band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
@@ -385,8 +412,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
            crux_rank, crux_rank_month, crux_trend,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-100')) AS top100,
-           (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500
-    FROM imported_stores WHERE ${where}
+           (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500,
+           g_id AS grp_id, g_sites AS grp_sites
+    FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
+    WHERE ${where}
     ORDER BY ${order}, domain ASC
     LIMIT ${limit} OFFSET ${offset}`;
 
@@ -415,6 +444,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         launchedAt: d(r.launched_on ? String(r.launched_on) : null),
         discoveredAt: d(r.discovered_at ? String(r.discovered_at) : null),
         top100: !!r.top100, top500: !!r.top500,
+        groupId: (r.grp_id as string) ?? null, groupSites: r.grp_sites == null ? null : Number(r.grp_sites),
         cruxRank: r.crux_rank == null ? null : Number(r.crux_rank),
         cruxRankMonth: (r.crux_rank_month as string) ?? null,
         cruxTrend: (r.crux_trend as string) ?? null,
