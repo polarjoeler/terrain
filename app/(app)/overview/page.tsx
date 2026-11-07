@@ -4,8 +4,9 @@ import { redirect } from "next/navigation";
 import { overviewData } from "@/lib/overview";
 import { getAccount } from "@/lib/account";
 import { getFocus, getOrgProfile, orgKey } from "@/lib/profile";
-import { focusPhrase, hasTargeting, inFocus, rankByFocus, type Focus } from "@/lib/focus";
+import { focusPhrase, hasTargeting, matchLevel, rankByFocus, type Focus } from "@/lib/focus";
 import { providerSlug } from "@/lib/provider-slug";
+import { focusSnapshot, type FocusSnapshot } from "@/lib/focus-data";
 import { marketLabel, marketFlag } from "@/lib/markets";
 import { weekRead, type Read } from "@/lib/read";
 import { StatChip, LaunchTrend } from "@/app/components/command";
@@ -50,6 +51,7 @@ export default async function OverviewPage() {
 
   const [data, account, org, reads] = [await overviewData(), await getAccount(email).catch(() => null), await getOrgProfile(orgKey(email)).catch(() => null), await weekRead().catch(() => [] as Read[])];
   const focus = await getFocus(email);
+  const snap = hasTargeting(focus) ? await focusSnapshot(focus) : null;
   const { pulse, trend } = data;
   const name = (account?.name ?? "there").split(" ")[0];
   const persona = personaFor(org?.companyType ?? focus.companyType, focus);
@@ -97,6 +99,14 @@ export default async function OverviewPage() {
         </div>
       </section>
 
+      {/* Your focus — the slice of the market their setup picked, sized and named */}
+      {snap ? <FocusPanel focus={focus} snap={snap} /> : (
+        <Link href="/onboarding" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-lilac/30 px-5 py-4 transition hover:bg-lilac/[0.04]">
+          <span className="text-sm"><span className="font-semibold text-lilac">Make this page yours.</span> <span className="text-cream/60">Tell Terrain which merchants you target, and the Overview and your digest lead with them.</span></span>
+          <span className="text-xs font-medium text-lilac">Set your focus →</span>
+        </Link>
+      )}
+
       {/* Personalised focus — from the company type captured at signup */}
       {persona && (
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-lilac/20 bg-lilac/[0.05] px-5 py-3.5">
@@ -135,7 +145,9 @@ export default async function OverviewPage() {
               <h3 className="font-display text-lg text-cream">Just launched</h3>
               {focused && (
                 <p className="mt-0.5 text-xs text-cream/45">
-                  {ranked.matched > 0 ? `${focusPhrase(focus)} first` : `Nothing in your focus (${focusPhrase(focus)}) in the last two weeks — showing everything`}
+                  {ranked.confirmed > 0 ? `${focusPhrase(focus)} first`
+                    : ranked.matched > 0 ? `Your markets first — none of these are sized yet, so none are confirmed as ${focusPhrase(focus)}`
+                    : `Nothing in your focus (${focusPhrase(focus)}) in the last two weeks — showing everything`}
                 </p>
               )}
             </div>
@@ -155,7 +167,7 @@ export default async function OverviewPage() {
                         <span className={`rounded px-1.5 py-0.5 font-medium ${platTone(s.platform)}`}>{platName(s.platform)}</span>
                         {s.country ? cleanMarket(s.country) : ""}
                         {s.category && <span className="truncate">· {s.category}</span>}
-                        {focused && inFocus(s, focus) && <span className="rounded bg-lilac/10 px-1.5 py-0.5 font-medium text-lilac">your focus</span>}
+                        {focused && matchLevel(s, focus) === 2 && <span className="rounded bg-lilac/10 px-1.5 py-0.5 font-medium text-lilac">your focus</span>}
                       </span>
                     </span>
                     <span className="shrink-0 font-mono text-[11px] text-cream/40">{daysAgo(s.launchedAt)}</span>
@@ -202,6 +214,73 @@ export default async function OverviewPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+const usd = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}m` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`);
+
+/** The user's focus, made visible: what they picked (in words, editable), how big that slice is,
+ *  what launched in it, and its biggest stores — plus links into the views their goals point at.
+ *  Size-unknown stores are shown as their own "+N" rather than folded in (lib/focus-data). */
+function FocusPanel({ focus, snap }: { focus: Focus; snap: FocusSnapshot }) {
+  const phrase = focusPhrase(focus);
+  const one = focus.countries.length === 1 ? focus.countries[0] : null;
+  const sized = focus.sizeBands.length > 0;
+  const browse = `/dashboard?${new URLSearchParams({ ...(one ? { country: one } : {}), ...(focus.categories.length === 1 ? { category: focus.categories[0] } : {}) })}`;
+  const links: { label: string; href: string }[] = [{ label: "Browse these stores", href: browse }];
+  if (focus.goals.includes("country_performance") || one) links.push({ label: `${one ? cleanMarket(one) : "Market"} report`, href: one ? `/insights?country=${one}` : "/insights" });
+  links.push({ label: "What your digest covers", href: "/digests" });
+  const plus = (n: number) => (sized && n > 0 ? <span className="ml-1.5 font-sans text-[11px] font-normal text-cream/40">+{n.toLocaleString()} not yet sized</span> : null);
+  return (
+    <section className="rounded-2xl border border-lilac/25 bg-gradient-to-b from-lilac/[0.07] to-transparent p-5 md:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold uppercase tracking-wide text-lilac">Your focus</div>
+          <h3 className="mt-1 font-display text-xl text-cream">{phrase.charAt(0).toUpperCase() + phrase.slice(1)}</h3>
+          <p className="mt-1 text-xs text-cream/45">From your setup. Launches, markets and your digest below lead with these stores — nothing else is hidden.</p>
+        </div>
+        <Link href="/onboarding" className="shrink-0 rounded-full border border-lilac/30 px-3 py-1.5 text-xs font-medium text-lilac transition hover:bg-lilac/10">Edit focus</Link>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-cream/10 bg-cream/[0.02] px-4 py-3">
+          <div className="text-[11px] uppercase tracking-wide text-cream/45">Live stores</div>
+          <div className="mt-1 font-mono text-2xl text-cream">{snap.live.toLocaleString()}{plus(snap.liveUnknown)}</div>
+        </div>
+        <div className="rounded-xl border border-cream/10 bg-cream/[0.02] px-4 py-3">
+          <div className="text-[11px] uppercase tracking-wide text-cream/45">Launched · 30 days</div>
+          <div className="mt-1 font-mono text-2xl text-cream">{snap.launched30.toLocaleString()}{plus(snap.launched30Unknown)}</div>
+        </div>
+        <div className="rounded-xl border border-cream/10 bg-cream/[0.02] px-4 py-3">
+          <div className="text-[11px] uppercase tracking-wide text-cream/45">Launched · 7 days</div>
+          <div className="mt-1 font-mono text-2xl text-cream">{snap.launched7.toLocaleString()}{plus(snap.launched7Unknown)}</div>
+        </div>
+      </div>
+
+      {snap.top.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-cream/45">Biggest in your focus</div>
+          <ul className="divide-y divide-cream/[0.06]">
+            {snap.top.map((s) => (
+              <li key={s.domain}>
+                <Link href={`/dashboard?q=${encodeURIComponent(s.domain)}`} className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-cream/[0.03]">
+                  <span>{s.country ? marketFlag(s.country) : "🌍"}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-cream">{s.domain}</span>
+                  {s.category && <span className="hidden truncate text-[11px] text-cream/40 sm:inline">{s.category}</span>}
+                  <span className="shrink-0 font-mono text-[11px] text-cream/55">{s.estMonthlySales != null ? `${usd(s.estMonthlySales)}/mo est.` : s.productCount != null ? `${s.productCount} products` : ""}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {links.map((l) => (
+          <Link key={l.label} href={l.href} className="rounded-full border border-cream/15 px-3 py-1.5 text-xs text-cream/75 transition hover:border-lilac/40 hover:text-cream">{l.label} →</Link>
+        ))}
+      </div>
+    </section>
   );
 }
 
