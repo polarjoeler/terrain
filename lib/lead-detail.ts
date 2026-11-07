@@ -3,6 +3,7 @@
 
 import { db as sharedDb } from "./db";
 import { getStoreGroup, type StoreGroup } from "./store-groups";
+import { getStoreBrands, type StoreBrand } from "./brands";
 
 function db() {
   return sharedDb();
@@ -40,6 +41,8 @@ export type LeadDetail = {
   tags: string[];
   /** Other stores run by the same operator (scripts/build-store-groups.mjs), or null. */
   group: StoreGroup | null;
+  /** Brands it sells (store_vendors, from its catalogue), biggest first; total = distinct brands. */
+  brands: { brands: StoreBrand[]; total: number } | null;
 };
 
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
@@ -60,5 +63,6 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
   // Sequential, not Promise.all: the shared pool is small (see memory: postgres-pool-deadlock). A
   // missing or failing group lookup never costs the drawer the rest of the store.
   r.group = await getStoreGroup(d).catch(() => null);
+  r.brands = await getStoreBrands(d).catch(() => null);
   return r;
 }

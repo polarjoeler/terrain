@@ -21,7 +21,7 @@ export default async function Dashboard({
     country?: string; q?: string; payment?: string; shipping?: string;
     theme?: string; city?: string; category?: string; band?: string;
     new?: string; nopay?: string; launched?: string; list?: string;
-    plus?: string; status?: string; checked?: string;
+    plus?: string; status?: string; checked?: string; group?: string; grouped?: string;
   }>;
 }) {
   const email = await currentUser();
@@ -70,6 +70,7 @@ export default async function Dashboard({
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
     recency, launched, noPayment: sp.nopay === "1",
     plus: sp.plus === "1" || undefined, status, checkedDays,
+    group: sp.group || undefined, grouped: sp.grouped === "1" || undefined,
   };
   // ?list=<id> opens a Saved list — its stored view fully re-seeds the Explorer (overrides any drill).
   const savedView = sp.list ? await getList(email, sp.list).then((l) => l?.view ?? null).catch(() => null) : null;
@@ -166,9 +167,11 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
     q: initial?.q || undefined,
     country: initial?.country, platform: initial?.platform, category: initial?.category, band: initial?.band,
     theme: initial?.theme, city: initial?.city, payment: initial?.payment, shipping: initial?.shipping,
-    app: initial?.apps, activity: initial?.activity, hosting: initial?.hosting,
+    app: initial?.apps, plugin: initial?.plugins, tech: initial?.tech, activity: initial?.activity, hosting: initial?.hosting,
     plus: initial?.plus || undefined, hasEmail: initial?.email || undefined, noPayment: initial?.noPayment || undefined,
+    reachableContact: initial?.reachable || undefined, contactType: initial?.contactType,
     tier: (initial?.tier || undefined) as BrowseFilters["tier"],
+    grouped: initial?.grouped || undefined, group: initial?.group,
     status: initial?.status, checkedDays: initial?.checkedDays,
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
