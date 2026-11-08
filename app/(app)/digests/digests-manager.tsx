@@ -10,18 +10,21 @@ type Props = {
   email: string;
   workspace: string;
   contents: { title: string; desc: string }[];
+  /** The user's onboarding focus in words, or null when they haven't set one. */
+  focusPhrase: string | null;
 };
 
 const CADENCES: { id: string; label: string }[] = [
   { id: "daily", label: "Daily" }, { id: "weekly", label: "Weekly" }, { id: "monthly", label: "Monthly" },
 ];
 
-export function DigestsManager({ subscribed, cadence, email, workspace, contents }: Props) {
+export function DigestsManager({ subscribed, cadence, email, workspace, contents, focusPhrase }: Props) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [on, setOn] = useState(subscribed);
   const [cad, setCad] = useState(cadence);
   const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState(false);
 
   const toggle = () => start(async () => {
     const next = !on;
@@ -95,7 +98,18 @@ export function DigestsManager({ subscribed, cadence, email, workspace, contents
 
       {/* What's in it */}
       <section className="rounded-2xl border border-cream/10 bg-cream/[0.02] p-5 md:p-6">
-        <h2 className="font-display text-lg text-cream">What&apos;s in your {cadenceWord.toLowerCase()} digest</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg text-cream">What&apos;s in your {cadenceWord.toLowerCase()} digest</h2>
+            <p className="mt-1 text-xs text-cream/45">
+              {focusPhrase ? <>Tuned to your focus: <span className="text-lilac">{focusPhrase}</span>.</> : "Covering the whole market — set a focus to tune it to the merchants you target."}
+              {" "}<a href="/onboarding" className="text-lilac hover:underline">{focusPhrase ? "Edit focus" : "Set your focus"}</a>
+            </p>
+          </div>
+          <button onClick={() => setPreview((v) => !v)} className="shrink-0 rounded-full border border-cream/15 px-3 py-1.5 text-xs text-cream/75 transition hover:border-mint/40 hover:text-cream">
+            {preview ? "Hide preview" : "Preview this week's email"}
+          </button>
+        </div>
         <ul className="mt-4 space-y-3">
           {contents.map((c) => (
             <li key={c.title} className="flex items-start gap-3">
@@ -107,6 +121,12 @@ export function DigestsManager({ subscribed, cadence, email, workspace, contents
             </li>
           ))}
         </ul>
+        {preview && (
+          <div className="mt-5 overflow-hidden rounded-xl border border-cream/10 bg-[#faf6ec]">
+            {/* Built live from this week's data — the first load can take a few seconds. */}
+            <iframe src="/api/digest/me" title="Your digest preview" className="h-[720px] w-full" />
+          </div>
+        )}
         <p className="mt-4 text-xs text-cream/35">
           Automated sending is being finalised — your preferences are saved and applied the moment digests go live. Nothing is sent until then.
         </p>

@@ -8,6 +8,8 @@
 import type { Lead } from "./leads";
 import type { InsightSnapshot } from "./sheets";
 import { isNewLaunch, marketOf, priorityScore } from "./prioritize";
+import { focusPhrase, focusRank, hasTargeting, inFocus, matchLevel, runsTech, type Focus } from "./focus";
+import { marketLabel } from "./markets";
 
 const C = {
   ink: "#0f2b2a",
@@ -65,10 +67,15 @@ function leadCard(l: Lead, siteUrl: string): string {
   </table>`;
 }
 
+/** A lead tagged with the platform it was fetched under (Lead itself doesn't carry one). */
+export type DigestLead = Lead & { platform?: string | null };
+
 export function buildDigest(opts: {
-  leads: Lead[];
+  leads: DigestLead[];
   insights: InsightSnapshot | null;
   siteUrl: string;
+  /** The reader's onboarding focus (lib/focus). Picks and framing follow it; absent = whole market. */
+  focus?: Focus;
 }): { subject: string; html: string; text: string } {
   const { insights, siteUrl } = opts;
   const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
@@ -79,9 +86,28 @@ export function buildDigest(opts: {
   // email isn't empty — but drop the "new" framing (isFresh) so we never claim
   // thousands of stores are "new" when they aren't.
   const isFresh = fresh.length > 0;
-  const pool = isFresh ? fresh : opts.leads;
-  const ranked = [...pool].sort((a, b) => priorityScore(b) - priorityScore(a));
+  const base = isFresh ? fresh : opts.leads;
+  // Focus narrows what the email TALKS about — when it matches nothing, fall back to the whole
+  // market rather than send an empty brief, and say so instead of claiming a match.
+  const f = opts.focus;
+  const focusedPool = f && hasTargeting(f) ? base.filter((l) => inFocus(l, f)) : [];
+  const isFocused = focusedPool.length > 0;
+  const pool = isFocused ? focusedPool : base;
+  // Confirmed matches before size-unknown ones, then their platform order, then the usual priority.
+  const ranked = [...pool].sort((a, b) =>
+    (f && isFocused ? matchLevel(b, f) - matchLevel(a, f) || focusRank(a, f) - focusRank(b, f) : 0) || priorityScore(b) - priorityScore(a));
   const picks = ranked.slice(0, 3);
+  // Counts must not overclaim: with a size choice, "N $100k+/mo stores" counts only stores we've
+  // confirmed at that size; the unsized rest are named without the size ("+M more in South Africa
+  // we can't size yet"). New stores rarely carry a revenue estimate, so this matters every week.
+  const sized = !!(f && isFocused && f.sizeBands.length);
+  const confirmedN = sized ? pool.filter((l) => matchLevel(l, f!) === 2).length : pool.length;
+  const unsizedN = pool.length - confirmedN;
+  const headN = sized && confirmedN > 0 ? confirmedN : pool.length;
+  const noun = headN === 1 ? "store" : "stores";
+  const what = isFocused && f ? (sized && confirmedN === 0 ? focusPhrase({ ...f, sizeBands: [] }, noun) : focusPhrase(f, noun)) : noun;
+  // Wherever the whole pool is meant (picks, "view all"), name it without the size claim.
+  const whatAll = sized ? focusPhrase({ ...f!, sizeBands: [] }) : what;
   const withEmail = pool.filter((l) => l.email).length;
 
   const dateLabel = new Date().toLocaleDateString("en-GB", {
@@ -91,7 +117,8 @@ export function buildDigest(opts: {
   // Actionable pulse line.
   const topFirst = insights?.first_at_checkout?.[0];
   const pulse = [
-    isFresh ? `${pool.length} new stores` : `${pool.length} stores tracked`,
+    isFresh ? `${headN} new ${what}` : `${headN} ${what} tracked`,
+    sized && confirmedN > 0 && unsizedN > 0 ? `+${unsizedN} more we can't size yet` : "",
     `${Math.round((100 * withEmail) / Math.max(pool.length, 1))}% with contact emails`,
     topFirst ? `${topFirst.label} leads checkout (${topFirst.pct}%)` : "",
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
@@ -102,8 +129,24 @@ export function buildDigest(opts: {
       ? `Top theme this week: <b>${insights.themes[0].label}</b>. Most-installed app: <b>${insights.apps[0].label}</b>.`
       : "";
 
+  // "Your markets" — this week's new stores in each country they chose (country_performance goal,
+  // or simply having picked a few markets). Counted over the whole fresh set, not just the focus.
+  const myCountries = f?.countries.length && f.countries.length <= 4 && isFresh ? f.countries : [];
+  const marketsLine = myCountries.length
+    ? myCountries.map((c) => `${marketLabel(c).replace(/^[^\p{L}]+/u, "")} <b>${fresh.filter((l) => (l.country ?? "").toUpperCase() === c).length}</b>`).join(" &nbsp;·&nbsp; ")
+    : "";
+
+  // "Your tech" — how often their own product shows up among the new stores we've read a checkout
+  // or tech stack for. Only stores with detection count, so an unscanned store isn't a loss.
+  const techLines = (f?.technologies ?? []).slice(0, 2).map((t) => {
+    const checked = fresh.filter((l) => (l.payments?.length ?? 0) > 0 || !!l.technologies);
+    if (checked.length < 10) return "";
+    const n = checked.filter((l) => runsTech(l, t.name)).length;
+    return `<b>${t.name}</b> is on ${n} of the ${checked.length} new stores we've scanned this week (${Math.round((100 * n) / checked.length)}%).`;
+  }).filter(Boolean);
+
   const subject = isFresh
-    ? `Terrain — ${pool.length} new African stores this week`
+    ? `Terrain — ${headN} new ${isFocused ? what : "African stores"} this week`
     : `Terrain — your African commerce brief`;
 
   const html = `<!-- digest -->
@@ -120,15 +163,22 @@ export function buildDigest(opts: {
 
     <tr><td style="background:${C.paper};padding:26px 28px 8px;">
       <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:${C.muted};margin-bottom:14px;">
-        3 stores worth your attention
+        ${isFocused ? `3 ${whatAll} worth your attention` : "3 stores worth your attention"}
       </div>
       ${picks.map((l) => leadCard(l, siteUrl)).join("")}
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:14px 0 4px;">
         <a href="${siteUrl}/dashboard" style="display:inline-block;background:${C.ink};color:${C.cream};text-decoration:none;font-weight:600;font-size:14px;padding:12px 26px;border-radius:999px;">
-          View all ${pool.length} ${isFresh ? "new " : ""}stores →
+          View all ${pool.length} ${isFresh ? "new " : ""}${whatAll} →
         </a>
       </td></tr></table>
     </td></tr>
+
+    ${marketsLine || techLines.length ? `<tr><td style="background:${C.paper};padding:8px 28px 8px;">
+      <table role="presentation" width="100%" style="border-top:1px solid #ece6d8;"><tr><td style="padding-top:16px;font-size:13px;color:${C.muted};line-height:1.6;">
+        ${marketsLine ? `<div><span style="color:${C.ink};font-weight:700;">Your markets &nbsp;</span> ${marketsLine}</div>` : ""}
+        ${techLines.map((l) => `<div><span style="color:${C.ink};font-weight:700;">Your tech &nbsp;</span> ${l}</div>`).join("")}
+      </td></tr></table>
+    </td></tr>` : ""}
 
     ${mover ? `<tr><td style="background:${C.paper};padding:8px 28px 24px;">
       <table role="presentation" width="100%" style="border-top:1px solid #ece6d8;"><tr><td style="padding-top:16px;font-size:13px;color:${C.muted};">
@@ -147,8 +197,10 @@ export function buildDigest(opts: {
 
   const text =
     `Terrain — ${dateLabel}\n\n${pulse.replace(/&nbsp;·&nbsp;/g, " · ")}\n\n` +
-    `3 stores worth your attention:\n` +
+    `3 ${whatAll} worth your attention:\n` +
     picks.map((l) => `• ${l.name} (${l.domain}) — ${whyItMatters(l)}${l.email ? ` — ${l.email}` : ""}`).join("\n") +
+    (marketsLine ? `\n\nYour markets: ${marketsLine.replace(/<\/?b>/g, "").replace(/&nbsp;·&nbsp;/g, " · ")}` : "") +
+    techLines.map((l) => `\nYour tech: ${l.replace(/<\/?b>/g, "")}`).join("") +
     `\n\nView all ${pool.length}: ${siteUrl}/dashboard\n`;
 
   return { subject, html, text };

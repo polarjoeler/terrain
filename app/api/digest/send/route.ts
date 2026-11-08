@@ -1,5 +1,6 @@
 /** Scheduled per-user weekly digest send. Iterates the users whose digest is DUE (opted in +
- *  cadence elapsed), builds a digest scoped to each user's platform focus, and emails it.
+ *  cadence elapsed), builds a digest around each user's onboarding focus (lib/focus: platforms in
+ *  their order, markets, categories, size, their own tech), and emails it.
  *
  *  SAFE BY DEFAULT — nothing goes out until DIGEST_ENABLED=1 AND RESEND_API_KEY are both set;
  *  otherwise it runs as a dry-run (builds + reports, sends nothing, doesn't mark users sent).
@@ -10,15 +11,14 @@
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { buildDigest } from "@/lib/digest";
-import { publishedLeads } from "@/lib/imported";
+import { digestLeadLoader } from "@/lib/digest-leads";
 import { digestSnapshot } from "@/lib/insights";
 import { sendEmail } from "@/lib/email";
-import { dueDigestUsers, markDigestSent } from "@/lib/profile";
+import { dueDigestUsers, getFocus, markDigestSent } from "@/lib/profile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CMS = new Set(["shopify", "woocommerce", "magento", "wix"]);
 
 async function authorised(req: Request): Promise<boolean> {
   const secret = process.env.CRON_SECRET;
@@ -33,22 +33,16 @@ export async function POST(req: Request) {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
   const due = await dueDigestUsers();
 
-  // Share the market snapshot across users; leads are re-fetched per platform focus (cached by pg).
+  // Share the market snapshot and the per-platform lead loads across users.
   const insights = await digestSnapshot().catch(() => null);
-  const leadCache = new Map<string, Awaited<ReturnType<typeof publishedLeads>>>();
-  const leadsFor = async (platform?: string) => {
-    const k = platform ?? "all";
-    if (!leadCache.has(k)) leadCache.set(k, await publishedLeads(undefined, platform));
-    return leadCache.get(k)!;
-  };
+  const leadsFor = digestLeadLoader();
 
   let sent = 0, skippedEmpty = 0, failed = 0;
   for (const u of due) {
-    // Scope to the first specific CMS the user asked for (else the whole market).
-    const focus = u.leadFocus.find((f) => CMS.has(f.toLowerCase()))?.toLowerCase();
+    const focus = await getFocus(u.email);
     const leads = await leadsFor(focus);
     if (!leads.length) { skippedEmpty++; continue; }
-    const { subject, html, text } = buildDigest({ leads, insights, siteUrl });
+    const { subject, html, text } = buildDigest({ leads, insights, siteUrl, focus });
     if (!enabled) continue;  // dry-run: built but not sent, user not marked
     try {
       await sendEmail({ to: u.email, subject, html, text });
