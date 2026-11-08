@@ -42,6 +42,12 @@ const platTone = (p: string | null) => PLAT_TONE[(p ?? "").toLowerCase()] ?? "te
 const platName = (p: string | null) => { const l = (p ?? "").toLowerCase(); return l === "woocommerce" ? "WooCommerce" : l === "shopify" || !l ? "Shopify" : p!.charAt(0).toUpperCase() + p!.slice(1); };
 const cleanMarket = (iso: string) => marketLabel(iso).replace(/^[^\p{L}]+/u, "");
 
+// "Built by" provenance — which public signal the builder→store edge came from (attribute-partners.mjs).
+const BUILDER_SOURCE: Record<string, string> = {
+  portfolio: "portfolio", footer: "site credit", comment: "code comment", generator: "generator", theme: "theme credit",
+};
+const builderSourceLabel = (s: string) => BUILDER_SOURCE[s] ?? s;
+
 function Chips({ items, tone = "cream", start }: { items: string[]; tone?: string; start?: boolean }) {
   const c = tone === "mint" ? "bg-mint/15 text-mint" : tone === "cyan" ? "bg-cyan/15 text-cyan" : tone === "lilac" ? "bg-lilac/15 text-lilac" : "bg-cream/10 text-cream/70";
   return (
@@ -342,6 +348,14 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
               ]} />
 
               <Card title="Store" fields={[
+                ["Built by", data.builtBy ? (
+                  <span className="flex items-center justify-end gap-1.5">
+                    {data.builtBy.website
+                      ? <a href={data.builtBy.website} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">{data.builtBy.name}</a>
+                      : <span className="text-cream/85">{data.builtBy.name}</span>}
+                    <span className="text-[11px] text-cream/40">{builderSourceLabel(data.builtBy.source)}{!data.builtBy.confirmed ? " · unconfirmed" : ""}</span>
+                  </span>
+                ) : null],
                 ["Category", data.category],
                 ["Theme", data.theme],
                 ["Activity", data.platform === "woocommerce" && data.activity_tier ? <TierBadge tier={data.activity_tier} score={data.activity_score} /> : null],

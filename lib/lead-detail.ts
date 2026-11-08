@@ -43,7 +43,29 @@ export type LeadDetail = {
   group: StoreGroup | null;
   /** Brands it sells (store_vendors, from its catalogue), biggest first; total = distinct brands. */
   brands: { brands: StoreBrand[]; total: number } | null;
+  /** Who BUILT the store — the best partner edge (scripts/attribute-partners.mjs), or null. This is
+   *  Fundi's differentiator: what the crawler actually saw on the page, not what an agency claims.
+   *  `confirmed` = a strong signal (self-declared portfolio / linked public credit); weaker signals
+   *  (text credit, generator/theme, code comment) surface as unconfirmed until verified. */
+  builtBy: { name: string; website: string | null; source: string; confidence: string; confirmed: boolean } | null;
 };
+
+/** The single best builder→store edge for a store, or null. Confidence-ranked, confirmed first. */
+export async function getStoreBuilder(domain: string): Promise<LeadDetail["builtBy"]> {
+  const d = domain.trim().toLowerCase().replace(/^www\./, "");
+  const [r] = await db()<{ name: string; website_url: string | null; source: string; confidence: string; published: boolean }[]>`
+    SELECT sp.name, sp.website_url, ps.source, ps.confidence, ps.published
+    FROM partner_stores ps JOIN service_partners sp ON sp.id = ps.partner_id
+    WHERE ps.store_domain = ${d}
+    ORDER BY ps.published DESC,
+      CASE ps.confidence WHEN 'declared' THEN 6 WHEN 'declared_title' THEN 5 WHEN 'public_credit' THEN 4
+        WHEN 'comment_credit' THEN 3 WHEN 'theme_author' THEN 2 ELSE 1 END DESC
+    LIMIT 1`;
+  if (!r || !r.name) return null;
+  const website = r.website_url && /^https?:\/\//i.test(r.website_url) ? r.website_url
+    : r.website_url ? `https://${r.website_url}` : null;
+  return { name: r.name, website, source: r.source, confidence: r.confidence, confirmed: Boolean(r.published) };
+}
 
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
   const d = domain.trim().toLowerCase();
@@ -64,5 +86,6 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
   // missing or failing group lookup never costs the drawer the rest of the store.
   r.group = await getStoreGroup(d).catch(() => null);
   r.brands = await getStoreBrands(d).catch(() => null);
+  r.builtBy = await getStoreBuilder(d).catch(() => null);
   return r;
 }
