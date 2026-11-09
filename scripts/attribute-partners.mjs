@@ -31,6 +31,7 @@
 import postgres from "postgres";
 import { readFileSync } from "node:fs";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
+import { detectCredits, hostOf, platformNoise, platformHost } from "./lib/builder-credits.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const FOOTER_N = parseInt(arg("--footer", "3000"), 10);
@@ -51,56 +52,8 @@ function creds() {
   return { url, key, svc };
 }
 
-const hostOf = (u) => {
-  try { return new URL(u.includes("://") ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); }
-  catch { return null; }
-};
-
-// Credit verbs shared across signals. "site/web/store/website/built/designed/developed/created/
-// made/crafted/powered by" — the full set the task asks for, kept in one place.
-const VERBS = "site|web|store|website|built|designed|developed|created|made|crafted|powered";
-// Footer credit → crediting entity (name) + its link, where present.
-const CREDIT_LINKED = new RegExp(`(?:${VERBS})\\s+by\\s*:?\\s*<a[^>]+href=["']([^"']+)["'][^>]*>([^<]{2,60})</a>`, "gi");
-// Footer credit, text only (no anchor). First char letter/digit (agency names like "i22" / "shoptified"
-// start lowercase or with a digit); this signal only ever matches a KNOWN partner by exact name, so a
-// stray prose match ("made by hand") that doesn't equal a partner is harmless.
-const CREDIT_TEXT = new RegExp(`(?:${VERBS})\\s+by\\s*:?\\s*([A-Za-z0-9][A-Za-z0-9&.\\-' ]{2,40})`, "g");
-// <meta name="generator" content="X"> — usually the platform, occasionally a custom-theme agency.
-const META_GEN = /<meta[^>]+name=["']generator["'][^>]+content=["']([^"']{2,80})["']/i;
-// Theme credit — "theme by/author/credit: X", optionally linked.
-const THEME_CREDIT = /theme\s+(?:by|author|credits?)\s*:?\s*(?:<a[^>]+href=["']([^"']+)["'][^>]*>)?\s*([A-Za-z0-9&.\-' ]{2,40})/i;
-// Credit phrasing inside a single HTML comment's text (run per-comment, so [\s\S] stays bounded).
-const COMMENT_CREDIT = new RegExp(`(?:${VERBS}|design|development)\\s+by\\s*:?\\s*([A-Za-z0-9&.\\-' ]{2,50})`, "i");
-const COMMENT_URL = /(https?:\/\/[^\s"'<>]+)/i;
-// A captured credit name can trail into a URL or a separator ("OrderEazi https…", "Pixel Fusion |").
-// Cut at the first url token and trim surrounding separators/quotes/whitespace.
-const cleanName = (s) => (s || "")
-  .replace(/\s+(?:https?:\/\/|www\.).*$/i, "")
-  .replace(/^["'\s|·—–\-]+|["'\s|·—–\-]+$/g, "")
-  .replace(/\s+/g, " ")
-  .trim();
-
-// Platform / CMS / theme / builder names that are NOT agencies — never an edge, never a candidate.
-const PLATFORM_NOISE = new Set([
-  "shopify", "wordpress", "woocommerce", "wix", "squarespace", "webflow", "elementor", "wp bakery",
-  "wpbakery", "divi", "gutenberg", "drupal", "joomla", "bigcommerce", "prestashop", "magento", "opencart",
-  "hugo", "gatsby", "next.js", "nextjs", "react", "html", "html5", "blogger", "ghost", "framer", "bubble",
-  "shopstar", "bumpa", "selar", "catlog", "google", "cloudflare", "godaddy", "hubspot", "yoast seo",
-  "yoast", "shogun", "pagefly", "gempages", "dawn", "debut", "brooklyn", "impulse", "prestige", "turbo",
-  "flex", "motion", "warehouse", "the team", "us", "me", "admin", "support", "team",
-]);
-const platformNoise = (name) => {
-  const n = (name || "").toLowerCase().trim();
-  if (!n || n.length < 3) return true;
-  if (PLATFORM_NOISE.has(n)) return true;
-  // Theme vendors credit themselves as "theme by X" — not the agency that built the store.
-  if (/\btheme(s)?\b/.test(n)) return true;
-  // "generator"-style strings like "Shopify 2.0" / "WordPress 6.4" — leading platform token.
-  return /^(shopify|wordpress|woocommerce|wix|squarespace|webflow|elementor|drupal|joomla|magento|prestashop|bigcommerce|ghost|hugo|gatsby|framer)\b/.test(n);
-};
-// Hosts that are platforms, theme/template vendors, Shopify/Woo apps or asset libraries — never the
-// agency that built the store, so they are neither edges nor candidates.
-const platformHost = (h) => h && /shopify|wix|squarespace|wordpress|woocommerce|godaddy|cloudflare|webflow|bigcommerce|prestashop|magento|framer|myshopify|wpastra|elegantthemes|outofthesandbox|outtheboxthemes|halothemes|themefreesia|bizbergthemes|cosmoswp|risethemes|rstheme|cleanthemes|svgrepo|smartsupp|spurpopups|shogun|pagefly/.test(h);
+// The builder-credit detection (regexes, name/host noise filters, per-store parse) lives in
+// ./lib/builder-credits.mjs — the single source of truth shared with scripts/credit-incidence.mjs.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function getDirect(url) {
@@ -203,8 +156,6 @@ async function main() {
       if (better) edges.set(k, { partner_id, store_domain, source, confidence, evidence, published });
       return true;
     };
-    // Match a credited name/host to a known partner id.
-    const matchPartner = (name, host) => (host && byHost.get(host)) || (name && byName.get(name.toLowerCase().trim())) || null;
 
     // ── Phase 1: portfolio (self-declared, public) ─────────────────────────────
     let portMatched = 0;
@@ -268,55 +219,11 @@ async function main() {
       if (!html) return;
       fetched++;
       const store = domain.replace(/^www\./, "");
-      const head = html.slice(0, 80_000);   // generator/theme live in <head>
-      const tail = html.slice(-120_000);    // footer credits live at the end
-
-      // (a) footer linked credits — strongest on-page signal.
-      for (const m of tail.matchAll(CREDIT_LINKED)) {
-        const chost = hostOf(m[1]); const cname = cleanName(m[2]);
-        if (platformNoise(cname) || platformHost(chost)) continue;   // "Powered by Shopify" etc. — not a builder
-        const pid = matchPartner(cname, chost);
-        if (pid) { if (addEdge(pid, store, "footer", "public_credit", `credited "${cname}"`, true)) { footMatched++; bump("public_credit"); } }
-        else bankCandidate(cname, chost, domain);
-      }
-      // (b) footer text-only credits — match a KNOWN partner by name only (no banking).
-      for (const m of tail.matchAll(CREDIT_TEXT)) {
-        const cname = cleanName(m[1]);
-        if (platformNoise(cname)) continue;
-        const pid = byName.get(cname.toLowerCase());
-        if (pid && addEdge(pid, store, "footer", "text_credit", `text credit "${cname}"`, false)) { footMatched++; bump("text_credit"); }
-      }
-      // (c) HTML comments crediting an agency.
-      for (const cm of html.matchAll(/<!--([\s\S]{0,400}?)-->/g)) {
-        const body = cm[1];
-        const mm = COMMENT_CREDIT.exec(body);
-        if (!mm) continue;
-        const cname = cleanName(mm[1]);
-        if (platformNoise(cname)) continue;
-        const uhost = hostOf((COMMENT_URL.exec(body) || [])[1] || "");
-        const pid = matchPartner(cname, uhost);
-        if (pid) { if (addEdge(pid, store, "comment", "comment_credit", `html comment "${cname}"`, false)) { footMatched++; bump("comment_credit"); } }
-        else if (uhost) bankCandidate(cname, uhost, domain);
-      }
-      // (d) <meta name="generator"> naming a known partner (rare but asked for).
-      const gm = META_GEN.exec(head);
-      if (gm) {
-        const gname = cleanName(gm[1]);
-        if (!platformNoise(gname)) {
-          const pid = byName.get(gname.toLowerCase());
-          if (pid && addEdge(pid, store, "generator", "generator_meta", `meta generator "${gname}"`, false)) { footMatched++; bump("generator_meta"); }
-        }
-      }
-      // (e) theme author/credit.
-      const tm = THEME_CREDIT.exec(head) || THEME_CREDIT.exec(tail);
-      if (tm) {
-        const thost = hostOf(tm[1] || ""); const tname = cleanName(tm[2] || "");
-        if (!platformNoise(tname)) {
-          const pid = matchPartner(tname, thost);
-          if (pid) { if (addEdge(pid, store, "theme", "theme_author", `theme credit "${tname}"`, false)) { footMatched++; bump("theme_author"); } }
-          else if (thost) bankCandidate(tname, thost, domain);
-        }
-      }
+      // One shared detector (lib/builder-credits.mjs) returns the edges to known partners and the
+      // unknown linked credits to bank; addEdge dedups to the strongest edge per (partner, store).
+      const res = detectCredits(html, { byName, byHost, store });
+      for (const m of res.matched) if (addEdge(m.partner_id, m.store, m.source, m.confidence, m.evidence, m.published)) { footMatched++; bump(m.confidence); }
+      for (const c of res.candidates) bankCandidate(c.name, c.host, domain);
     });
     console.log(`on-page: fetched ${fetched}/${stores.length} (429:${http429} [direct:${direct429}] err:${httpErr}${aborted ? " — ABORTED on direct-lane 429 rate" : ""}), ${footMatched} credits matched known partners, ${cand.size} new agency candidates`);
     console.log("  matches by signal:", JSON.stringify(bySignal));
