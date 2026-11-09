@@ -17,6 +17,7 @@
 
 import { NextResponse } from "next/server";
 import { chargeExport, openExport, remainingAllowance } from "@/lib/export-gate";
+import { hasIntegrations, minPlanForIntegrations } from "@/lib/plans";
 import { maxPerPush, pushLeads, PROVIDERS, type ProviderKey } from "@/lib/integrations";
 import { outreachCounts, outreachLeads, type OutreachQuality } from "@/lib/imported";
 
@@ -29,7 +30,17 @@ const KNOWN = new Set<string>(PROVIDERS.map((p) => p.key));
 export async function POST(req: Request) {
   const gate = await openExport();
   if (!gate.ok) return gate.response;
-  const { email, admin, scope } = gate;
+  const { email, admin, scope, plan } = gate;
+
+  // Connections is a Partner capability (lib/plans). Checked here as well as in the UI because
+  // this route is the one that actually moves the data — the panel can be bypassed, this can't.
+  if (!admin && !hasIntegrations(plan)) {
+    const need = minPlanForIntegrations();
+    return NextResponse.json(
+      { error: `Pushing leads into a connected tool is part of ${need.label}.`, upgrade: need.key },
+      { status: 403 },
+    );
+  }
 
   let body: {
     provider?: string; campaignId?: string; tag?: string; country?: string;

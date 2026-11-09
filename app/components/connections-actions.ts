@@ -2,7 +2,7 @@
 
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
-import { platformsFor } from "@/lib/plans";
+import { platformsFor, hasIntegrations } from "@/lib/plans";
 import { outreachCounts } from "@/lib/imported";
 
 export type CohortCounts = { reachable: number; all: number };
@@ -31,6 +31,9 @@ export async function cohortCountsAction(
   if (!admin) {
     const sub = await getSubscriber(email).catch(() => null);
     if (!hasAccess(sub)) return { ok: false, error: "Your subscription doesn't include lead data." };
+    // Same entitlement as the panel it feeds. Counts aren't sensitive, but every door to a feature
+    // should answer the same question — the habit is what #114 was about.
+    if (!hasIntegrations(sub?.plan)) return { ok: false, error: "Connections isn't on your plan." };
     platforms = platformsFor(sub?.plan);
   }
 

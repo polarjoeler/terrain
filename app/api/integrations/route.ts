@@ -1,10 +1,12 @@
 /** Manage outreach connections — connect (verify + store encrypted key), pick a target campaign,
  *  disconnect. Was admin-only; now serves the customer Connections panel too.
  *
- *  Gated on ACCESS, not on a paid plan, deliberately: connecting reveals nothing and sends nothing,
- *  so a trialling account can wire up Instantly or HubSpot during the trial and have it ready. The
- *  door that hands over data is the push, and that one goes through lib/export-gate — which refuses
- *  a trial. Keep the asymmetry: loosening it here is safe, loosening it there is not.
+ *  Two different gates, and the difference is deliberate. Connections is a Partner capability, so
+ *  the plan is checked here. But within that plan it is gated on ACCESS, not on a paid status:
+ *  connecting reveals nothing and sends nothing, so an account on a Partner TRIAL can wire up
+ *  Instantly or HubSpot and have it ready for the day it converts. The door that hands over data is
+ *  the push, and that one additionally goes through lib/export-gate, which refuses a trial.
+ *  Loosening the status check here is safe; loosening it there is not.
  *
  *  A connection belongs to the org (lib/integrations funnels every owner through orgKey), so a
  *  seat holder connecting Slack and the payer revoking it are acting on the same row.
@@ -13,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess } from "@/lib/subscriptions";
+import { hasIntegrations, minPlanForIntegrations } from "@/lib/plans";
 import {
   setConnection, updateConfig, deleteConnection, verifyKey, listCampaigns,
   PROVIDERS, type ProviderKey,
@@ -29,6 +32,13 @@ export async function POST(req: Request) {
   if (!isAdmin(email)) {
     const sub = await getSubscriber(email).catch(() => null);
     if (!hasAccess(sub)) return NextResponse.json({ error: "no_access" }, { status: 403 });
+    if (!hasIntegrations(sub?.plan)) {
+      const need = minPlanForIntegrations();
+      return NextResponse.json(
+        { error: `Connections is part of ${need.label}.`, upgrade: need.key },
+        { status: 403 },
+      );
+    }
   }
 
   let body: { action?: string; provider?: string; apiKey?: string; config?: Record<string, unknown> };
