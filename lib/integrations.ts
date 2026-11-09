@@ -64,14 +64,24 @@ export type ConnectField = { key: string; label: string; placeholder?: string };
  *  limits (50 and 20 lines shown) make a bulk dump pointless. */
 const DEFAULT_MAX_PER_PUSH = 1_000;
 
+/** Slack and WhatsApp are notification channels: they render a fixed number of lines and the rest
+ *  of the batch is simply gone. Now that a push is metered as an export (see lib/export-gate), a
+ *  ceiling above the display limit would charge for leads the channel never showed — 200 rows off
+ *  a $69 plan's 500 to put 50 names in a channel. So the ceiling IS the display limit, from one
+ *  constant each, and the adapters report the shown count as delivered rather than the batch size.
+ *  Belt and braces on purpose: the ceiling keeps the UI honest about what it will send, the
+ *  adapters' count keeps the charge honest for any caller that didn't clamp. */
+const SLACK_LINES = 50;
+const WHATSAPP_LINES = 20; // the Twilio message body is capped at 1600 characters
+
 export const PROVIDERS: { key: ProviderKey; label: string; hint: string; secretLabel?: string; fields?: ConnectField[]; maxPerPush?: number }[] = [
   { key: "instantly", label: "Instantly.ai", hint: "API key from Settings → Integrations → API", maxPerPush: 1_000 },
   { key: "smartlead", label: "Smartlead", hint: "API key from Settings → API Keys", maxPerPush: 5_000 },
-  { key: "slack", label: "Slack", hint: "Incoming Webhook URL — Slack → Apps → Incoming Webhooks → Add to a channel", maxPerPush: 200 },
+  { key: "slack", label: "Slack", hint: "Incoming Webhook URL — Slack → Apps → Incoming Webhooks → Add to a channel", maxPerPush: SLACK_LINES },
   {
     key: "whatsapp", label: "WhatsApp (Twilio)",
     hint: "Sends your lead list to a WhatsApp number via your own Twilio account. Twilio charges per message; sends run on your account.",
-    secretLabel: "Twilio Auth Token", maxPerPush: 50,
+    secretLabel: "Twilio Auth Token", maxPerPush: WHATSAPP_LINES,
     fields: [
       { key: "accountSid", label: "Account SID", placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
       { key: "from", label: "From (WhatsApp sender)", placeholder: "+14155238886 (Twilio sandbox or approved sender)" },
@@ -167,7 +177,7 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
     },
     async pushLeads(webhookUrl, _campaignId, leads) {
       const site = (w?: string | null) => (w || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
-      const shown = leads.slice(0, 50);
+      const shown = leads.slice(0, SLACK_LINES);
       const lines = shown.map((l) => {
         const name = l.company || site(l.website) || l.email;
         const web = site(l.website);
@@ -176,7 +186,8 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
       const more = leads.length > shown.length ? `\n…and ${leads.length - shown.length} more.` : "";
       const text = `:dart: *${leads.length} lead${leads.length === 1 ? "" : "s"} from Terrain*\n${lines.join("\n")}${more}`;
       const res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-      return res.ok ? { pushed: leads.length } : { pushed: 0, error: `Slack ${res.status}` };
+      // shown.length, not leads.length — the lines past the cap were never delivered and must not be charged.
+      return res.ok ? { pushed: shown.length } : { pushed: 0, error: `Slack ${res.status}` };
     },
   },
   // WhatsApp via Twilio — secret = Auth Token; config = { accountSid, from, to }. No campaigns:
@@ -198,7 +209,7 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
       const { accountSid, from, to } = twilioCfg(config);
       if (!accountSid || !from || !to) return { pushed: 0, error: "Missing Account SID, From or To." };
       const site = (w?: string | null) => (w || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
-      const shown = leads.slice(0, 20); // WhatsApp body is capped at 1600 chars
+      const shown = leads.slice(0, WHATSAPP_LINES);
       const lines = shown.map((l) => {
         const name = l.company || site(l.website) || l.email;
         const web = site(l.website);
@@ -212,7 +223,7 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
         headers: { Authorization: twilioAuth(accountSid, authToken), "Content-Type": "application/x-www-form-urlencoded" },
         body: form.toString(),
       });
-      if (res.ok) return { pushed: leads.length };
+      if (res.ok) return { pushed: shown.length }; // see the Slack note — only the shown lines were delivered
       // Twilio returns a helpful JSON { message, code } — surface it (e.g. 63016 = outside the 24h window → needs a template).
       let detail = `Twilio ${res.status}`;
       try { const j = await res.json(); if (j?.message) detail = `${j.message}${j.code ? ` (${j.code})` : ""}`; } catch {}

@@ -16,7 +16,6 @@
  */
 
 import { NextResponse } from "next/server";
-import { isAdmin } from "@/lib/auth";
 import { chargeExport, openExport, remainingAllowance } from "@/lib/export-gate";
 import { maxPerPush, pushLeads, PROVIDERS, type ProviderKey } from "@/lib/integrations";
 import { outreachCounts, outreachLeads, type OutreachQuality } from "@/lib/imported";
@@ -111,18 +110,4 @@ export async function POST(req: Request) {
     limit: charge?.limit ?? null,
     error: pushError,
   });
-}
-
-// Kept so a future customer-facing panel can read cohort sizes without pushing.
-export async function GET(req: Request) {
-  const gate = await openExport();
-  if (!gate.ok) return gate.response;
-  const url = new URL(req.url);
-  const tag = isAdmin(gate.email) ? url.searchParams.get("tag") ?? undefined : undefined;
-  const counts = await outreachCounts({
-    country: url.searchParams.get("country") ?? undefined,
-    tag,
-    platforms: gate.scope,
-  });
-  return NextResponse.json({ ok: true, ...counts });
 }
