@@ -198,6 +198,17 @@ export async function getFocus(email: string): Promise<Focus> {
   } catch { return EMPTY_FOCUS; }
 }
 
+/** The focus for an ORG, with no individual's overlay — what an org-scoped channel (a Slack
+ *  alert feed, a shared CRM) should be filtered by. Deliberately not getFocus() with the org key
+ *  passed as an email: that happens to work today only because orgKey() is idempotent on a bare
+ *  domain, which is a coincidence, not a contract. */
+export async function orgFocus(org: string): Promise<Focus> {
+  try {
+    const [o] = await db()`SELECT * FROM org_profile WHERE org = ${org.trim().toLowerCase()}`;
+    return focusFromProfiles(o, null);
+  } catch { return EMPTY_FOCUS; }
+}
+
 /** Does this email's org already have a company profile? (→ decides short vs full onboarding.) */
 export async function orgHasProfile(email: string): Promise<boolean> {
   return (await getOrgProfile(orgKey(email))) != null;

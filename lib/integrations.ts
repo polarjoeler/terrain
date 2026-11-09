@@ -98,9 +98,16 @@ export type PushLead = { email: string; company?: string | null; website?: strin
 export type Campaign = { id: string; name: string };
 export type Config = Record<string, unknown>;
 
+/** A channel post, not a lead handover: market-event alerts (lib/alerts) carry their own
+ *  rendering and are not metered as exports. `blocks` is Slack Block Kit; a provider that can't
+ *  render blocks falls back to `text`. */
+export type NotifyMessage = { text: string; blocks?: unknown[] };
+
 type Adapter = {
   listCampaigns: (secret: string, config: Config) => Promise<Campaign[]>;
   pushLeads: (secret: string, campaignId: string, leads: PushLead[], config: Config) => Promise<{ pushed: number; error?: string }>;
+  /** Only for providers that are a destination for notifications rather than a lead sink. */
+  notify?: (secret: string, msg: NotifyMessage, config: Config) => Promise<void>;
 };
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
@@ -177,6 +184,15 @@ const ADAPTERS: Record<ProviderKey, Adapter> = {
       const text = `:dart: *${leads.length} lead${leads.length === 1 ? "" : "s"} from Terrain*\n${lines.join("\n")}${more}`;
       const res = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       return res.ok ? { pushed: leads.length } : { pushed: 0, error: `Slack ${res.status}` };
+    },
+    async notify(webhookUrl, msg) {
+      const res = await fetch(webhookUrl, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: msg.text, ...(msg.blocks ? { blocks: msg.blocks } : {}) }),
+      });
+      // Throw rather than report: lib/alerts only records delivery on success, so a failed post
+      // is retried next run instead of being silently marked sent.
+      if (!res.ok) throw new Error(`Slack ${res.status}: ${(await res.text()).slice(0, 160)}`);
     },
   },
   // WhatsApp via Twilio — secret = Auth Token; config = { accountSid, from, to }. No campaigns:
@@ -344,6 +360,27 @@ export async function pushLeads(owner: string, provider: ProviderKey, campaignId
   if (!c) throw new Error("Not connected");
   if (!leads.length) return { pushed: 0 };
   return ADAPTERS[provider].pushLeads(c.secret, campaignId, leads, c.config);
+}
+
+/** Can this provider receive a notification (as opposed to a lead push)? */
+export const canNotify = (provider: ProviderKey): boolean => typeof ADAPTERS[provider].notify === "function";
+
+/** Post a notification to a connected channel. Throws on failure, by design (see slack.notify). */
+export async function notify(owner: string, provider: ProviderKey, msg: NotifyMessage): Promise<void> {
+  const adapter = ADAPTERS[provider];
+  if (!adapter.notify) throw new Error(`${provider} cannot receive notifications`);
+  const c = await credsFor(owner, provider);
+  if (!c) throw new Error("Not connected");
+  await adapter.notify(c.secret, msg, c.config);
+}
+
+/** Every org with this provider connected — the recipient list for a scheduled run. Owners are
+ *  already org keys (see the header), so these are passed straight back into notify(). */
+export async function listConnectionOwners(provider: ProviderKey): Promise<string[]> {
+  await ensure();
+  const rows = await db()<{ owner: string }[]>`
+    SELECT owner FROM integrations WHERE provider = ${provider} ORDER BY owner`;
+  return rows.map((r) => r.owner);
 }
 
 /** Verify a key works (used at connect time) — returns campaigns or throws. */
