@@ -130,21 +130,101 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
 
 /** Contactable leads (have an email) for outreach push, optionally filtered by
  *  market + a curated cohort tag. Shaped for the integration adapters. */
-export async function outreachLeads(opts: { country?: string; tag?: string } = {}): Promise<
+export type OutreachOpts = {
+  country?: string;
+  tag?: string;
+  /** The plan's platform ceiling (lib/plans.platformsFor). null/absent = unscoped (admin only). */
+  platforms?: string[] | null;
+  /** "reachable" (the default) keeps only addresses that reach a person and are not a known
+   *  bounce. "all" includes the generic info@/hello@ queue — a deliberate, warned opt-in. */
+  quality?: OutreachQuality;
+  limit?: number;
+};
+export type OutreachQuality = "reachable" | "all";
+
+/** Contacts worth sending to, highest estimated revenue first.
+ *
+ *  Two rules here are load-bearing and easy to undo by accident:
+ *
+ *  1. **Never `contact_email_guess`.** The address below is the PUBLISHED one — `contact_email`
+ *     once the contact lane has actually checked the store, else the imported `email`. The guess
+ *     column holds derived `first@domain` addresses from the LinkedIn/web hunt; they are kept
+ *     separate precisely because they are unverified, and for group-owned chains (an exec at the
+ *     holding company's domain) the guess is wrong by construction. A guess belongs in a CSV a
+ *     human reviews, never in an automated send.
+ *  2. **`contact_mx_ok IS NOT FALSE`, not `= true`.** FALSE means the domain publishes no MX at
+ *     all — a guaranteed bounce. NULL means unchecked, which is most of the base; reading NULL as
+ *     undeliverable would silently drop almost everything.
+ *  3. **Reachability is reachesAPerson(), not contact_type alone** — see the note on it below.
+ *
+ *  The default `quality: "reachable"` is a deliberate product decision, not a performance one:
+ *  on the measured ZA top-1000 only ~17% of contactable stores reach a person and ~74% are a
+ *  generic queue, so an unfiltered push into a sending tool burns the customer's domain on
+ *  bounces. Widening to "all" is the caller's explicit choice.
+ */
+export async function outreachLeads(opts: OutreachOpts = {}): Promise<
   { email: string; company: string | null; website: string }[]
 > {
   await ensure();
-  const { country, tag } = opts;
+  const { country, tag, platforms, quality = "reachable", limit } = opts;
   const rows = await db()<{ email: string; company: string | null; website: string }[]>`
     SELECT CASE WHEN contact_checked_at IS NOT NULL THEN COALESCE(contact_email, email) ELSE email END AS email,
            name AS company, domain AS website FROM imported_stores
-    WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+    WHERE ${outreachWhere({ country, tag, platforms, quality })}
+    ORDER BY estimated_monthly_sales DESC NULLS LAST
+    ${typeof limit === "number" ? db()`LIMIT ${Math.max(0, Math.floor(limit))}` : db()``}`;
+  return rows.map((r) => ({ email: r.email, company: r.company, website: r.website }));
+}
+
+/** How many leads a cohort holds at each quality bar — so the UI can say "174 of 1,000 reach a
+ *  person" before anyone spends a send. One query, two counts. */
+export async function outreachCounts(
+  opts: Omit<OutreachOpts, "quality" | "limit"> = {},
+): Promise<{ reachable: number; all: number }> {
+  await ensure();
+  const [r] = await db()<{ reachable: string; all: string }[]>`
+    SELECT count(*) FILTER (WHERE ${reachesAPerson()}) AS reachable,
+           count(*) AS all
+    FROM imported_stores
+    WHERE ${outreachWhere({ ...opts, quality: "all" })}`;
+  return { reachable: Number(r?.reachable ?? 0), all: Number(r?.all ?? 0) };
+}
+
+/** "This address reaches a person" — the bar a cold send should clear.
+ *
+ *  NOT simply `contact_type IN ('named','role_targeted')`. That column means two different things
+ *  depending on who wrote it. The contact-enrich classifier derives it FROM the published address,
+ *  which is what we want. The LinkedIn/web decision-maker hunt then overwrites it to 'named' to
+ *  record that a HUMAN WAS FOUND, while deliberately leaving the published address alone and
+ *  parking the person's derived address in contact_email_guess. So a hunt row can read 'named'
+ *  while the address we would actually send to is still info@ — measured on 59 published rows,
+ *  e.g. toolcraft.co.za (Steven Cresswell found, contact_email still info@toolcraft.co.za).
+ *  Pushing those tells the customer they are writing to a named owner when they are writing to
+ *  the shop queue.
+ *
+ *  contact_source is the clean discriminator: the hunt stamps 'linkedin' / 'web-hunt', the
+ *  classifier stamps the page it read. Excluding hunt rows leaves only 4 of 6,134 classifier
+ *  'named' rows with a generic-looking local part (0.07% — the classifier's own residual error),
+ *  so this is sufficient on its own and needs no copy of the classifier's role-word vocabulary
+ *  here. One list, in scripts/contact-enrich.mjs. role_targeted is unaffected (0 hunt rows).
+ *
+ *  A function, not a const: a module-level db() would run at import time, before the pool is
+ *  configured, and would reuse one fragment across connections.
+ */
+const reachesAPerson = () => db()`contact_type IN ('named','role_targeted')
+      AND contact_mx_ok IS NOT FALSE
+      AND (contact_source IS NULL OR contact_source NOT IN ('linkedin','web-hunt'))`;
+
+/** Shared predicate, so the count and the push can never disagree about what a lead is. */
+function outreachWhere(opts: Omit<OutreachOpts, "limit">) {
+  const { country, tag, platforms, quality = "reachable" } = opts;
+  return db()`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) IS NOT NULL
       AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) <> ''
       ${country ? db()`AND country = ${country}` : db()``}
-      ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}
-    ORDER BY estimated_monthly_sales DESC NULLS LAST`;
-  return rows.map((r) => ({ email: r.email, company: r.company, website: r.website }));
+      ${platforms?.length ? db()`AND platform = ANY(${db().array(platforms)})` : db()``}
+      ${quality === "reachable" ? db()`AND ${reachesAPerson()}` : db()``}
+      ${tag ? db()`AND domain IN (SELECT domain FROM store_tags WHERE tag = ${tag})` : db()``}`;
 }
 
 /** Which of these domains are already in imported_stores (published or pending)?
