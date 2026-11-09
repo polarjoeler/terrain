@@ -19,10 +19,13 @@ const nextConfig: NextConfig = {
     // All entries are host-gated, so the Terrain host is unaffected.
     return {
       beforeFiles: [
-        { source: "/", has: radarHost, destination: "/radar" },
+        // Radar folded into Terrain (Nov 2026): the subdomain's front door is now the
+        // Terrain-styled capability page, not a separate product landing page. /radar
+        // itself is the signed-in surface and would otherwise bounce visitors to /login.
+        { source: "/", has: radarHost, destination: "/fraud" },
         { source: "/scan", has: radarHost, destination: "/radar/scan" },
         { source: "/scan/:id", has: radarHost, destination: "/radar/scan/:id" },
-        { source: "/dashboard", has: radarHost, destination: "/radar/dashboard" },
+        { source: "/dashboard", has: radarHost, destination: "/radar" },
         { source: "/detections", has: radarHost, destination: "/admin/radar" },
       ],
     };

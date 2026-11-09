@@ -588,7 +588,7 @@ function RadarSection() {
           >
             Run a free brand audit →
           </Link>
-          <Link href="/radar" className="text-sm text-cream/60 hover:text-cream">
+          <Link href="/fraud" className="text-sm text-cream/60 hover:text-cream">
             How Radar works
           </Link>
         </div>
