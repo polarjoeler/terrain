@@ -165,6 +165,13 @@ async function main() {
     await sql`CREATE TABLE IF NOT EXISTS partner_candidates (
       credit_name text PRIMARY KEY, credit_url text, example_store text, hits int DEFAULT 1,
       first_seen_at timestamptz NOT NULL DEFAULT now())`;
+    // Resumable marker so each capped run drains NEW stores instead of re-scanning the same
+    // top-by-sales head. Stamped on every store we got a final (non-429) response from — processed
+    // or dead — so only transient failures (429 / network) retry next pass. Guarded ALTER (runs only
+    // when genuinely missing, so a no-op never takes an exclusive lock). Cheap nullable column.
+    const [{ present }] = await sql`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+      WHERE table_name='imported_stores' AND column_name='partner_checked_at') present`;
+    if (!present) await sql`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS partner_checked_at timestamptz`.catch(() => {});
 
     // Identity maps for matching credits → known partners.
     const partners = await sql`SELECT id, name, website_url FROM service_partners`;
@@ -229,11 +236,13 @@ async function main() {
       SELECT domain, platform FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND country = ANY(${COUNTRIES})
+        AND partner_checked_at IS NULL
       ORDER BY estimated_monthly_sales DESC NULLS LAST LIMIT ${FOOTER_N + attributed.size + 200}`)
       .filter((s) => !attributed.has(s.domain.replace(/^www\./, "")))
       .slice(0, FOOTER_N);
     console.log(`on-page queue: ${stores.length} stores (proxy lane ${stores.filter((s) => PROXIES.length && isShopify(s.platform)).length} shopify / direct lane ${stores.filter((s) => !(PROXIES.length && isShopify(s.platform))).length}); proxies loaded: ${PROXIES.length}`);
     let footMatched = 0, candidates = 0, fetched = 0, http429 = 0, httpErr = 0, direct429 = 0;
+    const checked = [];   // stores that returned a final (non-429) response → stamp partner_checked_at
     const bySignal = {};
     const bump = (c) => { bySignal[c] = (bySignal[c] ?? 0) + 1; };
     const cand = new Map();
@@ -251,8 +260,9 @@ async function main() {
         http429++;
         // Only the DIRECT lane spends the home residential IP budget; abort on sustained 429s there.
         if (r.lane === "direct" && (++direct429, (fetched + direct429) >= 40 && direct429 / (fetched + direct429) > 0.2)) aborted = true;
-        return;
+        return;   // transient — leave unmarked so it retries next pass
       }
+      checked.push(domain);   // got a final response (processed or dead) — drain it from future passes
       if (r.status < 200 || r.status >= 300) { httpErr++; return; }
       const html = r.html;
       if (!html) return;
@@ -316,6 +326,14 @@ async function main() {
         [...cand.values()].sort((a, b) => b.hits - a.hits).slice(0, 12).map((c) => `${c.credit_name}(${c.hits})`).join(", "));
       return;
     }
+
+    // Stamp the resumable marker on every store we got a final response from, so the next capped run
+    // advances past them. Bulk UPDATE in chunks (one write-RTT per 1000), not per-row.
+    for (let i = 0; i < checked.length; i += 1000) {
+      await sql`UPDATE imported_stores SET partner_checked_at = now()
+        WHERE domain = ANY(${checked.slice(i, i + 1000)}) AND partner_checked_at IS NULL`.catch(() => {});
+    }
+    console.log(`marked ${checked.length} stores partner_checked_at`);
 
     // Persist edges + candidates, recompute counts.
     const eArr = [...edges.values()];
