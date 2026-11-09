@@ -9,10 +9,16 @@
  *    openExport()   — identity, access, sharing gate, platform ceiling  (before the query)
  *    chargeExport() — reserve the rows against the monthly quota        (after the count)
  *  Charging after the count means a customer is never billed rows the filter didn't return.
+ *
+ *  A CSV download is atomic, so it can afford to REFUSE a request that exceeds the month's
+ *  allowance. A push to an outreach tool is not: it half-delivers, and a customer whose 12,000
+ *  matched leads are refused outright learns nothing useful. So push surfaces additionally call
+ *  remainingAllowance() to clamp the query up front, and charge afterwards for what the provider
+ *  actually accepted. Both still go through this module — there is still no third place.
  */
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { consumeExportQuota, getSubscriber, hasAccess } from "@/lib/subscriptions";
+import { consumeExportQuota, getSubscriber, hasAccess, usageFor } from "@/lib/subscriptions";
 import { platformsFor } from "@/lib/plans";
 import { sharingGate } from "@/lib/sessions";
 import type { BrowseFilters } from "@/lib/browse";
@@ -68,6 +74,14 @@ export async function openExport(): Promise<Denied | Opened> {
  *  intersected with any client `platform` filter in buildWhere, so this can only narrow. */
 export const scopeFilters = (f: BrowseFilters, scope: string[] | null): BrowseFilters =>
   scope ? { ...f, planPlatforms: scope } : f;
+
+/** Rows left this month, for surfaces that must CLAMP rather than refuse (see the header).
+ *  null = unmetered, so the caller imposes only its own delivery ceiling. */
+export async function remainingAllowance(email: string, admin: boolean): Promise<number | null> {
+  if (admin) return null;
+  const sub = await getSubscriber(email).catch(() => null);
+  return usageFor(sub).remaining;
+}
 
 /** Reserve `rows` against the monthly allowance. Unmetered plans are counted, never refused. */
 export async function chargeExport(

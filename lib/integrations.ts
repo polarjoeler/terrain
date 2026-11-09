@@ -1,14 +1,26 @@
 /** Outreach integrations — the shared "Connections" spine. Stores each tool's
  *  API key ENCRYPTED (AES-256-GCM, key derived from AUTH_SECRET), and exposes a
  *  uniform adapter interface (list campaigns, push leads) so each new tool is a
- *  thin addition. Currently: Instantly, Smartlead. */
+ *  thin addition. Currently: Instantly, Smartlead, Slack, WhatsApp, HubSpot, Clay.
+ *
+ *  A connection belongs to the ORG, not the address that made it: lib/onboarding
+ *  already scopes Slack and CRM as `scope: "org"`, and a seat holder who connects
+ *  Slack must not create a connection the payer can neither see nor revoke. So every
+ *  entry point here funnels `owner` through orgKey() — the same resolution seats use
+ *  (see lib/profile.ts). A consumer inbox resolves to itself, so personal accounts are
+ *  unaffected and no backfill is needed for them. */
 
 import { db as sharedDb } from "./db";
+import { orgKey } from "./profile";
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from "node:crypto";
 
 function db() {
   return sharedDb();
 }
+
+/** Every read and write is keyed on this, never on the raw address. */
+const ownerKey = (owner: string) => orgKey(owner);
+
 // Once per process — not per request (see lib/tags.ts). The DDL takes ACCESS EXCLUSIVE.
 let _ensured: Promise<void> | null = null;
 function ensure(): Promise<void> {
@@ -42,14 +54,24 @@ export type ProviderKey = "instantly" | "smartlead" | "slack" | "whatsapp" | "hu
  *  renders one input per field; their values are stored (unencrypted) in config. */
 export type ConnectField = { key: string; label: string; placeholder?: string };
 
-export const PROVIDERS: { key: ProviderKey; label: string; hint: string; secretLabel?: string; fields?: ConnectField[] }[] = [
-  { key: "instantly", label: "Instantly.ai", hint: "API key from Settings → Integrations → API" },
-  { key: "smartlead", label: "Smartlead", hint: "API key from Settings → API Keys" },
-  { key: "slack", label: "Slack", hint: "Incoming Webhook URL — Slack → Apps → Incoming Webhooks → Add to a channel" },
+/** Ceiling on one push, per provider. This is a DELIVERY limit, not a commercial one — the
+ *  plan's row allowance is enforced separately in lib/export-gate. It exists because the
+ *  adapters below differ by an order of magnitude in cost per lead: Instantly and Clay issue
+ *  one sequential HTTP request PER lead, so a few thousand would exceed the route's 300s
+ *  maxDuration and time out HALF-DELIVERED — and a half-delivered push that charged for the
+ *  whole cohort is the worst outcome available. Smartlead and HubSpot batch 100 at a time, so
+ *  they can take far more. Slack and WhatsApp are notification channels whose own message
+ *  limits (50 and 20 lines shown) make a bulk dump pointless. */
+const DEFAULT_MAX_PER_PUSH = 1_000;
+
+export const PROVIDERS: { key: ProviderKey; label: string; hint: string; secretLabel?: string; fields?: ConnectField[]; maxPerPush?: number }[] = [
+  { key: "instantly", label: "Instantly.ai", hint: "API key from Settings → Integrations → API", maxPerPush: 1_000 },
+  { key: "smartlead", label: "Smartlead", hint: "API key from Settings → API Keys", maxPerPush: 5_000 },
+  { key: "slack", label: "Slack", hint: "Incoming Webhook URL — Slack → Apps → Incoming Webhooks → Add to a channel", maxPerPush: 200 },
   {
     key: "whatsapp", label: "WhatsApp (Twilio)",
     hint: "Sends your lead list to a WhatsApp number via your own Twilio account. Twilio charges per message; sends run on your account.",
-    secretLabel: "Twilio Auth Token",
+    secretLabel: "Twilio Auth Token", maxPerPush: 50,
     fields: [
       { key: "accountSid", label: "Account SID", placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" },
       { key: "from", label: "From (WhatsApp sender)", placeholder: "+14155238886 (Twilio sandbox or approved sender)" },
@@ -59,14 +81,18 @@ export const PROVIDERS: { key: ProviderKey; label: string; hint: string; secretL
   {
     key: "hubspot", label: "HubSpot",
     hint: "Private App token — HubSpot → Settings → Integrations → Private Apps. Needs crm.objects.contacts.write.",
-    secretLabel: "Private App token",
+    secretLabel: "Private App token", maxPerPush: 5_000,
   },
   {
     key: "clay", label: "Clay",
     hint: "Webhook URL — in a Clay table: Add source → Import data from Webhook → copy the URL. Each lead lands as a row to enrich.",
-    secretLabel: "Clay webhook URL",
+    secretLabel: "Clay webhook URL", maxPerPush: 1_000,
   },
 ];
+
+/** Delivery ceiling for one push to this provider. */
+export const maxPerPush = (provider: ProviderKey): number =>
+  PROVIDERS.find((p) => p.key === provider)?.maxPerPush ?? DEFAULT_MAX_PER_PUSH;
 
 export type PushLead = { email: string; company?: string | null; website?: string | null };
 export type Campaign = { id: string; name: string };
@@ -277,32 +303,32 @@ export async function setConnection(owner: string, provider: ProviderKey, apiKey
   await ensure();
   await db()`
     INSERT INTO integrations (owner, provider, secret, config)
-    VALUES (${owner.toLowerCase()}, ${provider}, ${encrypt(apiKey)}, ${db().json(config as Record<string, string | number | boolean | null>)})
+    VALUES (${ownerKey(owner)}, ${provider}, ${encrypt(apiKey)}, ${db().json(config as Record<string, string | number | boolean | null>)})
     ON CONFLICT (owner, provider) DO UPDATE SET secret = EXCLUDED.secret, config = EXCLUDED.config, updated_at = now()`;
 }
 
 export async function updateConfig(owner: string, provider: ProviderKey, config: Record<string, unknown>) {
   await ensure();
   await db()`UPDATE integrations SET config = ${db().json(config as Record<string, string | number | boolean | null>)}, updated_at = now()
-    WHERE owner = ${owner.toLowerCase()} AND provider = ${provider}`;
+    WHERE owner = ${ownerKey(owner)} AND provider = ${provider}`;
 }
 
 export async function deleteConnection(owner: string, provider: ProviderKey) {
   await ensure();
-  await db()`DELETE FROM integrations WHERE owner = ${owner.toLowerCase()} AND provider = ${provider}`;
+  await db()`DELETE FROM integrations WHERE owner = ${ownerKey(owner)} AND provider = ${provider}`;
 }
 
 /** Connected providers for an owner (never returns the decrypted key). */
 export async function listConnections(owner: string): Promise<ConnectionInfo[]> {
   await ensure();
   const rows = await db()<{ provider: ProviderKey; config: Record<string, unknown>; created_at: Date }[]>`
-    SELECT provider, config, created_at FROM integrations WHERE owner = ${owner.toLowerCase()}`;
+    SELECT provider, config, created_at FROM integrations WHERE owner = ${ownerKey(owner)}`;
   return rows.map((r) => ({ provider: r.provider, config: r.config ?? {}, connectedAt: new Date(r.created_at).toISOString() }));
 }
 
 async function credsFor(owner: string, provider: ProviderKey): Promise<{ secret: string; config: Config } | null> {
   await ensure();
-  const [r] = await db()<{ secret: string; config: Config }[]>`SELECT secret, config FROM integrations WHERE owner = ${owner.toLowerCase()} AND provider = ${provider}`;
+  const [r] = await db()<{ secret: string; config: Config }[]>`SELECT secret, config FROM integrations WHERE owner = ${ownerKey(owner)} AND provider = ${provider}`;
   return r ? { secret: decrypt(r.secret), config: r.config ?? {} } : null;
 }
 

@@ -69,7 +69,21 @@ function ProviderCard({
     if (!campaignId) { setMsg("Pick a campaign first."); return; }
     setBusy(true); setMsg("Pushing leads…");
     const { ok, j } = await call({ campaignId, tag: cohort || undefined, country: country || undefined }, "/api/admin/integrations/push");
-    setMsg(ok ? `Pushed ${j.pushed}/${j.total} leads${j.note ? ` — ${j.note}` : ""}.` : (j.error ?? "Push failed"));
+    // Report the quality split, not just the count — on the measured ZA head only ~17% of
+    // contactable stores reach a person, and that is the number worth seeing before a send.
+    setMsg(
+      ok
+        ? [
+            `Pushed ${j.pushed}/${j.sent ?? j.pushed} leads`,
+            typeof j.reachable === "number" && typeof j.contactable === "number"
+              ? ` — ${j.reachable.toLocaleString()} of ${j.contactable.toLocaleString()} contactable stores reach a person`
+              : "",
+            j.truncated ? ` (capped at ${j.truncated.cap.toLocaleString()} of ${j.truncated.matched.toLocaleString()} matched)` : "",
+            j.note ? ` — ${j.note}` : "",
+            j.error ? ` — ${j.error}` : "",
+          ].join("") + "."
+        : (j.error ?? "Push failed"),
+    );
     setBusy(false);
   }
 
