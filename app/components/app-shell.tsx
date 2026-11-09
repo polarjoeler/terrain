@@ -22,6 +22,7 @@ const ICONS: Record<string, React.ReactNode> = {
   Intelligence: I(<><path d="M3 17V3M3 17h14M6.5 14l3-4 3 2.5L17 6" /></>),
   Discover: I(<><circle cx="10" cy="10" r="7.25" /><path d="m12.8 7.2-1.9 4.9-4.9 1.9 1.9-4.9 4.9-1.9Z" /></>),
   Digests: I(<><rect x="2.75" y="4.25" width="14.5" height="11.5" rx="1.5" /><path d="m3.2 5 6.8 5 6.8-5" /></>),
+  Connections: I(<><path d="M7.5 12.5 12.5 7.5" /><path d="M9.2 5.8 11 4a3.3 3.3 0 0 1 4.7 4.7l-1.8 1.8" /><path d="M10.8 14.2 9 16a3.3 3.3 0 0 1-4.7-4.7l1.8-1.8" /></>),
 };
 
 type NavLeaf = { label: string; href?: string; soon?: boolean; match?: string[] };
@@ -41,6 +42,7 @@ const NAV: NavNode[] = [
     ],
   },
   { label: "Digests", href: "/digests" },
+  { label: "Connections", href: "/connections" },
 ];
 const SIDEBAR_KEY = "terrain.sidebar.collapsed";
 
@@ -48,7 +50,7 @@ const SIDEBAR_KEY = "terrain.sidebar.collapsed";
 const TITLES: Record<string, string> = {
   "/overview": "Overview", "/dashboard": "Leads", "/lists": "Saved lists",
   "/insights": "Intelligence", "/partners": "Partner Finder", "/radar": "Fraud Scanner",
-  "/digests": "Digests", "/account": "Account & workspace",
+  "/digests": "Digests", "/connections": "Connections", "/account": "Account & workspace",
 };
 function titleFor(pathname: string): string {
   const hit = Object.keys(TITLES)

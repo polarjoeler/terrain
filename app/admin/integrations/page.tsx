@@ -5,21 +5,29 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { PROVIDERS, listConnections } from "@/lib/integrations";
 import { tagCounts } from "@/lib/tags";
 import { availableCountries } from "@/lib/insights";
-import { IntegrationsPanel } from "./integrations-panel";
+import { outreachCounts, OUTREACH_MARKETS } from "@/lib/imported";
+import { ConnectionsPanel } from "@/app/components/connections-panel";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Terrain — Admin · Integrations" };
 
+/** The admin view of the same panel customers use at /connections — plus the curated cohort tags,
+ *  and unmetered (admins pass no allowance, so no ceiling but the provider's own). Keeping both on
+ *  one component means the push customers get is the push we test here. */
 export default async function AdminIntegrations() {
   const email = await currentUser();
   if (!email) redirect("/login");
   if (!isAdmin(email)) redirect("/dashboard");
 
-  const [connections, cohorts, countries] = await Promise.all([
+  const [connections, cohorts, countries, counts] = await Promise.all([
     listConnections(email).catch(() => []),
     tagCounts().catch(() => []),
     availableCountries().catch(() => []),
+    outreachCounts().catch(() => ({ reachable: 0, all: 0 })),
   ]);
+
+  // Offer only the markets a push can reach (see OUTREACH_MARKETS).
+  const markets = countries.filter((c) => OUTREACH_MARKETS.includes(c.country));
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">
@@ -40,11 +48,13 @@ export default async function AdminIntegrations() {
           </p>
         </header>
 
-        <IntegrationsPanel
+        <ConnectionsPanel
           providers={PROVIDERS}
           connected={connections.map((c) => ({ provider: c.provider, config: c.config }))}
+          countries={markets}
           cohorts={cohorts.filter((c) => c.count > 0)}
-          countries={countries}
+          allowance={null}
+          initialCounts={counts}
         />
       </div>
     </div>
