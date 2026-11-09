@@ -1,7 +1,8 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { getSubscriber, hasAccess, usageFor } from "@/lib/subscriptions";
-import { platformsFor, PLANS } from "@/lib/plans";
+import { platformsFor, hasIntegrations, minPlanForIntegrations, PLANS } from "@/lib/plans";
 import { PROVIDERS, listConnections } from "@/lib/integrations";
 import { availableCountries } from "@/lib/insights";
 import { outreachCounts, OUTREACH_MARKETS } from "@/lib/imported";
@@ -22,6 +23,10 @@ export default async function ConnectionsPage() {
   const admin = isAdmin(email);
   const sub = admin ? null : await getSubscriber(email).catch(() => null);
   if (!admin && !hasAccess(sub)) redirect("/billing");
+
+  // Partner-only (lib/plans). Returned before the cohort reads below: a plan that can't push has
+  // no reason to pay for the count queries, and the upsell doesn't need them.
+  if (!admin && !hasIntegrations(sub?.plan)) return <Locked />;
 
   const scope = admin ? null : platformsFor(sub?.plan);
   const usage = admin ? null : usageFor(sub);
@@ -67,6 +72,48 @@ export default async function ConnectionsPage() {
         pushBlocked={pushBlocked}
         scopeNote={scopeNote}
       />
+    </div>
+  );
+}
+
+/** What a plan without Connections sees. Names the tools rather than hiding them — the specific
+ *  list is the argument — and takes the tier and price from lib/plans so the pitch can't drift
+ *  from the ladder. */
+function Locked() {
+  const need = minPlanForIntegrations();
+  return (
+    <div className="mx-auto max-w-3xl">
+      <header>
+        <h1 className="font-display text-3xl text-cream md:text-4xl">Connections</h1>
+        <p className="mt-2 text-cream/60">
+          Send leads straight into the tool you already work in, instead of exporting a CSV and
+          importing it by hand.
+        </p>
+      </header>
+
+      <div className="mt-8 rounded-[2rem] border border-cream/12 bg-cream/[0.02] p-6">
+        <span className="rounded-full border border-orange/30 bg-orange/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-orange">
+          {need.label}
+        </span>
+        <h2 className="mt-4 font-display text-xl text-cream">Part of {need.label}</h2>
+        <p className="mt-2 text-sm text-cream/60">
+          Pick a market and a contact-quality bar, then push the matching stores into a campaign in
+          one click. {need.label} also opens WooCommerce and every other platform we track — the
+          half of the base the cold-outreach tools cover worst.
+        </p>
+        <ul className="mt-4 grid grid-cols-2 gap-2 text-sm text-cream/70 sm:grid-cols-3">
+          {PROVIDERS.map((p) => (
+            <li key={p.key} className="rounded-xl border border-cream/10 px-3 py-2">{p.label}</li>
+          ))}
+        </ul>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <Link href="/billing"
+            className="rounded-full bg-mint px-5 py-2 text-sm font-medium text-ink transition hover:brightness-95">
+            Upgrade to {need.label} — ${need.monthlyUsd}/mo
+          </Link>
+          <span className="text-xs text-cream/45">Your current plan keeps CSV export.</span>
+        </div>
+      </div>
     </div>
   );
 }
