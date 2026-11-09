@@ -36,6 +36,14 @@ export type Plan = {
   seats: number;
   extraSeatUsd: number;
   reportTiers: ReportTier[];
+  /** Connect an outreach tool / CRM and push leads into it (the Connections panel).
+   *
+   *  Partner-only, decided 2026-11-09. A push is the highest-leverage export we offer — it moves
+   *  contactable leads in bulk into a sender we don't control — and Partner is both the tier whose
+   *  buyer actually runs sequences and the tier that already unlocks the Woo half of the base the
+   *  push would draw from. Metering alone wasn't the right gate: a $69 Leads seat could spend its
+   *  500 rows straight into a third-party sender every month. */
+  integrations: boolean;
 };
 
 export const PLANS: Record<PlanKey, Plan> = {
@@ -46,6 +54,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     exportLimit: 500,
     seats: 1, extraSeatUsd: 30,
     reportTiers: [],
+    integrations: false,
   },
   intelligence: {
     key: "intelligence", label: "Intelligence",
@@ -54,6 +63,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     exportLimit: null,
     seats: 2, extraSeatUsd: 30,
     reportTiers: ["core", "team"],
+    integrations: false,
   },
   partner: {
     key: "partner", label: "Partner",
@@ -67,6 +77,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     exportLimit: null,
     seats: 3, extraSeatUsd: 30,
     reportTiers: ["core", "team", "pro"],    // 'pro' = the provider-specific reports
+    integrations: true,
   },
 };
 
@@ -128,6 +139,14 @@ export const seatsFor = (raw: string | null | undefined): number => planOf(raw).
 export function hasInsightAccess(tier: ReportTier, raw: string | null | undefined): boolean {
   return planOf(raw).reportTiers.includes(tier);
 }
+
+/** May this plan push leads into a connected tool? */
+export const hasIntegrations = (raw: string | null | undefined): boolean => planOf(raw).integrations;
+
+/** Cheapest plan that unlocks Connections — for the upgrade copy, so the tier and its price are
+ *  never restated in a page. */
+export const minPlanForIntegrations = (): Plan =>
+  PLANS[PLAN_ORDER.find((k) => PLANS[k].integrations) ?? "partner"];
 
 /** Cheapest plan that unlocks a report tier — for "upgrade to X to see this" copy. */
 export function minPlanFor(tier: ReportTier): Plan {

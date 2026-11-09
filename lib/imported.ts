@@ -12,6 +12,7 @@ import { db as sharedDb } from "./db";
 import type { Lead } from "./leads";
 import { cleanPayments } from "./payments-taxonomy";
 import { applyOverrides } from "./overrides";
+import { VISIBLE_MARKETS } from "./markets";
 
 let _ready: Promise<void> | null = null;
 
@@ -128,6 +129,26 @@ export async function listPending(limit = 20): Promise<{ domain: string; name: s
   return r.map((x) => ({ domain: x.domain as string, name: (x.name as string) ?? null }));
 }
 
+/** Markets a push may reach — the same customer-visible set browseQuery enforces.
+ *
+ *  This gate was missing, and its absence was not cosmetic. We hold stores GLOBALLY (the CT tailer
+ *  is global) and show customers Africa only; every other customer query filters to that set,
+ *  while outreachWhere filtered on `published` alone. Measured on the live DB: 75,505 contactable
+ *  Shopify stores answered an unfiltered push against 19,782 in the visible set — 55,723 rows the
+ *  product does not expose anywhere else, among them 11,554 US, 9,290 CA, 5,796 JP and 18,846 with
+ *  no country at all. Japan matters most: ~90% of our JP Shopify coverage is imported StoreCensus
+ *  data, which is benchmark, NOT stock to resell, so a push was the one door that could have sent
+ *  it to a customer's sender.
+ *
+ *  It also quietly broke the headline number. The reachable share is computed over this same
+ *  predicate, and an unbounded denominator showed customers "3,377 of 75,505 reach a person (4%)"
+ *  where the honest figure for the markets they can actually use is 3,342 of 19,782 (17%) — only
+ *  35 reachable rows ever lay outside. The gate costs almost nothing real and fixes both.
+ *
+ *  Applied to admins too. Pushing is the surface that hands data to a third party, and the
+ *  benchmark-not-stock rule is about the data's provenance, not about who clicked. */
+export const OUTREACH_MARKETS: readonly string[] = VISIBLE_MARKETS;
+
 /** Contactable leads (have an email) for outreach push, optionally filtered by
  *  market + a curated cohort tag. Shaped for the integration adapters. */
 export type OutreachOpts = {
@@ -219,6 +240,7 @@ const reachesAPerson = () => db()`contact_type IN ('named','role_targeted')
 function outreachWhere(opts: Omit<OutreachOpts, "limit">) {
   const { country, tag, platforms, quality = "reachable" } = opts;
   return db()`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+      AND country = ANY(${db().array([...OUTREACH_MARKETS])})
       AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) IS NOT NULL
       AND COALESCE(CASE WHEN contact_checked_at IS NOT NULL THEN contact_email END, email) <> ''
       ${country ? db()`AND country = ${country}` : db()``}

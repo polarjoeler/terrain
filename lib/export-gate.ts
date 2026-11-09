@@ -19,12 +19,14 @@
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
 import { consumeExportQuota, getSubscriber, hasAccess, usageFor } from "@/lib/subscriptions";
-import { platformsFor } from "@/lib/plans";
+import { platformsFor, resolvePlan, type PlanKey } from "@/lib/plans";
 import { sharingGate } from "@/lib/sessions";
 import type { BrowseFilters } from "@/lib/browse";
 
 type Denied = { ok: false; response: NextResponse };
-type Opened = { ok: true; email: string; admin: boolean; scope: string[] | null };
+/** `plan` is null for admins, matching `scope: null` — "no plan ceiling applies". Returned so a
+ *  surface with its own entitlement (Connections) can check it without a second subscriber read. */
+type Opened = { ok: true; email: string; admin: boolean; scope: string[] | null; plan: PlanKey | null };
 
 /** Access + anti-sharing + the plan's platform ceiling. Admins export unscoped. */
 export async function openExport(): Promise<Denied | Opened> {
@@ -35,6 +37,7 @@ export async function openExport(): Promise<Denied | Opened> {
 
   const admin = isAdmin(email);
   let scope: string[] | null = null;
+  let plan: PlanKey | null = null;
   if (!admin) {
     const sub = await getSubscriber(email).catch(() => null);
     if (!hasAccess(sub)) {
@@ -52,6 +55,7 @@ export async function openExport(): Promise<Denied | Opened> {
       };
     }
     scope = platformsFor(sub?.plan);
+    plan = resolvePlan(sub?.plan);
   }
 
   // Anti-sharing: block bulk export when the seat is signed in from too many devices at once
@@ -67,7 +71,7 @@ export async function openExport(): Promise<Denied | Opened> {
     };
   }
 
-  return { ok: true, email, admin, scope };
+  return { ok: true, email, admin, scope, plan };
 }
 
 /** Apply the plan's platform ceiling to whatever the client asked for. `planPlatforms` is
