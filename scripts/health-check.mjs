@@ -19,9 +19,11 @@ const add = (name, ok, detail) => checks.push({ name, ok, detail });
 
 // 1. Throughput recency — the silent-failure catcher. Each probe should have written to its
 //    timestamp column recently; if not, it's stalled even if the job "ran".
+// One subquery per column so each is a single index probe; written as one max() list it was a
+// full-table read every hour. woo_checkout_at has no index, so it rides on query 1b's scan below.
 const [t] = await sql`SELECT
-  max(payments_checked_at) pay, max(woo_checkout_at) woo, max(live_checked_at) live,
-  max(catalog_checked_at) cat, max(created_at) ins FROM imported_stores`;
+  (SELECT max(payments_checked_at) FROM imported_stores) pay, (SELECT max(live_checked_at) FROM imported_stores) live,
+  (SELECT max(catalog_checked_at) FROM imported_stores) cat, (SELECT max(created_at) FROM imported_stores) ins`;
 // cert-launch heartbeat (task='cert', written every run before it touches crt.sh) — so we can tell
 // "the job ran" apart from "the job produced data", which matters for the catalog/launch check below.
 const [hb] = await sql`SELECT max(last_run) cert FROM agent_heartbeat WHERE task = 'cert'`.catch(() => [{ cert: null }]);
@@ -52,7 +54,7 @@ const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead
 const [e] = await sql`SELECT
   max(deep_enriched_at) FILTER (WHERE platform ILIKE 'shopify%') enr_shop,
   max(deep_enriched_at) FILTER (WHERE platform NOT ILIKE 'shopify%' AND platform IS NOT NULL) enr_non,
-  max(contact_checked_at) contact,
+  max(contact_checked_at) contact, max(woo_checkout_at) woo,
   count(*) FILTER (WHERE ${LIVE} AND platform ILIKE 'shopify%' AND deep_enriched_at IS NULL)::int shop_todo,
   count(*) FILTER (WHERE ${LIVE} AND platform NOT ILIKE 'shopify%' AND platform IS NOT NULL AND deep_enriched_at IS NULL)::int non_todo,
   count(*) FILTER (WHERE ${LIVE} AND contact_checked_at IS NULL AND UPPER(country) <> 'JP')::int contact_todo,
@@ -66,7 +68,7 @@ const stallRule = (name, ageMin, limitMin, todo, minTodo = 1000) =>
 stallRule("deep-enrich-shopify", mins(e.enr_shop), 60 * 30, e.shop_todo);   // Lucy/Rain, ~daily
 stallRule("deep-enrich-nonshop", mins(e.enr_non), 60 * 30, e.non_todo);     // Rex, ~daily
 stallRule("contact-enrich", mins(e.contact), 60 * 26, e.contact_todo);      // runs through the day
-stallRule("woo-checkout", mins(t.woo), 200, e.woo_todo, 50);               // 2-hourly → stale past ~3.3h
+stallRule("woo-checkout", mins(e.woo), 200, e.woo_todo, 50);               // 2-hourly → stale past ~3.3h
 
 // 1c. CT discovery FRESHNESS (added 2026-11-06). "discovery" above only proves that SOMETHING
 //     landed — VPS landings alone satisfy it — so a tailer that fell ~25 days behind and was reading

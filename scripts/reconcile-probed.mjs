@@ -9,10 +9,14 @@
  *   • checked but not a store (no CMS) → left as-is; the coverage page now excludes probed rows
  *     from "pending", so they stop reading as un-worked backlog.
  *
- *   node --env-file=.env.local scripts/reconcile-probed.mjs [--dry-run]
+ *   node --env-file=.env.local scripts/reconcile-probed.mjs [--dry-run] [--verbose]
+ *
+ * Every query here is a full-table scan, so a scheduled run does only the two UPDATEs (they report
+ * their own counts); the pending breakdown and the per-platform preview run with --dry-run/--verbose.
  */
 import postgres from "postgres";
 const DRY = process.argv.includes("--dry-run");
+const REPORT = DRY || process.argv.includes("--verbose");
 
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20 });
@@ -20,19 +24,21 @@ async function main() {
     const bare = sql`regexp_replace(i.domain,'^www\\.','')`;
     const PENDING = sql`i.platform IS NULL AND NOT i.published`;
 
-    const [pre] = await sql`
-      SELECT count(*)::int pending,
-        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM probe_checked pc WHERE pc.domain=${bare} AND COALESCE(pc.platform,'')<>''))::int with_cms,
-        count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM probe_checked pc WHERE pc.domain=${bare}))::int unprobed
-      FROM imported_stores i WHERE ${PENDING}`;
-    console.log(`pending: ${pre.pending} · with a detected CMS in probe_checked: ${pre.with_cms} · never probed: ${pre.unprobed}`);
+    if (REPORT) {
+      const [pre] = await sql`
+        SELECT count(*)::int pending,
+          count(*) FILTER (WHERE EXISTS (SELECT 1 FROM probe_checked pc WHERE pc.domain=${bare} AND COALESCE(pc.platform,'')<>''))::int with_cms,
+          count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM probe_checked pc WHERE pc.domain=${bare}))::int unprobed
+        FROM imported_stores i WHERE ${PENDING}`;
+      console.log(`pending: ${pre.pending} · with a detected CMS in probe_checked: ${pre.with_cms} · never probed: ${pre.unprobed}`);
 
-    // Preview what we'd capture, by platform.
-    const preview = await sql`
-      SELECT CASE WHEN lower(pc.platform)='woocommerce' THEN 'WooCommerce' ELSE pc.platform END plat, count(*)::int n
-      FROM imported_stores i JOIN probe_checked pc ON pc.domain=${bare}
-      WHERE ${PENDING} AND COALESCE(pc.platform,'')<>'' GROUP BY 1 ORDER BY n DESC`;
-    console.log("would capture:", preview.map((r) => `${r.plat}=${r.n}`).join(", ") || "(none)");
+      // Preview what we'd capture, by platform.
+      const preview = await sql`
+        SELECT CASE WHEN lower(pc.platform)='woocommerce' THEN 'WooCommerce' ELSE pc.platform END plat, count(*)::int n
+        FROM imported_stores i JOIN probe_checked pc ON pc.domain=${bare}
+        WHERE ${PENDING} AND COALESCE(pc.platform,'')<>'' GROUP BY 1 ORDER BY n DESC`;
+      console.log("would capture:", preview.map((r) => `${r.plat}=${r.n}`).join(", ") || "(none)");
+    }
 
     if (DRY) {
       console.log("[DRY] pending-bucket: nothing written.");
@@ -60,8 +66,8 @@ async function main() {
       AND payments IS NOT NULL AND payments <> ''
       AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
       AND activity_tier IS DISTINCT FROM 'not_a_store'`;
-    const [vp] = await sql`SELECT count(*)::int n FROM imported_stores WHERE ${VERIFIED}`;
     if (DRY) {
+      const [vp] = await sql`SELECT count(*)::int n FROM imported_stores WHERE ${VERIFIED}`;
       console.log(`[DRY] would publish ${vp.n} checkout-verified stores (payments_source woo_checkout/woo_plugin).`);
     } else {
       const vres = await sql`UPDATE imported_stores SET published = true WHERE ${VERIFIED}`;
