@@ -36,6 +36,8 @@ const VERIFY = has("--verify");
 // vendor, and is the only honest way to know the hit rate before paying to verify anything.
 const HOLDOUT = has("--holdout");
 const LIMIT = Number(arg("--limit", 5000));
+const COUNTRY = arg("--country", null);
+const MX_ONLY = has("--mx-ok");           // only domains whose mail host has been confirmed
 
 // Verification vendor: left unset by default so a run can never silently spend. Any provider with
 // a single-address GET endpoint fits by changing these two env vars.
@@ -51,11 +53,14 @@ const domainOf = (e) => { const m = /@([a-z0-9.-]+\.[a-z]{2,})$/i.exec(String(e 
 
 // Dutch/Afrikaans/Portuguese particles are part of the surname, and SA surnames are full of them.
 const PARTICLES = new Set(["van", "van der", "von", "de", "du", "le", "la", "da", "dos", "den", "ter"]);
+const NOT_A_PERSON = /\b(distribution|products?|retail|trading|holdings|enterprises?|solutions|services|group|studio|store|shop|boutique|company|pty|ltd)\b/;
 /** "Francois le Roux" → {first:"francois", last:"leroux", lastBare:"roux"} */
 function parseName(v) {
-  const flat = String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const flat = String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/^(dr|prof|professor|mr|mrs|ms|miss|sir|adv|rev|pastor)\.?\s+/, "");    // dr@ is nobody's mailbox
+  if (NOT_A_PERSON.test(flat)) return null;
   const words = flat.split(/[^a-z]+/).filter(Boolean);
-  if (words.length < 1) return null;
+  if (words.length < 1 || PARTICLES.has(words[0])) return null;   // "Dr van Niekerk" leaves only a surname
   const first = words[0];
   // A hyphenated given name is often kept intact in the mailbox — the holdout found Kay-Leigh
   // at kay-leigh@, which splitting on non-letters had reduced to kay@.
@@ -166,6 +171,13 @@ async function main() {
         AND contact_type IS DISTINCT FROM 'named'
         AND contact_mx_ok IS NOT FALSE        -- a domain that bounces makes every guess pointless
         AND contact_guess_checked_at IS NULL
+        AND coalesce(activity_tier,'') NOT IN ('not_a_store','dormant')
+        -- Path-hosted sellers share the marketplace's domain, so first@domain means nothing there.
+        AND domain NOT LIKE '%/%' AND domain NOT LIKE '%.myshopify.com'
+        -- A name on several unrelated stores is a theme demo or a model error (Harvey Spector, John Doe).
+        AND contact_name NOT IN (SELECT contact_name FROM imported_stores WHERE contact_name IS NOT NULL GROUP BY 1 HAVING count(*) >= 3)
+        ${COUNTRY ? sql`AND country = ${COUNTRY}` : sql``}
+        ${MX_ONLY ? sql`AND contact_mx_ok` : sql``}
       ORDER BY estimated_monthly_sales DESC NULLS LAST
       LIMIT ${LIMIT}`;
     if (!rows.length) { console.log("no candidates — run contact-enrich first, or all are done."); return; }

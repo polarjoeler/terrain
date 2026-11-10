@@ -950,7 +950,7 @@ async function main() {
               storefront_http   = ${r.storefrontHttp ?? null},
               storefront_checked_at = now(),
               contact_checked_at = now()
-            WHERE domain = ${r.domain}`.catch((e) => console.log(`  ! write ${r.domain}: ${e.message}`));
+            WHERE domain = ${store.domain}`.catch((e) => console.log(`  ! write ${store.domain}: ${e.message}`));
           console.log(`✓ ${r.domain}  →  ${t}${r.best ? `  ${r.best.email}` : ""}${r.name ? `  (${r.name})` : ""}`);
         }
         if (done % 25 === 0) console.log(`— ${done}/${rows.length}  named:${named}  unreachable:${unreachable}`);
