@@ -11,6 +11,7 @@ node --env-file=.env.local scripts/heartbeat.mjs cms-probe "wix + magento" >/dev
 echo "===== cms-probe $(date '+%F %T') ====="
 
 echo "--- wix ---"
+node --env-file=.env.local scripts/probe-cms.mjs --markets ZA,KE,NG --limit 2000 --concurrency 8 || echo "!! probe-cms failed"
 node --env-file=.env.local scripts/wix-probe.mjs --limit 800 --concurrency 8 || echo "!! wix-probe failed"
 echo "--- magento ---"
 node --env-file=.env.local scripts/magento-probe.mjs --limit 500 --concurrency 6 || echo "!! magento-probe failed"

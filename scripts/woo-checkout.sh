@@ -9,5 +9,5 @@ cd "$HOME/storepulse" || exit 1
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 node --env-file=.env.local scripts/heartbeat.mjs woo-checkout >/dev/null 2>&1 || true
 echo "===== woo-checkout $(date '+%F %T') ====="
-node --env-file=.env.local scripts/woo-checkout-probe.mjs --limit 500 --concurrency 10 || echo "!! woo-checkout failed (continuing)"
+node --env-file=.env.local scripts/woo-checkout-probe.mjs --limit 2000 --concurrency 20 || echo "!! woo-checkout failed (continuing)"
 echo "===== woo-checkout done $(date '+%F %T') ====="

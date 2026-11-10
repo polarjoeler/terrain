@@ -11,7 +11,7 @@ export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt"
 node --env-file=.env.local scripts/heartbeat.mjs catalog-enrich >/dev/null 2>&1 || true
 echo "===== catalog-enrich $(date '+%F %T') ====="
-node --env-file=.env.local scripts/catalog-enrich.mjs --limit 1500 || echo "!! catalog-enrich failed (continuing)"
+node --env-file=.env.local scripts/catalog-enrich.mjs --limit 1500 --concurrency 4 || echo "!! catalog-enrich failed (continuing)"
 # Catalogue fingerprints (ZA/KE/NG): backfill, then the monthly refresh. Polite by design — a store
 # that 429s is parked for a few days, never retried in-run (see --fp in catalog-enrich.mjs).
 node --env-file=.env.local scripts/catalog-enrich.mjs --fp --limit 500 || echo "!! catalog fingerprints failed (continuing)"

@@ -221,13 +221,15 @@ async function main() {
           // Throttled / transient: park it for FP_RETRY_DAYS (an existing fingerprint is kept), so
           // the same refusing stores don't head every run's batch.
           await deferFp(sql, domain, FP_STALE_DAYS - FP_RETRY_DAYS); throttled++;
-        } // retriable (429/5xx/timeout): leave catalog_checked_at NULL → picked up next run
+        } else {
+          throttled++;   // retriable (429/5xx/timeout): leave catalog_checked_at NULL → picked up next run
+        }
         if (++done % 200 === 0) process.stdout.write(`\r  ${done}/${rows.length}  (${ok} with catalog)`);
         await sleep(PAUSE_MS);
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-    console.log(`\n✓ Done. ${ok}/${rows.length} returned a product catalogue; ${fps} fingerprinted${FP ? `, ${throttled} throttled (retry in ${FP_RETRY_DAYS}d)` : ""}.`);
+    console.log(`\n✓ Done. ${ok}/${rows.length} returned a product catalogue; ${fps} fingerprinted${FP ? `, ${throttled} throttled (retry in ${FP_RETRY_DAYS}d)` : `, ${throttled} refused or unreachable (retry next run)`}.`);
   } finally {
     await sql.end();
     closeAgents();   // keep-alive proxy sockets would otherwise hold the process open
