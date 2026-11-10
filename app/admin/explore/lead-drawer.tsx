@@ -15,10 +15,12 @@ const fmtLaunch = (v: string | null, source: string | null) =>
   source === "storeleads_created" ? fmtMonth(v) : fmtDate(v);
 const chips = (v: string | null) => (v ? v.split(";").map((x) => x.trim()).filter(Boolean) : []);
 
-// Choose which email to display. `email` comes from the per-domain data import and is authoritative
-// for this store — even when it's a personal gmail/hotmail (a legitimate owner contact) — so it
-// wins. `contact_email` is scraped from the homepage and can be a third-party / agency / redirect-
-// target address, so it's only trusted as a fallback when its own domain matches the store's.
+// Choose which email to display. Once contact-enrich has visited a store, `contact_email` IS the
+// considered answer: the best of every address found across its contact surface, each one
+// domain-checked and classified, with the imported `email` in the same ranking. Before that pass
+// reaches a store the old rule holds: the imported `email` is authoritative (a personal gmail there
+// is a real owner contact), and a scraped address is trusted only when its domain matches the
+// store's. Mirrors bestEmailSql in lib/browse.ts, so the list, the export and the drawer agree.
 const emailDomain = (e: string | null): string | null => {
   const m = /@([a-z0-9.-]+\.[a-z]{2,})/i.exec(e ?? "");
   return m ? m[1].toLowerCase() : null;
@@ -29,10 +31,35 @@ const sameOrg = (emailDom: string | null, storeDomain: string | null): boolean =
   return emailDom === sd || emailDom.endsWith("." + sd) || sd.endsWith("." + emailDom);
 };
 const bestEmail = (d: LeadDetail): string | null => {
+  if (d.contact_checked_at && d.contact_email) return d.contact_email;
   if (d.email) return d.email;
   if (d.contact_email && sameOrg(emailDomain(d.contact_email), d.domain)) return d.contact_email;
   return null;
 };
+
+// What kind of contact this is, best to worst, and blunt about the bad end: a buyer should see
+// "generic inbox" before they spend a send on it, not after.
+const CONTACT_META: Record<string, { label: string; tone: string; hint: string }> = {
+  named: { label: "Named person", tone: "bg-mint/15 text-mint", hint: "The address reaches an identifiable person" },
+  role_targeted: { label: "Decision-maker role", tone: "bg-cyan/15 text-cyan", hint: "owner@ / accounts@ / press@, a mailbox someone senior reads" },
+  role_generic: { label: "Generic inbox", tone: "bg-orange/15 text-orange", hint: "info@ / hello@ / support@, goes to a queue" },
+  form_only: { label: "Form only", tone: "bg-cream/10 text-cream/60", hint: "No address published; there is a contact form" },
+  none: { label: "No contact found", tone: "bg-cream/10 text-cream/45", hint: "Nothing published on the pages we could reach" },
+};
+const NAME_SOURCE_LABEL: Record<string, string> = {
+  copy: "from the site's copy", jsonld: "from the site's structured data",
+  atom: "from the blog feed author", llm: "inferred by the local model", manual: "entered by hand",
+  linkedin: "from LinkedIn", web: "from a web search",
+};
+const GUESS_LABEL: Record<string, string> = {
+  verified: "pattern inferred · verified deliverable",
+  catch_all: "pattern inferred · domain accepts all mail",
+};
+const ContactBadge = ({ type }: { type: string }) => {
+  const m = CONTACT_META[type] ?? { label: type, tone: "bg-cream/10 text-cream/60", hint: "" };
+  return <span title={m.hint} className={`rounded-full px-2 py-0.5 text-xs font-semibold ${m.tone}`}>{m.label}</span>;
+};
+const waLink = (n: string) => `https://wa.me/${n.replace(/[^\d]/g, "")}`;
 
 type Field = [label: string, value: React.ReactNode];
 const present = (v: React.ReactNode) => !(v == null || v === "" || (Array.isArray(v) && v.length === 0));
@@ -200,6 +227,10 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
       sub: data.avg_product_price != null ? `avg ${money(data.avg_product_price, data.currency)}` : undefined },
   ].filter(Boolean) as { label: string; value: string; sub?: React.ReactNode; accent: keyof typeof ACCENT }[]) : [];
   const email = data ? bestEmail(data) : null;
+  const otherContacts = (data?.contacts ?? []).filter((c) => c.email && c.email !== email);
+  // The badge describes the address on screen. contact_type can say "named" because a person was
+  // found (LinkedIn, the web) while the only address is still info@, so prefer that address's own kind.
+  const emailKind = (email && data?.contacts?.find((c) => c.email === email)?.kind) || data?.contact_type || null;
   const group = data?.group && data.group.others.length > 0 ? data.group : null;
 
   return (
@@ -331,10 +362,45 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
               )}
 
               <Card title="Contact" fields={[
-                ["Person", data.contact_name ? `${data.contact_name}${data.contact_role ? ` · ${data.contact_role}` : ""}` : null],
+                ["Quality", emailKind ? <ContactBadge type={emailKind} /> : null],
+                ["Person", data.contact_name ? (
+                  <span className="flex flex-col items-end">
+                    <span>{data.contact_name}{data.contact_role ? ` · ${data.contact_role}` : ""}</span>
+                    {data.contact_name_source && <span className="text-[11px] text-cream/35">{NAME_SOURCE_LABEL[data.contact_name_source] ?? data.contact_name_source}</span>}
+                  </span>
+                ) : null],
                 ["Email", email ? <a href={`mailto:${email}`} className="font-mono text-[13px] text-cyan hover:underline">{email}</a> : null],
-                ["Email (guess)", data.contact_email_guess && !data.contact_email ? <span className="font-mono text-[13px]">{data.contact_email_guess}<span className="ml-1.5 text-[11px] text-cream/40">pending{data.contact_mx_ok ? " · MX ok" : ""}</span></span> : null],
+                // The rest of the ranked set: a generic best address often sits above a usable second one.
+                ["Also found", otherContacts.length ? otherContacts.map((c) => (
+                  <span key={c.email} className="block">
+                    <a href={`mailto:${c.email}`} className="font-mono text-[13px] text-cream/70 hover:text-cyan">{c.email}</a>
+                    <span className="ml-1.5 text-[11px] text-cream/35">{CONTACT_META[c.kind]?.label ?? c.kind}</span>
+                  </span>
+                )) : null],
+                // A guess is never merged into "Email": it was inferred from the person's name, not published.
+                ["Likely personal", data.contact_email_guess && data.contact_email_guess !== email && emailKind !== "named" ? (
+                  <span className="flex flex-col items-end">
+                    <span className="font-mono text-[13px] italic text-cream/60">{data.contact_email_guess}</span>
+                    <span className="text-[11px] text-cream/35">{GUESS_LABEL[data.contact_guess_status ?? ""] ?? "pattern inferred · unverified, may not exist"}</span>
+                  </span>
+                ) : null],
+                ["Deliverable", data.contact_mx_ok == null || !email ? null : data.contact_mx_ok
+                  ? <span className="text-mint">yes{data.contact_mx_provider ? ` · ${data.contact_mx_provider}` : ""}</span>
+                  : <span className="text-orange" title="The address's domain publishes no MX record, so mail to it bounces">no, will bounce</span>],
+                ["Shared mailbox", (data.contact_shared_count ?? 1) > 1
+                  ? <span className="text-orange/80" title="Another tracked store uses this address: an agency, head office or aggregator">also on {(data.contact_shared_count ?? 1) - 1} other store{(data.contact_shared_count ?? 1) - 1 === 1 ? "" : "s"}</span>
+                  : null],
+                // WhatsApp early: in SA it gets answered when email doesn't.
+                ["WhatsApp", data.whatsapp ? <a href={waLink(data.whatsapp)} target="_blank" rel="noopener noreferrer" className="font-mono text-[13px] text-mint hover:underline">{data.whatsapp}</a> : null],
                 ["Phone", data.contact_phone ? <span className="font-mono text-[13px]">{data.contact_phone}</span> : null],
+                ["Contact form", data.contact_form_url ? <a href={data.contact_form_url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">open</a> : null],
+                // Stored either as a full URL (company or person page) or as a bare company handle.
+                ["LinkedIn", data.linkedin ? (
+                  <a href={/^https?:\/\//.test(data.linkedin) ? data.linkedin : `https://www.linkedin.com/company/${data.linkedin}`}
+                    target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">
+                    {data.linkedin.replace(/^https?:\/\/(www\.)?linkedin\.com\//, "").replace(/\/$/, "")}
+                  </a>
+                ) : null],
                 ["Instagram", social(data.instagram, `https://instagram.com/${data.instagram}`, data.instagram_followers)],
                 ["Facebook", social(data.facebook, `https://facebook.com/${data.facebook}`, data.facebook_followers)],
                 ["TikTok", social(data.tiktok, `https://tiktok.com/@${data.tiktok}`, null)],
