@@ -25,6 +25,13 @@ export type LeadDetail = {
    *  is our inferred first@domain for a named decision-maker (kept separate so it never masquerades). */
   contact_name: string | null; contact_role: string | null;
   contact_email_guess: string | null; contact_guess_status: string | null; contact_mx_ok: boolean | null;
+  /** Contact quality (scripts/contact-enrich.mjs): the verdict on the best address, the whole ranked
+   *  set, where the name came from, and whether the address can receive mail at all. */
+  contact_type: string | null; contact_source: string | null; contact_name_source: string | null;
+  contact_form_url: string | null; contact_checked_at: string | null;
+  contacts: { email: string; kind: string; source: string }[] | null;
+  whatsapp: string | null; linkedin: string | null;
+  contact_mx_provider: string | null; contact_shared_count: number | null;
   instagram: string | null; facebook: string | null; tiktok: string | null;
   instagram_followers: number | null; facebook_followers: number | null;
   launched_at: string | null; launched_source: string | null;
@@ -75,6 +82,9 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            payments, shipping_providers, free_shipping, logistics_apps, apps,
            product_count, avg_product_price, estimated_monthly_sales, est_revenue_usd, currency,
            email, contact_email, contact_phone,
+           contact_name, contact_role, contact_email_guess, contact_guess_status, contact_mx_ok,
+           contact_type, contact_source, contact_name_source, contact_form_url, contact_checked_at,
+           contacts, whatsapp, linkedin, contact_mx_provider, contact_shared_count,
            instagram, facebook, tiktok, instagram_followers, facebook_followers,
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
            source, live_status,
