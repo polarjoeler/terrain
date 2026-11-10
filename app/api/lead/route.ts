@@ -12,13 +12,15 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const email = await currentUser();
   if (!email) return NextResponse.json({ error: "Not authorised" }, { status: 401 });
-  const subscriber = await getSubscriber(email).catch(() => null);
-  if (!hasAccess(subscriber)) return NextResponse.json({ error: "No access" }, { status: 403 });
+  const admin = isAdmin(email);
+  if (!admin && !hasAccess(await getSubscriber(email).catch(() => null))) {
+    return NextResponse.json({ error: "No access" }, { status: 403 });
+  }
 
   const domain = new URL(req.url).searchParams.get("domain")?.trim().toLowerCase();
   if (!domain) return NextResponse.json({ error: "domain required" }, { status: 400 });
 
   const detail = await getLeadDetail(domain).catch(() => null);
   if (!detail) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ ...detail, canEdit: isAdmin(email) });
+  return NextResponse.json({ ...detail, canEdit: admin });
 }
