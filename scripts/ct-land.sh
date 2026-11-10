@@ -14,5 +14,9 @@ echo "===== ct-land $(date '+%F %T') ====="
 node --env-file=.env.local scripts/land-ct-discoveries.mjs || echo "!! CT-tail landing failed"
 # Resolve "pending" candidates Lucy has since probed — capture any CMS detected (publish Shopify/
 # Woo), so the coverage page's pending count reflects real un-probed backlog, not stale imports.
-node --env-file=.env.local scripts/reconcile-probed.mjs || echo "!! reconcile-probed failed"
+# Every 3h, not every 30m: what it promotes was probed hours or days ago, so the 30-minute cadence
+# bought nothing for ~550GB of full-table reads a day (5 scans × 48 runs, 2026-11-10).
+if [ $(( 10#$(date +%H) % 3 )) -eq 0 ] && [ "$(date +%M)" -lt 30 ]; then
+  node --env-file=.env.local scripts/reconcile-probed.mjs || echo "!! reconcile-probed failed"
+fi
 echo "===== ct-land done $(date '+%F %T') ====="

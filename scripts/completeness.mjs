@@ -46,24 +46,29 @@ const resolvedSql = (f) => `((${FIELDS[f].filled}) OR (${FIELDS[f].check}))`;
 const COMPLETE = Object.keys(FIELDS).map(resolvedSql).join(" AND ");
 
 const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2 });
-const REAL = "published AND coalesce(activity_tier,'') NOT IN ('not_a_store','dormant')";
+// Same rows as coalesce(activity_tier,'') NOT IN ('not_a_store','dormant'), written so the planner
+// can use the partial upper(country) index (published AND activity_tier IS DISTINCT FROM 'not_a_store').
+const REAL = "published AND activity_tier IS DISTINCT FROM 'not_a_store' AND activity_tier IS DISTINCT FROM 'dormant'";
 
-async function score(cc) {
+// One grouped pass over every requested market. This used to be one full-table scan per market
+// (28 for the scorecard, up to 3 more for --auto), ~174 scans a day at 2.8GB each (2026-11-10).
+async function scoreAll(ccs) {
   const cols = [];
   for (const f of Object.keys(FIELDS)) {
     cols.push(`count(*) FILTER (WHERE ${FIELDS[f].filled})::int AS ${f}_filled`);
     cols.push(`count(*) FILTER (WHERE ${resolvedSql(f)})::int AS ${f}_res`);
   }
-  const [r] = await sql.unsafe(
-    `SELECT count(*)::int n, count(*) FILTER (WHERE ${COMPLETE})::int complete, ${cols.join(", ")}
-     FROM imported_stores WHERE ${REAL} AND upper(country) = '${cc}'`);
-  return r;
+  const rows = await sql.unsafe(
+    `SELECT upper(country) cc, count(*)::int n, count(*) FILTER (WHERE ${COMPLETE})::int complete, ${cols.join(", ")}
+     FROM imported_stores WHERE ${REAL} AND upper(country) IN (${ccs.map((c) => `'${c}'`).join(",")}) GROUP BY 1`);
+  return new Map(rows.map((r) => [r.cc, r]));
 }
 
 async function main() {
   console.log(`profile: ${Object.keys(FIELDS).join(" · ")}   (COMPLETE = all resolved: filled OR checked-empty)\n`);
+  const scores = await scoreAll([...new Set([...markets, ...FOCUS])]);
   for (const cc of markets) {
-    const r = await score(cc);
+    const r = scores.get(cc);
     if (!r || !r.n) continue;
     const pct = (v) => Math.round((v / r.n) * 100);
     console.log(`[${cc}] ${r.n.toLocaleString()} real · COMPLETE ${pct(r.complete)}% (${r.complete.toLocaleString()})`);
@@ -75,13 +80,12 @@ async function main() {
   // FIRST market still below 97% complete (finish ZA, then roll on). --run: the --country given.
   let cc = (cArg || "ZA").toUpperCase();
   if (AUTO) {
-    const counts = await sql.unsafe(`SELECT upper(country) c, count(*)::int n FROM imported_stores WHERE ${REAL} AND upper(country) IN (${FOCUS.map((c) => `'${c}'`).join(",")}) GROUP BY 1`);
-    const byN = new Map(counts.map((r) => [r.c, r.n]));
+    const byN = (c) => scores.get(c)?.n || 0;
     const PRIMARY = ["ZA", "KE", "NG"];
-    const order = [...PRIMARY, ...FOCUS.filter((c) => !PRIMARY.includes(c)).sort((a, b) => (byN.get(b) || 0) - (byN.get(a) || 0))];
+    const order = [...PRIMARY, ...FOCUS.filter((c) => !PRIMARY.includes(c)).sort((a, b) => byN(b) - byN(a))];
     cc = null;
     for (const m of order) {
-      const r = await score(m);
+      const r = scores.get(m);
       if (r && r.n >= 50 && r.complete / r.n < 0.97) { cc = m; break; }
     }
     if (!cc) { console.log("\n✓ all focus markets ≥97% complete — nothing to coordinate."); await sql.end(); return; }
@@ -104,7 +108,7 @@ async function main() {
     await new Promise((res) => spawn("node", ["--env-file=.env.local", `scripts/${script}`, "--country", cc, "--limit", String(LIMIT)], { stdio: "inherit" }).on("close", res));
   }
   const s2 = postgres(process.env.DATABASE_URL, { prepare: false, max: 1 });
-  const [r] = await s2.unsafe(`SELECT count(*)::int n, count(*) FILTER (WHERE ${COMPLETE})::int complete FROM imported_stores WHERE ${REAL} AND upper(country)='${cc}'`);
+  const [r] = await s2.unsafe(`SELECT count(*)::int n, count(*) FILTER (WHERE ${COMPLETE})::int complete FROM imported_stores WHERE ${REAL} AND upper(country) = '${cc}'`);
   console.log(`\n[${cc}] COMPLETE now: ${Math.round((r.complete / r.n) * 100)}% (${r.complete.toLocaleString()}/${r.n.toLocaleString()})`);
   await s2.end();
 }

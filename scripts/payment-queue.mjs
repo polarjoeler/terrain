@@ -108,10 +108,17 @@ async function main() {
   }
   try {
     if (PROVIDERS.length) { await watchRun(sql); return; }
-    // 1. Free parse over the imported data.
-    const rows = await sql`
+    // 1. Free parse over the imported data. It is a full-table read (~1.9M payment-less rows, raw
+    //    jsonb and all) that gives the same answer all day, so it runs once a day, not every run
+    //    (14 a day, ~400 DB-seconds, 2026-11-10), and only over rows that have something to parse.
+    const FREE_PARSE_KEY = "payment-queue.free_parse_at";
+    const [fp] = await sql`SELECT updated_at FROM app_settings WHERE key = ${FREE_PARSE_KEY}`.catch(() => []);
+    const parseDue = !fp || Date.now() - new Date(fp.updated_at).getTime() > 20 * 3600 * 1000;
+    const rows = parseDue ? await sql`
       SELECT domain, raw->>'technologies' tech, raw->>'features' feat, apps
-      FROM imported_stores WHERE published AND payments IS NULL`;
+      FROM imported_stores WHERE published AND payments IS NULL
+        AND (raw->>'technologies' IS NOT NULL OR raw->>'features' IS NOT NULL OR coalesce(apps, '') <> '')` : [];
+    if (!parseDue) console.log(`Free parse: skipped, last ran ${fp.updated_at.toISOString()} (once a day).`);
     // Compute guesses (CPU only), then apply UPDATEs with a BOUNDED worker pool.
     // NOT Promise.all over 500 rows: that queues ~494 queries past the max:6 pool
     // and postgres.js deadlocks the queued ones — the script hangs, the pipeline
@@ -130,7 +137,11 @@ async function main() {
       }
     }
     await Promise.all(Array.from({ length: 4 }, guessWorker)); // 4 workers < max:6
-    console.log(`Free parse: tagged ${guessed.toLocaleString()} stores with a payment guess.`);
+    if (parseDue) {
+      await sql`INSERT INTO app_settings (key, value, updated_at) VALUES (${FREE_PARSE_KEY}, ${String(rows.length)}, now())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+      console.log(`Free parse: ${rows.length.toLocaleString()} parseable rows, tagged ${guessed.toLocaleString()} stores with a payment guess.`);
+    }
 
     // 2. The value-ranked queue. --plus = every live Shopify Plus store (probe
     //    all of them, since Plus are the highest-value merchants); otherwise the
