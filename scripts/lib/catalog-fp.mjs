@@ -112,10 +112,11 @@ export async function ensureFpTable(sql) {
     price int4[] NOT NULL,
     earliest_product date,
     fp_at timestamptz NOT NULL DEFAULT now())`;
-  // "Who else hosts these images / SKUs" becomes an indexed overlap (&&) query, so a Brand Audit no
-  // longer has to load every fingerprint into one serverless function.
-  await sql`CREATE INDEX store_catalog_fp_img ON store_catalog_fp USING gin (img)`;
-  await sql`CREATE INDEX store_catalog_fp_sku ON store_catalog_fp USING gin (sku)`;
+  // NO GIN indexes on img/sku. They were built for an indexed-overlap (&&) Brand Audit that was
+  // never written: clone-sweep streams every fingerprint and compares in JS instead, so in 109 days
+  // of statistics both indexes recorded ZERO scans while costing 77 MB on 10,741 rows — about 164
+  // bytes of index per product. Carried onto the Woo half of the base that is ~630 MB of index
+  // nothing reads. If an overlap query is ever written, add them back then and measure.
 }
 
 /** Upsert one store's fingerprint. An empty fp (n=0) still writes a row: it stamps fp_at so a
