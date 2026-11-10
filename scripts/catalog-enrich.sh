@@ -4,7 +4,8 @@
 # residential-IP Shopify-edge budget (~1,200/day direct). ORDER BY self-prioritises ZA/KE/NG then
 # undated rows, so the focus-market launch metric fills first; spills to global undated after.
 # catalog_checked_at marks attempts (terminal + success), so each run only tops up newly-landed rows.
-# Also drives catalogue fingerprints + the weekly clone sweep (store_catalog_fp → catalog_matches).
+# Also drives catalogue fingerprints — Shopify and Woo, both into store_catalog_fp — then the
+# weekly clone sweep over them (store_catalog_fp → catalog_matches).
 set -u
 cd "$HOME/storepulse" || exit 1
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
@@ -15,6 +16,11 @@ node --env-file=.env.local scripts/catalog-enrich.mjs --limit 1500 --concurrency
 # Catalogue fingerprints (ZA/KE/NG): backfill, then the monthly refresh. Polite by design — a store
 # that 429s is parked for a few days, never retried in-run (see --fp in catalog-enrich.mjs).
 node --env-file=.env.local scripts/catalog-enrich.mjs --fp --limit 500 || echo "!! catalog fingerprints failed (continuing)"
+# Woo fingerprints into the same table, via the public Store API — Woo is excluded from
+# catalog-enrich on purpose (products.json is Shopify-only). Self-hosted origins, so this goes
+# direct: it spends no Webshare bandwidth and no Shopify-edge budget. About 38% answer; a 404 is
+# permanent (old Woo or REST disabled) and parks the store for 120 days instead of re-probing it.
+node --env-file=.env.local scripts/woo-catalog-fp.mjs --limit 500 || echo "!! woo fingerprints failed (continuing)"
 # Weekly clone sweep over the fingerprints — DB-light (one scan), the scoring runs in memory here.
 MARK="$HOME/storepulse/logs/.clone-sweep-last"
 if [ ! -f "$MARK" ] || [ -n "$(find "$MARK" -mtime +6 2>/dev/null)" ]; then
