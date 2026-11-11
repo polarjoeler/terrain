@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { listSubscribers } from "@/lib/subscriptions";
+import { hasAccess, listSubscribers } from "@/lib/subscriptions";
 import { SubscribersTable } from "./subscribers-table";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export default async function AdminSubscribers() {
   if (!isAdmin(email)) redirect("/dashboard");
 
   const subscribers = await listSubscribers().catch(() => []);
-  const active = subscribers.filter((s) => s.status === "active" || s.status === "trialing").length;
+  const active = subscribers.filter(hasAccess).length;   // includes comped, excludes lapsed trials
 
   return (
     <div className="min-h-screen px-4 py-6 md:px-8">

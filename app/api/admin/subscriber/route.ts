@@ -1,4 +1,4 @@
-/** Admin subscriber management — grant/extend a trial, activate, cancel, or
+/** Admin subscriber management — grant/extend a trial, activate, comp, cancel, or
  *  change plan. Owner/admin only. */
 
 import { NextResponse } from "next/server";
@@ -9,9 +9,9 @@ import { PLANS } from "@/lib/plans";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SIMPLE_ACTIONS = ["trial", "activate", "cancel"] as const;
+const SIMPLE_ACTIONS = ["trial", "activate", "comp", "cancel"] as const;
 
-/** Accepts the three simple actions plus setPlan:<planKey>, validating the key against
+/** Accepts the simple actions plus setPlan:<planKey>, validating the key against
  *  PLANS so an unknown tier is rejected rather than silently resolved. */
 function parseAction(raw: string | undefined): SubscriberAction | null {
   if (!raw) return null;
