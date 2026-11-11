@@ -13,8 +13,10 @@
  *  WHAT A RANDOM SAMPLE ACTUALLY RETURNS (24 published ZA/KE/NG Woo stores, 2026-11-10):
  *  38% answered, 42% returned a hard 404, the rest timed out or 500'd. The earlier "200 first try"
  *  reading came from two hand-picked stores and was optimistic — plan for ~40%, not ~100%.
- *  Catalogue sizes are violently skewed: median 12 products, one store at 3,653. So MAX_PRODUCTS
- *  is what keeps this lane's disk cost bounded, not the store count.
+ *  Catalogue sizes are violently skewed: median 12 products, one store at 3,653. What bounds this
+ *  lane's disk cost is CAP in lib/catalog-fp.mjs (4,000 hashes per kind per row), not the store
+ *  count and not MAX_PRODUCTS — which is why MAX_PRODUCTS now matches CAP and truncates instead of
+ *  refusing. Reading past CAP products cannot add a hash the row is able to store.
  *
  *  A 404 is a PERMANENT fact (old WooCommerce, or the REST route disabled), not a throttle. It is
  *  parked NO_API_DAYS forward so the lane stops asking, because a lane that cannot record
@@ -41,9 +43,11 @@ const COUNTRIES = flagList("--country")?.map((c) => c.toUpperCase()) ?? null;
 const DOMAINS = flagList("--domains")?.map((d) => d.toLowerCase()) ?? null;
 const CONCURRENCY = flagNum("--concurrency", 6);
 const PAUSE_MS = flagNum("--pause", 400);
-// Two guards on disk cost. MAX_PRODUCTS refuses a catalogue before downloading it (X-WP-Total on
-// page one); the Shopify lane can only discover the size after paying for it.
-const MAX_PRODUCTS = flagNum("--max-products", 2000);
+// MAX_PRODUCTS truncates at CAP (lib/catalog-fp.mjs), the point past which a fingerprint row can
+// hold nothing more. REFUSE_ABOVE is the separate pathological ceiling — X-WP-Total on page one
+// lets us walk away from a 50k-SKU marketplace without paying for it, which the Shopify lane cannot.
+const MAX_PRODUCTS = flagNum("--max-products", 4000);
+const REFUSE_ABOVE = flagNum("--refuse-above", 50000);
 // A transient failure (timeout, 5xx) comes back soon; a missing Store API does not come back at all.
 const RETRY_DAYS = 3;
 const NO_API_DAYS = 120;
@@ -80,7 +84,8 @@ async function main() {
     while (i < rows.length) {
       const { domain } = rows[i++];
       try {
-        const { products: ps, total } = await fetchWooCatalog(domain, { maxProducts: MAX_PRODUCTS, pauseMs: PAUSE_MS });
+        const { products: ps, total } = await fetchWooCatalog(domain,
+          { maxProducts: MAX_PRODUCTS, refuseAbove: REFUSE_ABOVE, pauseMs: PAUSE_MS });
         // An empty catalogue is a real answer: the store is reachable and sells nothing right now.
         // It is written (n_products 0) so the lane does not re-ask for FP_STALE_DAYS.
         await upsertFp(sql, domain, buildFp(ps), null);
@@ -91,8 +96,9 @@ async function main() {
           await deferFp(sql, domain, -NO_API_DAYS); noApi++;
           console.log(`none ${domain} -> no Store API (parked ${NO_API_DAYS}d)`);
         } else if (err instanceof WooCatalogError && err.status === 413) {
-          // Too large to fingerprint cheaply. Park it like a missing API: re-asking changes nothing
-          // until the cap changes, and a 20k-SKU catalogue is not the clone case anyway.
+          // Past REFUSE_ABOVE — a marketplace, not a brand. Park it like a missing API: re-asking
+          // changes nothing until the ceiling does. Note this is NOT the merely-large case any more:
+          // a large catalogue is a prime clone VICTIM, so it gets truncated and fingerprinted.
           await deferFp(sql, domain, -NO_API_DAYS); tooBig++;
           console.log(`big  ${domain} -> ${err.message} (parked ${NO_API_DAYS}d)`);
         } else {

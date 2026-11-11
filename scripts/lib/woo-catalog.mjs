@@ -75,10 +75,12 @@ export class WooCatalogError extends Error {
 
 /** Fetch a Woo catalogue. Returns { products, total, pages } or throws WooCatalogError.
  *
- *  `maxProducts` is a real guard, not politeness theatre: X-WP-Total lets us refuse a 20,000-SKU
- *  catalogue before spending the bandwidth, which the Shopify lane cannot do. */
+ *  `maxProducts` TRUNCATES: paging stops there and the caller gets `total` as well, so it can see
+ *  the catalogue was larger. `refuseAbove` is the separate, pathological ceiling where X-WP-Total on
+ *  page one makes us walk away without spending the bandwidth. Keep them far apart — refusing at
+ *  `maxProducts` throws away the store, and a big catalogue is a prime clone VICTIM. */
 export async function fetchWooCatalog(domain, {
-  perPage = 100, maxProducts = 2000, timeoutMs = 15000, pauseMs = 700, fetchImpl = fetch,
+  perPage = 100, maxProducts = 4000, refuseAbove = 50000, timeoutMs = 15000, pauseMs = 700, fetchImpl = fetch,
 } = {}) {
   const base = `https://${domain.replace(/^https?:\/\//, "").replace(/\/+$/, "")}/wp-json/wc/store/v1/products`;
   const products = [];
@@ -108,7 +110,7 @@ export async function fetchWooCatalog(domain, {
     if (total == null) {
       const t = Number(res.headers.get("x-wp-total"));
       total = Number.isFinite(t) && t >= 0 ? t : null;
-      if (total != null && total > maxProducts) {
+      if (total != null && total > refuseAbove) {
         throw new WooCatalogError(`catalogue too large (${total} products)`, 413);
       }
     }
