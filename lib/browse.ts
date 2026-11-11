@@ -13,7 +13,7 @@
  *  NOTE: queries run SEQUENTIALLY, never Promise.all — the postgres.js pool is
  *  max:3 and fanning aggregates out in parallel deadlocks the page.
  */
-import { usdSqlExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
+import { usdSqlExpr, usdExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
 import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
 
@@ -217,17 +217,32 @@ function buildWhere(f: BrowseFilters) {
   return conds.reduce((a, c) => sql`${a} AND ${c}`);
 }
 
+// Revenue sorts read REV — the SAME expression the Revenue column displays and the bands and facet
+// counts use (revExpr in lib/fx.ts: ballpark-first, FX-normalised to USD). Ordering by the raw
+// `estimated_monthly_sales` column instead was wrong twice over: it is LOCAL currency, so a R20m
+// store beat a $700k one on the bare number across 78 currencies, and it is present on only 37% of
+// customer-visible rows — the 54,002 stores that display a band off `revenue_ballpark_usd` sorted as
+// NULL and sank to the bottom. Measured before this fix: 41 of the top 50 rows were the wrong store.
+const REV = usdSqlExpr();
+// Ballpark values are CrUX BUCKETS, so ties are enormous (52,389 visible stores share $683) and the
+// bucket alone leaves page 1 arbitrary. The FX-normalised vendor estimate refines within a bucket,
+// putting the better-evidenced big stores first; `domain` then makes each order TOTAL, which matters
+// because LIMIT/OFFSET paging over a tied order can serve one row on two pages and another on none.
+// Every entry below is self-sufficient, so the export can reuse one directly.
+const TIE = `${usdExpr("estimated_monthly_sales")} DESC NULLS LAST, domain ASC`;
+
 const ORDER: Record<SortKey, string> = {
   // Default view: most-recently-discovered first (the primary driver). Pure discovered_at DESC, so
   // today's live CT finds lead page 1; revenue breaks ties within a day's batch. A blended "new in
   // last N days then by revenue" was useless here — ~84% of rows were stamped this month by bulk
   // imports, so the window didn't discriminate and it collapsed back to a revenue sort.
-  new: "discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST",
-  sales: "estimated_monthly_sales DESC NULLS LAST",
-  name: "COALESCE(name, domain) ASC",
-  launched: "launched_on DESC NULLS LAST",
-  discovered: "discovered_at DESC NULLS LAST",
-  score: `(${scoreExpr()}) DESC`, // the real lead-fit score (SQL), so non-Shopify ranks on merit not just revenue
+  new: `discovered_at DESC NULLS LAST, ${REV} DESC NULLS LAST, ${TIE}`,
+  sales: `${REV} DESC NULLS LAST, ${TIE}`,
+  name: "COALESCE(name, domain) ASC, domain ASC",
+  launched: `launched_on DESC NULLS LAST, ${TIE}`,
+  discovered: `discovered_at DESC NULLS LAST, ${TIE}`,
+  // the real lead-fit score (SQL), so non-Shopify ranks on merit not just revenue
+  score: `(${scoreExpr()}) DESC, ${TIE}`,
 };
 
 /** Unfiltered total. Identical for every request, so compute it once. */
@@ -416,7 +431,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            g_id AS grp_id, g_sites AS grp_sites
     FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
     WHERE ${where}
-    ORDER BY ${order}, domain ASC
+    ORDER BY ${order}
     LIMIT ${limit} OFFSET ${offset}`;
 
   return {
@@ -517,7 +532,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
            price_min, price_max, products_sold, plan AS shopify_plan, description,
            instagram_followers, facebook_followers, first_product_at, first_seen
     FROM imported_stores WHERE ${where}
-    ORDER BY estimated_monthly_sales DESC NULLS LAST, domain ASC
+    ORDER BY ${sql.unsafe(ORDER.sales)}
     LIMIT ${EXPORT_CAP}`;
   // Shopify add-ons live in `apps` (apps.shopify.com slugs); every other CMS exposes them as `plugins`
   // (wp-content/plugins, /modules/…) + cross-platform third-party `technologies` (Klaviyo, Gorgias, …).
