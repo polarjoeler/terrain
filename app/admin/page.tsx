@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/app/components/logo";
 import { currentUser, isAdmin, adminEmails } from "@/lib/auth";
-import { listSubscribers } from "@/lib/subscriptions";
+import { hasAccess, listSubscribers } from "@/lib/subscriptions";
 import { counts } from "@/lib/imported";
 
 export const metadata = { title: "Terrain — Admin" };
@@ -19,7 +19,10 @@ export default async function Admin() {
   // Sequential, not Promise.all — fanning out on the max:3 postgres.js pool deadlocks the page.
   const subs = await listSubscribers().catch(() => []);
   const c = await counts().catch(() => ({ pending: 0, published: 0 }));
-  const withAccess = subs.filter((s) => s.status === "active" || s.status === "trialing").length;
+  // hasAccess, not a status list: comped accounts count as having access, and a trial whose
+  // trialEndsAt has passed no longer does — the old literal pair counted every expired trial as
+  // a live account, so this number only ever went up.
+  const withAccess = subs.filter(hasAccess).length;
   const trialing = subs.filter((s) => s.status === "trialing").length;
   const admins = adminEmails();
 
