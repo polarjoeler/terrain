@@ -112,6 +112,19 @@ export const MAX_EXTRA_SEATS = 50;
  *  of Intelligence is otherwise the whole Shopify base (40,922 rows). */
 export const USAGE_ALERT_ROWS = 15000;
 
+/** Rows a month a TRIAL may export, on a plan whose paid allowance is unmetered.
+ *
+ *  Decided 2026-11-11. A trial that cannot export at all can't be evaluated by the buyer who cares
+ *  most about the data being real — the first thing a payments or BD team does is take rows into
+ *  their own tooling. But an unmetered trial IS the product, so the trial borrows the entry tier's
+ *  monthly cap: enough to prove the rows are genuine, not enough to be the whole evaluation.
+ *
+ *  Derived from the Leads allowance rather than restated — two numbers that have to agree would
+ *  drift, and the entry tier's cap already encodes "how much export is a sample". A trial on Leads
+ *  itself gets nothing: that 500 is the paid product, so there is no smaller allowance to meter it
+ *  down to. See exportEntitlement() in lib/subscriptions.ts, which is the only place this applies. */
+export const TRIAL_EXPORT_ROWS = PLANS.leads.exportLimit!;
+
 /** Legacy plan values still in the DB. Only one subscriber existed at migration
  *  (plan=pro), but the webhook and admin actions can still write the old names until
  *  every path is updated, so resolve rather than assume. */

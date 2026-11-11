@@ -6,7 +6,7 @@
  */
 
 import { db } from "./db";
-import { planOf, resolvePlan, type PlanKey } from "./plans.ts";
+import { planOf, resolvePlan, TRIAL_EXPORT_ROWS, type PlanKey } from "./plans.ts";
 import { orgSubscriberEmails, seatCapacity, seatInviteFor, seatRoster } from "./seats";
 import { getStore } from "./store";
 
@@ -136,7 +136,9 @@ export async function consumeExportQuota(
     return { ok: false, remaining: 0, limit: 0, reason: "Your subscription doesn't include export." };
   }
   const plan = planOf(s.plan);
-  const limit = plan.exportLimit;
+  const ent = exportEntitlement(s);
+  if (!ent.allowed) return { ok: false, remaining: 0, limit: 0, reason: ent.reason };
+  const limit = ent.limit;
   const month = currentMonth();
   // `s` is the OWNER's record for a seat holder, so both the reading and the writing below land on
   // one row: the month's allowance is pooled across the workspace, not handed out per seat.
@@ -156,7 +158,7 @@ export async function consumeExportQuota(
       ok: false,
       remaining: limit - used,
       limit,
-      reason: `That's ${n.toLocaleString()} stores but only ${(limit - used).toLocaleString()} left on ${plan.label} this month (${limit.toLocaleString()}/mo).`,
+      reason: `That's ${n.toLocaleString()} stores but only ${(limit - used).toLocaleString()} left on ${plan.label}${ent.trial ? " trial" : ""} this month (${limit.toLocaleString()}/mo).`,
     };
   }
   await upsertSubscriber(s.viaSeat ?? email, { exportMonth: month, exportUsed: used + n });
@@ -164,11 +166,55 @@ export async function consumeExportQuota(
 }
 
 /** Usage for the account page — what the customer sees. `limit: null` = unmetered. */
-export function usageFor(s: Subscriber | null): { used: number; limit: number | null; remaining: number | null; plan: ReturnType<typeof planOf> } {
+/** May this seat export, and how many rows a month?
+ *
+ *  THE one definition. It used to be three: export-gate.ts refused every trial, consumeExportQuota
+ *  read the plan's cap and ignored the trial entirely, and the dashboard computed its own
+ *  `trial: status === "trialing"` for the button. A plan change could therefore unlock export in one
+ *  of them and not the others — which is exactly how a Partner seat ended up browsing the full base
+ *  with the export button greyed out and no setting that could turn it on.
+ *
+ *  A trial on an unmetered plan (Intelligence, Partner) exports at TRIAL_EXPORT_ROWS. A trial on a
+ *  metered one is refused: Leads' 500 rows a month ARE the paid product, so handing a trial the same
+ *  allowance would give away the tier. */
+export type ExportEntitlement = {
+  allowed: boolean;
+  /** Rows/month; null = unmetered. 0 when `allowed` is false. */
+  limit: number | null;
+  /** This is a trial seat — for labelling the allowance, not for deciding access. */
+  trial: boolean;
+  /** Customer-facing refusal, set only when `allowed` is false. */
+  reason?: string;
+};
+
+export function exportEntitlement(s: Subscriber | null): ExportEntitlement {
+  if (!s || !hasAccess(s)) {
+    return { allowed: false, limit: 0, trial: false, reason: "Your subscription doesn't include export." };
+  }
+  const plan = planOf(s.plan);
+  if (s.status === "trialing") {
+    if (plan.exportLimit != null) {
+      return {
+        allowed: false, limit: 0, trial: true,
+        reason: `Export unlocks when you upgrade from the ${plan.label} trial to a paid plan.`,
+      };
+    }
+    return { allowed: true, limit: TRIAL_EXPORT_ROWS, trial: true };
+  }
+  return { allowed: true, limit: plan.exportLimit, trial: false };
+}
+
+export function usageFor(s: Subscriber | null): { used: number; limit: number | null; remaining: number | null; plan: ReturnType<typeof planOf>; blocked: boolean; trial: boolean } {
   const plan = planOf(s?.plan);
   const used = s && s.exportMonth === currentMonth() ? s.exportUsed ?? 0 : 0;
-  const limit = plan.exportLimit;
-  return { used, limit, remaining: limit == null ? null : Math.max(0, limit - used), plan };
+  const ent = exportEntitlement(s);
+  // The allowance SHOWN is the allowance ENFORCED — a trialling Partner seat reads "500 left", not
+  // its paid tier's "unlimited", because 500 is what the server will actually let through.
+  const limit = ent.allowed ? ent.limit : plan.exportLimit;
+  return {
+    used, limit, remaining: limit == null ? null : Math.max(0, limit - used), plan,
+    blocked: !ent.allowed, trial: ent.trial,
+  };
 }
 
 const key = (email: string) => email.trim().toLowerCase();

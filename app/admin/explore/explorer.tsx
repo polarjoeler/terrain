@@ -189,7 +189,11 @@ export type ExportUsage = {
   limit: number | null;
   remaining: number | null;
   planLabel: string;
-  /** Trial seats can browse but not export — the button is disabled and the server also refuses. */
+  /** The server refuses export for this seat (a trial on a metered plan) — the button is disabled
+   *  to say so before the click. Resolved by exportEntitlement, never from the status here. */
+  blocked?: boolean;
+  /** Trial seat — labels the allowance as the trial's. A trial on an unmetered plan DOES export,
+   *  metered at TRIAL_EXPORT_ROWS, so this must not gate the button on its own. */
   trial?: boolean;
 };
 
@@ -346,17 +350,17 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   const [exporting, setExporting] = useState(false);
   // How many rows THIS click would export: the ticked rows, or the whole filtered set.
   const pendingRows = picked.size > 0 ? picked.size : data.total;
-  const exportBlocked = !!usage?.trial; // trial seats can browse but not export
+  const exportBlocked = !!usage?.blocked; // a trial on a metered plan — the server refuses too
   const overAllowance = usage?.remaining != null && pendingRows > usage.remaining;
   // Metered plans show what's left; unmetered ones show what's been used. Both read from the
   // plan, so adding a tier needs no change here.
   const usageLabel = !usage
     ? null
-    : usage.trial
+    : usage.blocked
       ? `Export unlocks on a paid plan · ${usage.planLabel} trial`
       : usage.limit == null
         ? `${usage.used.toLocaleString()} leads exported this month · ${usage.planLabel}`
-        : `${(usage.remaining ?? 0).toLocaleString()} of ${usage.limit.toLocaleString()} leads left this month · ${usage.planLabel}`;
+        : `${(usage.remaining ?? 0).toLocaleString()} of ${usage.limit.toLocaleString()} leads left this month · ${usage.planLabel}${usage.trial ? " trial" : ""}`;
 
   // Both export surfaces report what the download cost and what is left.
   const noteRemaining = (rows: string | null, remaining: string | null) => {
