@@ -70,8 +70,17 @@ export async function applyAdminAction(email: string, action: SubscriberAction):
     case "trial":
       // Trials land on Intelligence — the tier we want people to evaluate.
       return upsertSubscriber(email, { plan: "intelligence", status: "trialing", trialEndsAt: in7Days });
-    case "activate":
-      return upsertSubscriber(email, { plan: "intelligence", status: "active" });
+    case "activate": {
+      // Activate means "they are paying now" — NOT "they are paying for Intelligence". Hardwiring
+      // the plan here silently downgraded anyone on a richer tier: activating a Partner trial moved
+      // them to Intelligence, and since `setPlan:<key>` deliberately leaves the status alone, no
+      // pair of actions could produce an active Partner at all. The admin UI's flow is "→ Partner"
+      // then "Activate", so this has to keep the plan it finds.
+      // Only an address with no record needs a default, and that stays Intelligence so activating
+      // an unknown email behaves as it always did.
+      const existing = await getSubscriber(email).catch(() => null);
+      return upsertSubscriber(email, { plan: existing?.plan ?? "intelligence", status: "active" });
+    }
     case "cancel":
       return upsertSubscriber(email, { status: "cancelled" });
     default:
