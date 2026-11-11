@@ -18,7 +18,7 @@
  */
 import { NextResponse } from "next/server";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { consumeExportQuota, getSubscriber, hasAccess, usageFor } from "@/lib/subscriptions";
+import { consumeExportQuota, exportEntitlement, getSubscriber, hasAccess, usageFor } from "@/lib/subscriptions";
 import { platformsFor, resolvePlan, type PlanKey } from "@/lib/plans";
 import { sharingGate } from "@/lib/sessions";
 import type { BrowseFilters } from "@/lib/browse";
@@ -43,15 +43,16 @@ export async function openExport(): Promise<Denied | Opened> {
     if (!hasAccess(sub)) {
       return { ok: false, response: NextResponse.json({ error: "no_access" }, { status: 403 }) };
     }
-    // Trial accounts can browse the full dataset but not export it — export unlocks on a paid plan.
-    // Enforced here (the one gate every export surface shares) so both the CSV and Sheet doors honour it.
-    if (sub?.status === "trialing") {
+    // Whether a trial may export, and how much, is exportEntitlement's call — not this gate's. A
+    // trial on an unmetered plan exports at the entry tier's monthly cap; a trial on a metered one
+    // is refused, because that cap is the paid product. Deciding it there rather than here is the
+    // point: consumeExportQuota meters against the same answer, so the button, the CSV door and the
+    // Sheets door cannot disagree about one seat.
+    const ent = exportEntitlement(sub);
+    if (!ent.allowed) {
       return {
         ok: false,
-        response: NextResponse.json(
-          { error: "Export unlocks when you upgrade from the trial to a paid plan.", trial: true },
-          { status: 403 },
-        ),
+        response: NextResponse.json({ error: ent.reason, trial: ent.trial }, { status: 403 }),
       };
     }
     scope = platformsFor(sub?.plan);
