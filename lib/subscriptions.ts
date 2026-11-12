@@ -43,7 +43,7 @@ export async function listSubscribers(): Promise<Subscriber[]> {
 /** Admin actions on a subscriber's access (used by /api/admin/subscriber). */
 /** Admin actions on a subscriber's access (used by /api/admin/subscriber). `setPlan:<key>`
  *  replaced the old makePro/makeStarter pair so adding a tier needs no new action. */
-export type SubscriberAction = "trial" | "activate" | "cancel" | `setPlan:${PlanKey}`;
+export type SubscriberAction = "trial" | "activate" | "comp" | "cancel" | `setPlan:${PlanKey}`;
 
 /** Start a trial on a specific plan for a specific number of days — what an admin invite link
  *  applies when it is redeemed. `applyAdminAction("trial")` can't serve this: it is hardwired to
@@ -81,6 +81,14 @@ export async function applyAdminAction(email: string, action: SubscriberAction):
       const existing = await getSubscriber(email).catch(() => null);
       return upsertSubscriber(email, { plan: existing?.plan ?? "intelligence", status: "active" });
     }
+    case "comp": {
+      // Same keep-the-plan rule as activate, and for the same reason: the UI flow is "→ Partner"
+      // then "Comp". A comp with no prior record is a deliberate grant rather than a fallback, so
+      // it defaults to the top tier — comping someone onto a platform-restricted plan by accident
+      // is the failure that would go unnoticed, since it reads as missing data, not a missing plan.
+      const existing = await getSubscriber(email).catch(() => null);
+      return upsertSubscriber(email, { plan: existing?.plan ?? "partner", status: "comped" });
+    }
     case "cancel":
       return upsertSubscriber(email, { status: "cancelled" });
     default:
@@ -91,7 +99,14 @@ export async function applyAdminAction(email: string, action: SubscriberAction):
 // PlanKey now lives in lib/plans.ts alongside the entitlements, so the plan name and
 // what it permits cannot drift apart again. Re-exported for existing importers.
 export type { PlanKey };
-export type Status = "trialing" | "active" | "past_due" | "cancelled" | "expired";
+/** `comped` is OURS, not Stripe's — the only status the webhook can never write (see
+ *  mapStripeStatus in lib/stripe.ts, which maps Stripe's own vocabulary and nothing else). It
+ *  means "full access at this plan, billed to nobody": a pilot, a design partner, a reference
+ *  customer. Kept distinct from `active` on purpose — `active` is a claim that money is arriving,
+ *  and the admin counts read it, so comping someone by marking them active quietly overstates the
+ *  paying base by one seat. If a comped account later subscribes for real, the Stripe webhook
+ *  overwrites this with `active` and nothing has to be undone. */
+export type Status = "trialing" | "active" | "comped" | "past_due" | "cancelled" | "expired";
 
 export type Subscriber = {
   email: string;
@@ -210,6 +225,10 @@ export function exportEntitlement(s: Subscriber | null): ExportEntitlement {
     }
     return { allowed: true, limit: TRIAL_EXPORT_ROWS, trial: true };
   }
+  // active, comped and past_due all land here and export at the PLAN's allowance. A comp is
+  // deliberately not metered down to the trial cap: the point of comping a reference customer is
+  // that they can take the whole cohort they came for, which on Partner and Intelligence is
+  // unmetered (USAGE_ALERT_ROWS still tells us when anyone, comped or paying, goes large).
   return { allowed: true, limit: plan.exportLimit, trial: false };
 }
 
@@ -338,7 +357,9 @@ export async function consumeToken(jti: string, expiresAt: number): Promise<void
 /** True while the account may see lead data. */
 export function hasAccess(s: Subscriber | null): boolean {
   if (!s) return false;
-  if (s.status === "active") return true;
+  // A comp is access without billing, so it never expires on its own — `trialEndsAt` is ignored
+  // even if an earlier trial left one behind. It ends when an admin cancels it.
+  if (s.status === "active" || s.status === "comped") return true;
   if (s.status === "trialing") {
     return !!s.trialEndsAt && new Date(s.trialEndsAt) > new Date();
   }

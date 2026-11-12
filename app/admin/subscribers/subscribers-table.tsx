@@ -7,13 +7,13 @@ const nextPlan = (raw: string | null | undefined): PlanKey =>
   PLAN_ORDER[(PLAN_ORDER.indexOf(resolvePlan(raw)) + 1) % PLAN_ORDER.length];
 
 import { useMemo, useState } from "react";
-import type { Subscriber } from "@/lib/subscriptions";
-
-// Mirrors lib/subscriptions SubscriberAction; setPlan:<key> replaced makePro/makeStarter.
-type Action = "trial" | "activate" | "cancel" | `setPlan:${PlanKey}`;
+// The action list is imported, not mirrored: this file used to restate it, and a type-only import
+// costs the client bundle nothing while making an action the server rejects a compile error here.
+import type { Subscriber, SubscriberAction as Action } from "@/lib/subscriptions";
 
 const STATUS_STYLE: Record<string, string> = {
   active: "bg-mint/20 text-mint",
+  comped: "bg-lilac/20 text-lilac",       // full access, billed to nobody — distinct from active on sight
   trialing: "bg-cyan/20 text-cyan",
   past_due: "bg-orange/20 text-orange",
   cancelled: "bg-cream/10 text-cream/50",
@@ -212,6 +212,12 @@ export function SubscribersTable({ initial }: { initial: Subscriber[] }) {
                     </button>
                     <button onClick={() => run(s.email, "activate")} disabled={busy !== null} className={btn}>
                       Activate
+                    </button>
+                    {/* Full access at the plan shown, with no billing and no expiry — for pilots
+                        and reference customers. Separate from Activate so the paying count stays
+                        true. Both keep the plan they find, so set the tier first. */}
+                    <button onClick={() => run(s.email, "comp")} disabled={busy !== null} className={btn}>
+                      Comp
                     </button>
                     {/* Cycle through the tiers — one button rather than a pair, so a new
                         plan needs no new control. */}
