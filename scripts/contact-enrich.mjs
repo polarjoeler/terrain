@@ -819,6 +819,13 @@ async function main() {
       return;
     }
 
+    // Biggest first by the shared priority score (scripts/build-priority.mjs). It replaces the raw
+    // estimated_monthly_sales order, which was in each store's LOCAL currency (a rand figure beat a
+    // dollar one 18 to 1) and empty on ~63% of rows. Falls back to it until store_priority exists.
+    const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
+    const sizeOrder = hasPriority
+      ? sql`(SELECT p.account_score FROM store_priority p WHERE p.domain = imported_stores.domain) DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST`
+      : sql`estimated_monthly_sales DESC NULLS LAST`;
     const rows = DOMAINS.length
       ? await sql`SELECT domain, name, email, platform, category FROM imported_stores WHERE domain = ANY(${DOMAINS})`
       : await sql`
@@ -840,7 +847,7 @@ async function main() {
           AND (contact_claimed_at IS NULL OR contact_claimed_at < now() - ${CLAIM_TTL}::interval)
         -- Worst-first by value: the stores a customer is most likely to pitch, and the ones where a
         -- generic-only contact costs us the most, get a named contact earliest.
-        ORDER BY ${SAMPLE ? sql`random()` : sql`(contact_type IS NULL) DESC, estimated_monthly_sales DESC NULLS LAST`}
+        ORDER BY ${SAMPLE ? sql`random()` : sql`(contact_type IS NULL) DESC, ${sizeOrder}`}
         LIMIT ${LIMIT}
         FOR UPDATE SKIP LOCKED
           ) c

@@ -50,7 +50,11 @@ MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG
 
 # Refresh the value-ranked queue (skips already-verified; re-surfaces >60d-stale so
 # provider switches get caught), then HTTP-probe the top batch and sync results.
-node --env-file=.env.local scripts/payment-queue.mjs --limit 15000 --country "$MARKETS" >/dev/null 2>&1 \
+# --global-fill: after Africa+JP, up to GLOBAL_FILL never-probed Shopify stores from other markets' top-1,000
+# (store_priority), rank by rank. The Africa+JP pool is ~90% tried, so this is what keeps the probe busy.
+# 75 a run is ~1,200 stores a day; it shares the 250GB/month Webshare plan, so raise it only after
+# checking usage on the Webshare dashboard.
+node --env-file=.env.local scripts/payment-queue.mjs --limit 15000 --country "$MARKETS" --global-fill "${GLOBAL_FILL:-75}" >/dev/null 2>&1 \
   || echo "!! payment-queue failed (continuing)"
 PROBE_PY="$HOME/shopify-radar/.venv/bin/python"
 if [ -x "$PROBE_PY" ]; then

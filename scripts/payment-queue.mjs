@@ -31,6 +31,13 @@ let CLIST = (opt("--country", null) || "").toUpperCase().split(",").map((s) => s
 // re-probes ALL of them rather than reserving a thin slice. ADDS-to-provider still come from the
 // normal probe; a watch only ever sees the current carriers change.
 const PROVIDERS = (opt("--providers", null) || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+// --global-fill N: after the focus markets, add up to N never-probed Shopify stores from EVERY other
+// market's top tier (store_priority market_rank <= --global-rank, default 1000), taken rank by rank so
+// each market's #1 comes before any market's #2. The probe is idle ~95% of the time because the
+// Africa+JP pool is ~90% tried (2026-11-11); this points the spare capacity at other markets' biggest
+// stores. N is the Webshare bandwidth throttle (the 250GB/month plan is shared with the other lanes).
+const GLOBAL_FILL = parseInt(opt("--global-fill", "0"), 10);
+const GLOBAL_RANK = parseInt(opt("--global-rank", "1000"), 10);
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL not set (run with --env-file=.env.local)");
@@ -156,8 +163,18 @@ async function main() {
     // the ones payment companies care about — are caught fast; the long tail every
     // 75 days. Unprobed stores are always eligible.
     const HV_REPROBE_DAYS = 7, TAIL_REPROBE_DAYS = 21;
+    // store_priority (scripts/build-priority.mjs) is the ONE size order every lane shares. Before it
+    // exists this falls back to the old order (raw estimated_monthly_sales, local currency).
+    const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
+    const pri = hasPriority
+      ? sql`(SELECT account_score FROM store_priority p WHERE p.domain = imported_stores.domain)`
+      : sql`NULL::real`;
+    const rankCol = hasPriority
+      ? sql`(SELECT market_rank FROM store_priority p WHERE p.domain = imported_stores.domain)`
+      : sql`NULL::int`;
     const eligible = await sql`
       SELECT domain, estimated_monthly_sales sales, live_status, discovered_at, source, country,
+        ${pri} AS score, ${rankCol} AS market_rank,
         ((payments IS NULL OR payments = '') AND payments_checked_at IS NULL) AS needs_initial,
         COALESCE(plus, false) AS plus,
         (domain IN (SELECT domain FROM store_tags WHERE tag = 'top-100'))  AS t100,
@@ -189,7 +206,9 @@ async function main() {
     // only a thin slice for re-probes (switch detection on high-value stores). Once the
     // never-probed backlog is gone, `init` runs short and the re-probe cadence naturally
     // reclaims the freed slots. Tune with --reprobe-share / REPROBE_SHARE (0 = pure drain).
-    const isHV = (r) => r.t100 || r.t500 || r.plus;
+    const isHV = (r) => r.t100 || r.t500 || r.plus || (r.market_rank != null && r.market_rank <= 500);
+    // size: the shared priority score; stores with no score sort after every scored one
+    const size = (r) => (r.score == null ? -1 : Number(r.score));
     const cap = LIMIT > 0 ? LIMIT : eligible.length;
     // Boosted from 0.12 → 0.30 to clear the African StoreCensus re-probe backlog fast (their
     // StoreCensus payment data was unreliable — see clean-storecensus-payments). The re-probe
@@ -208,17 +227,25 @@ async function main() {
     // falls back to the normal newest-first-then-value ordering.
     const SP = new Set(["US","CA","GB","AU","NZ","IE","JP","SG","HK","AT","BE","CZ","DK","FI","FR","DE","IT","NL","PT","ES","SE","CH","RO","BG","HR","CY","EE","GR","HU","LV","LT","LU","MT","PL","SK","SI"]);
     const sc = (r) => (r.source === "storecensus" && !SP.has((r.country || "").toUpperCase()) ? 1 : 0);
+    // Finds from the last 14 days still go newest-first (a new lead matters most the week it lands);
+    // the older backlog goes biggest-first by the shared priority score.
+    const FRESH_MS = 14 * 864e5, now = Date.now();
+    const fresh = (r) => (r.discovered_at && now - disc(r) < FRESH_MS ? 1 : 0);
     const init = eligible.filter((r) => r.needs_initial).sort((a, b) => {
       const s = sc(b) - sc(a); if (s) return s;                       // StoreCensus reset cohort first
-      if (sc(a)) return (b.sales || 0) - (a.sales || 0);              // within it: highest-value first
-      return disc(b) - disc(a)                                        // fresh CT discoveries: newest first (unchanged)
+      if (sc(a)) return size(b) - size(a) || (b.sales || 0) - (a.sales || 0);   // within it: biggest first
+      const f = fresh(b) - fresh(a); if (f) return f;                 // fresh CT discoveries first...
+      if (fresh(a)) return disc(b) - disc(a);                         // ...newest first among them
+      return size(b) - size(a)                                        // backlog: biggest first
         || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)
-        || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0);
+        || (b.new_market ? 1 : 0) - (a.new_market ? 1 : 0)
+        || disc(b) - disc(a);
     });
     const reprobes = eligible.filter((r) => !r.needs_initial).sort((a, b) =>
       sc(b) - sc(a)                                                   // African StoreCensus re-verify first
       || (isHV(b) ? 1 : 0) - (isHV(a) ? 1 : 0)                        // then HV switch detection
-      || (b.sales || 0) - (a.sales || 0));                           // then by value
+      || size(b) - size(a)                                            // then biggest first
+      || (b.sales || 0) - (a.sales || 0));
     const reSlots = Math.min(reprobes.length, Math.round(cap * REPROBE_SHARE));
     const initSlots = Math.max(0, cap - reSlots);
     // ZA-priority-but-not-exclusive: the cued country leads with up to ~75% of the initial slots;
@@ -233,7 +260,31 @@ async function main() {
       takeInit = init.slice(0, initSlots);
     }
     const takeRe = reprobes.slice(0, cap - takeInit.length);
-    const queue = [...takeInit, ...takeRe]; // never-probed (HV→new-market→value) first, re-probes last
+
+    // Global fill (see GLOBAL_FILL): other markets' top tier, never probed, rank by rank. Reads only
+    // the store_priority index plus primary-key lookups — never the whole store table.
+    let fill = [];
+    if (GLOBAL_FILL > 0 && hasPriority) {
+      fill = await sql`
+        SELECT p.domain, p.country, p.market_rank
+          FROM store_priority p JOIN imported_stores s ON s.domain = p.domain
+         WHERE p.market_rank <= ${GLOBAL_RANK} AND p.platform = 'shopify'
+           ${CLIST.length ? sql`AND NOT (p.country = ANY(${CLIST}))` : sql``}
+           AND s.published AND COALESCE(s.live_status, 'active') NOT IN ('dead', 'migrated')
+           AND (s.payments IS NULL OR s.payments = '') AND s.payments_checked_at IS NULL
+         ORDER BY p.market_rank, p.account_score DESC
+         LIMIT ${GLOBAL_FILL}`;
+      const byC = {};
+      for (const r of fill) byC[r.country] = (byC[r.country] || 0) + 1;
+      console.log(`Global fill: ${fill.length.toLocaleString()} never-probed top-${GLOBAL_RANK} Shopify stores outside ${CLIST.join(",") || "-"}`
+        + (fill.length ? ` (down to rank ${fill[fill.length - 1].market_rank}; ${Object.entries(byC).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c, n]) => `${c} ${n}`).join(" · ")})` : ""));
+    } else if (GLOBAL_FILL > 0) console.log("Global fill: store_priority not built yet — skipped.");
+
+    // Order: focus never-probed, then the global top tier, then focus re-probes. checkout_probe.py
+    // skips anything already done, so whatever the focus pool no longer needs falls through to the fill.
+    const inFocus = new Set(takeInit.map((r) => r.domain));
+    fill = fill.filter((r) => !inFocus.has(r.domain));   // only overlaps when --country is unset
+    const queue = [...takeInit, ...fill, ...takeRe];
     const reprobeCount = takeRe.length;
 
     mkdirSync(dirname(OUT), { recursive: true });
@@ -247,11 +298,11 @@ async function main() {
       FROM imported_stores WHERE published`;
 
     console.log(`\nPayment coverage: ${cov.have.toLocaleString()} have a provider · ${cov.live.toLocaleString()} live stores.`);
-    console.log(`Wrote ${queue.length.toLocaleString()} domains → ${OUT} (${tagged.toLocaleString()} Top100/500 first · ${reprobeCount.toLocaleString()} re-probes reserved for switch detection · ${(queue.length - reprobeCount).toLocaleString()} initial)`);
+    console.log(`Wrote ${queue.length.toLocaleString()} domains → ${OUT} (${tagged.toLocaleString()} Top100/500 first · ${reprobeCount.toLocaleString()} re-probes reserved for switch detection · ${(queue.length - reprobeCount - fill.length).toLocaleString()} initial · ${fill.length.toLocaleString()} global fill)`);
     console.log("Queue head (probe these first):");
     for (const r of queue.slice(0, 10)) {
-      const tag = r.t100 ? " [Top100]" : r.t500 ? " [Top500]" : "";
-      console.log(`   $${Number(r.sales || 0).toLocaleString().padStart(14)}/mo  ${r.domain}${tag}`);
+      const tag = r.t100 ? " [Top100]" : r.t500 ? " [Top500]" : r.market_rank ? ` [#${r.market_rank} ${r.country}]` : "";
+      console.log(`   ${r.score == null ? "     -" : Number(r.score).toFixed(1).padStart(6)}  ${r.domain}${tag}`);
     }
     console.log(`\nFeed to the checkout probe, e.g.:  python checkout_probe.py --from-file ${OUT} --limit 75`);
   } finally {
