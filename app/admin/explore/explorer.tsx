@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { saveListAction } from "@/app/(app)/lists/actions";
 import { marketLabel } from "@/lib/markets";
-import { platformLabel } from "@/lib/platforms";
+import { isOpenSource, platformLabel } from "@/lib/platforms";
 import { scoreColor } from "@/lib/revenue";
 import { bandTone, REVENUE_BANDS, bandDisplay, floorBand } from "@/lib/fx";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
@@ -13,9 +13,6 @@ import { LeadDrawer } from "./lead-drawer";
 const PAGE = 60;
 // "new" surfaces freshly-discovered stores first (the primary driver) — see lib/browse.ts ORDER.
 type SortKey = "new" | "score" | "sales" | "name";
-// Platforms whose stores are self-hosted, so a hosting provider is a meaningful lead signal. The
-// Hosting facet only makes sense for these — Shopify/Wix are SaaS (hosting is always the vendor).
-const OPEN_SOURCE_PLATFORMS = ["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart"];
 
 // Recency = how recently WE first tracked the store (discoveredAt), so "new this
 // week/month/year" means newly-discovered leads. Windows are nested, so it's a
@@ -456,7 +453,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // case-insensitively — otherwise selecting "Shopify" wouldn't reveal the Plus / Apps controls.
   const shopifySelected = [...platform].some((p) => p.toLowerCase() === "shopify");
   const wooSelected = [...platform].some((p) => p.toLowerCase() === "woocommerce");
-  const openSourceSelected = [...platform].some((p) => OPEN_SOURCE_PLATFORMS.includes(p.toLowerCase()));
+  const openSourceSelected = [...platform].some(isOpenSource);
 
   return (
     <div className="flex min-h-screen gap-0">

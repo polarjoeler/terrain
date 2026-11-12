@@ -8,7 +8,9 @@
  *   · TXT: SPF includes          → sending tools (Klaviyo, Mailchimp, SendGrid, HubSpot, Zendesk …)
  *   · TXT: site verifications    → accounts the merchant runs (Meta, Google, Klaviyo, Stripe, TikTok …)
  *   · DKIM CNAMEs (kl, k1, s1, selector1) → ESPs that sign mail as the store (Klaviyo, Mailchimp …)
- *   · A record → network (Team Cymru IP→ASN) → hosting provider; Shopify stores read "Shopify"
+ *   · A record → network (Team Cymru IP→ASN) → hosting provider, for open-source platforms only
+ *     (WooCommerce, PrestaShop, Magento …). On Shopify, Wix and the other SaaS builders the host is
+ *     the platform itself, so it isn't looked up or recorded.
  * Results land in the side table `store_dns` (detail data stays out of the hot store table). Only
  * hosting is copied onto imported_stores, and only where it was never checked.
  *
@@ -117,7 +119,13 @@ async function asnOf(ip) {
   } catch { return null; }
 }
 
-async function scan(domain) {
+// Hosting is looked up only for open-source (self-hosted) platforms; on Shopify, Wix and the other SaaS
+// builders the platform is the host (Joel, 2026-11-12). Same list as lib/platforms.ts. --domains runs
+// carry no platform and always look it up.
+const OPEN_SOURCE = new Set(["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart", "shopware"]);
+const selfHosted = (platform) => platform === undefined || OPEN_SOURCE.has(String(platform || "").toLowerCase());
+
+async function scan(domain, platform) {
   const apex = domain.replace(/^www\./i, "").toLowerCase();
   const [mx, txt, a] = await Promise.all([
     res.resolveMx(apex).catch((e) => (e.code === "ENOTFOUND" ? null : [])),
@@ -136,7 +144,7 @@ async function scan(domain) {
   const tools = vendorsIn([...mxHosts, ...spf, ...dkim]);
   for (const v of verified) if (VENDORS.some(([, t]) => t === v)) tools.add(v);
   // Shopify's storefront range is announced by Cloudflare's network, so name it before the ASN lookup
-  const net = !a[0] ? null : a[0].startsWith("23.227.38.") ? { asn: 13335, name: "Shopify" } : await asnOf(a[0]);
+  const net = a[0] && selfHosted(platform) ? await asnOf(a[0]) : null;
   return {
     domain, mx: mxHosts.slice(0, 5), spf: spf.slice(0, 12), dkim, verified: [...verified],
     emailProvider: [...email][0] || (mxHosts[0] ? baseDomain(mxHosts[0]) : null),
@@ -167,10 +175,10 @@ async function main() {
       const live = sql`published AND activity_tier IS DISTINCT FROM 'not_a_store' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
       const setting = async (k) => (await sql`SELECT value FROM app_settings WHERE key = ${k}`.catch(() => []))[0]?.value || null;
       const since = await setting(SINCE_KEY);
-      const fresh = since ? await sql`SELECT domain FROM imported_stores WHERE created_at > ${since}::timestamptz AND ${live}
+      const fresh = since ? await sql`SELECT domain, platform FROM imported_stores WHERE created_at > ${since}::timestamptz AND ${live}
         ORDER BY created_at DESC LIMIT ${Math.floor(LIMIT / 2)}` : [];
       const cursor = (await setting(CURSOR_KEY)) || started;
-      const backlog = await sql`SELECT domain, created_at FROM imported_stores WHERE created_at < ${cursor}::timestamptz AND ${live}
+      const backlog = await sql`SELECT domain, platform, created_at FROM imported_stores WHERE created_at < ${cursor}::timestamptz AND ${live}
         ORDER BY created_at DESC LIMIT ${LIMIT - fresh.length}`;
       // an empty backlog means a full pass is done: restart from the top next run (a refresh cycle)
       cursorNext = backlog.length ? new Date(backlog.at(-1).created_at).toISOString() : started;
@@ -205,7 +213,8 @@ async function main() {
 
     await Promise.all(Array.from({ length: CONC }, async () => {
       while (i < rows.length) {
-        const r = await scan(rows[i++].domain).catch(() => null);
+        const row = rows[i++];
+        const r = await scan(row.domain, row.platform).catch(() => null);
         done++;
         if (!r) continue;
         if (r.gone) gone++;
