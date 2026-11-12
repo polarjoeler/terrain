@@ -184,10 +184,15 @@ async function main() {
     const flush = async () => {
       const b = out.splice(0);
       if (DRY || !b.length) return;
-      const vals = b.map((r) => [r.domain, r.emailProvider || null, r.tools || [], r.verified || [], r.mx || [], r.spf || [], r.dkim || [],
-        r.hosting || null, r.asn || null, !!r.gone]);
+      // Lists travel as JSON text: a JS array inside a multi-row VALUES serialises as a bare string,
+      // and an empty one as "" — which `::text[]` rejects, failing every batch (first run, 2026-11-12).
+      const j = (a) => JSON.stringify(a || []);
+      const vals = b.map((r) => [r.domain, r.emailProvider || null, j(r.tools), j(r.verified), j(r.mx), j(r.spf), j(r.dkim),
+        r.hosting || null, r.asn ? String(r.asn) : null, r.gone ? "true" : "false"]);
+      const arr = (col) => sql`ARRAY(SELECT jsonb_array_elements_text(${sql(col)}::jsonb))`;
       await sql`INSERT INTO store_dns (domain, email_provider, tools, verified, mx, spf, dkim, hosting, asn, gone, checked_at)
-        SELECT v.domain, v.ep, v.tools::text[], v.verified::text[], v.mx::text[], v.spf::text[], v.dkim::text[], v.hosting, v.asn::int, v.gone::boolean, now()
+        SELECT v.domain, v.ep, ${arr("v.tools")}, ${arr("v.verified")}, ${arr("v.mx")}, ${arr("v.spf")}, ${arr("v.dkim")},
+          v.hosting, v.asn::int, v.gone::boolean, now()
         FROM (VALUES ${sql(vals)}) AS v(domain, ep, tools, verified, mx, spf, dkim, hosting, asn, gone)
         ON CONFLICT (domain) DO UPDATE SET email_provider = EXCLUDED.email_provider, tools = EXCLUDED.tools, verified = EXCLUDED.verified,
           mx = EXCLUDED.mx, spf = EXCLUDED.spf, dkim = EXCLUDED.dkim, hosting = EXCLUDED.hosting, asn = EXCLUDED.asn,
