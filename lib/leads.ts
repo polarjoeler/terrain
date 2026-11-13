@@ -38,6 +38,11 @@ export type Lead = {
   /** Contact quality (scripts/contact-enrich.mjs). `email` is the best address we hold; this says
    *  WHAT it is — 'named' | 'role_targeted' | 'role_generic' | 'form_only' | 'none' — so a
    *  subscriber can tell a person's inbox from the info@ queue before spending a send on it. */
+  /** Platform history. `migratedFrom` is where the store USED to run and `platform` is where it
+   *  runs now; `migratedAt` is our estimate of when it left (last confirmed selling on the old
+   *  one). Set only on stores we have seen move, so null is "no move recorded", not "never moved". */
+  migratedFrom?: string | null;
+  migratedAt?: string | null;
   contactType?: string | null;
   contactName?: string | null;
   contactRole?: string | null;

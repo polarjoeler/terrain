@@ -261,9 +261,26 @@ async function main() {
     let skipped = 0;
     async function persist(domain, status, res, miss, attempt = 0) {
       try {
+        // A confirmed move is RECORDED, not treated as the end of the store. `platform` is healed to
+        // where it now runs, migrated_from/_at keep what it left and when, and live_status goes back
+        // to 'active' — because it IS active, just elsewhere. Leaving it 'migrated' is what dropped
+        // the store out of the customer base (lib/browse.ts excludes the terminal states), which
+        // deleted the lead at exactly the moment it became most interesting: a store that just
+        // replatformed is re-choosing its payments, apps and agency.
+        // Every SET below reads the OLD row — Postgres evaluates them all against the pre-UPDATE
+        // tuple — so `migrated_from = platform` captures the platform being left even though the
+        // same statement overwrites `platform`.
+        const moved = status === "migrated";
         await sql`
           UPDATE imported_stores SET
-            live_status = ${status},
+            live_status = ${moved ? "active" : status},
+            -- COALESCE keeps the FIRST move's origin: a store that moves twice should still show
+            -- where it came from, and healing platform each time would otherwise rewrite history.
+            migrated_from = CASE WHEN ${moved} THEN COALESCE(migrated_from, platform) ELSE migrated_from END,
+            -- last_alive_at = last confirmed SELLING on the old platform, the same estimate
+            -- churn_log.died_at uses. now() only when we never saw it sell.
+            migrated_at = CASE WHEN ${moved} THEN COALESCE(migrated_at, last_alive_at, now()) ELSE migrated_at END,
+            platform = CASE WHEN ${moved} AND ${res.platform ?? null}::text IS NOT NULL THEN ${res.platform ?? null}::text ELSE platform END,
             live_platform = ${res.platform},
             live_miss = ${miss},
             live_checked_at = now(),
@@ -276,7 +293,10 @@ async function main() {
             -- selling time = our death-date estimate for the churn below (undatable when never sold).
             last_alive_at = CASE WHEN ${res.selling === true} THEN now() ELSE last_alive_at END
           WHERE domain = ${domain}`;
-        // Snapshot into the churn log the moment a store is confirmed gone —
+        // Snapshot into the churn log the moment a store is confirmed gone — including a MOVE, which
+        // is still churn for the platform it left even though the store lives on. `status` here is
+        // the classifier's verdict, not the live_status we just wrote.
+        //
         // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
         // `historic` = we never verified it live before it died (dead at first
         // contact, e.g. a bulk-imported old site) → excluded from period churn.

@@ -272,6 +272,15 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
             <div className="min-w-0">
               <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
                 {data?.platform && <span className={`rounded px-1.5 py-0.5 font-medium ${platTone(data.platform)}`}>{platName(data.platform)}</span>}
+                {/* A move is shown next to the platform, not buried in a detail row: the single most
+                    useful thing about this store right now is that it just changed platform, which
+                    means it is re-choosing payments, apps and agency. */}
+                {data?.migrated_from && (
+                  <span className="rounded bg-cyan/15 px-1.5 py-0.5 font-medium text-cyan">
+                    ← {platName(data.migrated_from)}
+                    {data.migrated_at ? ` · ${new Date(data.migrated_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}` : ""}
+                  </span>
+                )}
                 {data?.plus && <span className="rounded bg-lilac/15 px-1.5 py-0.5 font-semibold text-lilac">⚡ Plus</span>}
                 {data?.country && <span className="text-cream/55">{marketFlag(data.country)} {cleanMarket(data.country)}{data.city ? ` · ${data.city}` : ""}</span>}
                 {showLive && <span className="rounded bg-orange/15 px-1.5 py-0.5 text-orange">{data!.live_status}</span>}

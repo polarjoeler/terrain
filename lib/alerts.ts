@@ -81,7 +81,11 @@ export async function recentEvents(opts: { windowDays?: number; limit?: number }
     left_platform: string | null; churned_at: Date;
   }[]>`
     SELECT c.domain, c.name, c.status, c.migrated_to, c.country, c.category,
-           c.estimated_monthly_sales AS est, i.platform AS left_platform, c.churned_at
+           c.estimated_monthly_sales AS est,
+           -- migrated_from FIRST: once a move is confirmed, imported_stores.platform holds where the
+           -- store went, not where it came from, so reading i.platform alone would report the
+           -- destination as the origin ("left WooCommerce for WooCommerce").
+           COALESCE(i.migrated_from, i.platform) AS left_platform, c.churned_at
       FROM churn_log c
       LEFT JOIN imported_stores i ON i.domain = c.domain
      WHERE NOT c.historic

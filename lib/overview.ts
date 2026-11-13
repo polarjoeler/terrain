@@ -43,8 +43,13 @@ export async function overviewData(): Promise<OverviewData> {
           count(*) FILTER (WHERE plus AND launched_at > now()-interval '7 days')::int plus_w,
           count(*) FILTER (WHERE live_status = 'dead' AND live_checked_at > now()-interval '7 days')::int churn_w,
           count(*) FILTER (WHERE live_status = 'dead' AND live_checked_at > now()-interval '14 days' AND live_checked_at <= now()-interval '7 days')::int churn_pw,
-          count(*) FILTER (WHERE live_status = 'migrated' AND live_checked_at > now()-interval '7 days')::int mig_w,
-          count(*) FILTER (WHERE live_status = 'migrated' AND live_checked_at > now()-interval '14 days' AND live_checked_at <= now()-interval '7 days')::int mig_pw,
+          -- Dated by migrated_at — when the store actually left, our last-confirmed-selling estimate
+          -- — not live_checked_at, which is when WE happened to look. A backlog sweep could
+          -- otherwise report a year of moves as "this week". The live_status arm is the fallback for
+          -- rows recorded before migrated_at existed.
+          count(*) FILTER (WHERE COALESCE(migrated_at, CASE WHEN live_status = 'migrated' THEN live_checked_at END) > now()-interval '7 days')::int mig_w,
+          count(*) FILTER (WHERE COALESCE(migrated_at, CASE WHEN live_status = 'migrated' THEN live_checked_at END) > now()-interval '14 days'
+                             AND COALESCE(migrated_at, CASE WHEN live_status = 'migrated' THEN live_checked_at END) <= now()-interval '7 days')::int mig_pw,
           count(*) FILTER (WHERE live_status IS NULL OR live_status NOT IN ('dead','migrated'))::int live
         FROM imported_stores WHERE published AND country = ANY(${FOCUS})`;
     });
