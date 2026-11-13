@@ -16,6 +16,7 @@
 import { usdSqlExpr, usdExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
 import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
+import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
 // a latent bug on the Supabase transaction pooler (which rejects prepared statements). The shared
@@ -57,6 +58,13 @@ export type BrowseFilters = {
   band?: string[]; theme?: string[]; city?: string[];
   payment?: string[]; shipping?: string[]; app?: string[]; plugin?: string[]; tech?: string[];
   activity?: string[]; hosting?: string[];
+  /** DNS (store_dns, scripts/dns-tech.mjs): the mailbox provider behind the store's MX, and tools
+   *  seen in its SPF/DKIM/verification records (Klaviyo, HubSpot, Zendesk …). */
+  emailProvider?: string[]; dnsTool?: string[];
+  /** Checkout-probe "not trading" reasons (store_not_trading): show only stores with these reasons… */
+  notTrading?: string[];
+  /** …or hide the stores that are definitely not trading (frozen, password page, not accepting orders). */
+  hideNotTrading?: boolean;
   plus?: boolean; hasEmail?: boolean; noPayment?: boolean;
   /** Contact-quality facet: 'named' | 'role_targeted' | 'role_generic' | 'form_only' | 'none'. */
   contactType?: string[];
@@ -109,6 +117,8 @@ export type BrowseRow = {
    *  so the table can show both the ranking and how fresh it is. `cruxTrend` is the move since
    *  the previous month we hold: up | down | flat | new. */
   cruxRank: number | null; cruxRankMonth: string | null; cruxTrend: string | null;
+  /** Why the checkout probe found nothing to buy (frozen, password_page, …), or null. */
+  notTrading: string | null;
   score: number;
 };
 
@@ -132,6 +142,7 @@ export type BrowseResult = {
     category: Facet; city: Facet; theme: Facet;
     activity: Facet; hosting: Facet;
     payment: Facet; shipping: Facet; apps: Facet; plugins: Facet; tech: Facet;   // multi-token (a store has several)
+    emailProvider: Facet; dnsTool: Facet; notTrading: Facet;   // side tables: store_dns, store_not_trading
   };
   recency: {
     launched: Record<number, number>;
@@ -151,7 +162,39 @@ const GROUP_JOIN = `LEFT JOIN (SELECT m.domain AS g_domain, g.group_id AS g_id, 
 
 const d = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 10) : null);
 
-function buildWhere(f: BrowseFilters) {
+// Side tables keyed by domain, each created by its own script's explicit --migrate (never here):
+// store_dns by scripts/dns-tech.mjs, store_not_trading by scripts/sync-checkout-payments.mjs. Detail
+// data stays out of imported_stores, which is too hot to ALTER. Reads are index lookups: a LATERAL
+// primary-key lookup per row for the facets, EXISTS for the filters (PK, the GIN index on tools, the
+// btree on email_provider) — never a scan of store_dns, which covers every published store worldwide.
+// Until a table exists the browse leaves it out, so deploying before the migration can't break a page.
+type SideTables = { dns: boolean; nt: boolean };
+const NO_SIDE: SideTables = { dns: false, nt: false };
+let _side: { at: number; v: SideTables } | null = null;
+export async function sideTables(): Promise<SideTables> {
+  // Re-check every 30 min once both exist; every minute while one is still missing.
+  if (_side && Date.now() - _side.at < (_side.v.dns && _side.v.nt ? 30 : 1) * 60_000) return _side.v;
+  try {
+    const [r] = await db()<{ dns: boolean; nt: boolean }[]>`
+      SELECT to_regclass('public.store_dns') IS NOT NULL AS dns, to_regclass('public.store_not_trading') IS NOT NULL AS nt`;
+    _side = { at: Date.now(), v: { dns: Boolean(r?.dns), nt: Boolean(r?.nt) } };
+  } catch {
+    return _side?.v ?? NO_SIDE;
+  }
+  return _side.v;
+}
+// One PK lookup per row. OFFSET 0 keeps the planner from flattening it into a hash join, which
+// seq-scans the whole side table (store_dns covers every published store worldwide and grows
+// ~60k rows an hour; the browse universe is ~90k). Measured on prod 2026-11-13: +~200ms per
+// aggregate over the full visible set, vs a full scan of store_dns for the hash join.
+const DNS_LATERAL = `LEFT JOIN LATERAL (SELECT sd.email_provider AS dns_email, sd.tools AS dns_tools, sd.verified AS dns_verified
+  FROM store_dns sd WHERE sd.domain = imported_stores.domain OFFSET 0) dns ON true`;
+const NT_LATERAL = `LEFT JOIN LATERAL (SELECT nt.reason AS nt_reason
+  FROM store_not_trading nt WHERE nt.domain = imported_stores.domain OFFSET 0) ntr ON true`;
+const DNS_NULLS = "NULL::text AS dns_email, NULL::text[] AS dns_tools, NULL::text[] AS dns_verified";
+const textArray = (xs: readonly string[]) => `ARRAY[${xs.map((x) => `'${x.replace(/'/g, "''")}'`).join(",")}]::text[]`;
+
+function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   const sql = db();
   const launchExpr = sql.unsafe(
     `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`,
@@ -203,6 +246,21 @@ function buildWhere(f: BrowseFilters) {
   if (f.tech?.length) conds.push(sql`technologies ILIKE ANY(${f.tech.map((a) => `%${a}%`)})`);
   if (f.activity?.length) conds.push(sql`activity_tier = ANY(${f.activity})`);
   if (f.hosting?.length) conds.push(sql`hosting_provider = ANY(${f.hosting})`);
+  // DNS + not-trading filters are EXISTS against the side table's primary key (plus the GIN index on
+  // store_dns.tools / the btree on email_provider), so the planner can drive either way, by index.
+  // A filter on a table that doesn't exist yet matches nothing rather than everything.
+  if (f.emailProvider?.length) conds.push(side.dns
+    ? sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.email_provider = ANY(${f.emailProvider}))`
+    : sql`false`);
+  if (f.dnsTool?.length) conds.push(side.dns
+    ? sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.tools && ${f.dnsTool}::text[])`
+    : sql`false`);
+  if (f.notTrading?.length) conds.push(side.nt
+    ? sql`EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${f.notTrading}))`
+    : sql`false`);
+  if (f.hideNotTrading && side.nt) {
+    conds.push(sql`NOT EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${HARD_NOT_TRADING}))`);
+  }
   if (f.plus) conds.push(sql`plus`);
   if (f.hasEmail) conds.push(sql`${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> ''`);
   if (f.contactType?.length) conds.push(sql`contact_type = ANY(${f.contactType})`);
@@ -308,7 +366,8 @@ async function dbAggSet(sql: ReturnType<typeof db>, key: string, v: AggParsed): 
 
 export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
   const sql = db();
-  const where = buildWhere(f);
+  const side = await sideTables();
+  const where = buildWhere(f, side);
   const usd = sql.unsafe(usdSqlExpr());
   const band = sql.unsafe(bandSqlExpr());
   // The Apps facet is a regex over every row's app-store URLs — the single most expensive sub-query.
@@ -348,6 +407,12 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               WHERE m[1] NOT IN ('partners','collections','browse','categories','stores')
               GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
 
+  // DNS tools minus the mailbox providers, which have their own facet (Email provider).
+  const dnsToolFacet =
+    `(SELECT COALESCE(jsonb_agg(jsonb_build_array(v, n) ORDER BY n DESC), '[]'::jsonb)
+        FROM (SELECT tok AS v, count(*)::int n FROM f, unnest(f.dns_tools) AS tok
+              WHERE tok <> ALL(${textArray(EMAIL_TOOLS)}) GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
+
   const toFacet = (v: unknown): Facet =>
     ((v ?? []) as [string, number][]).map(([value, count]) => ({ value: String(value), count: Number(count) }));
   const toRec = (v: unknown): Record<number, number> =>
@@ -370,8 +435,12 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (contact_mx_ok IS FALSE) AS will_bounce,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at,
-             COALESCE(g_id, domain) AS operator
-      FROM imported_stores ${sql.unsafe(GROUP_JOIN)} WHERE ${where}
+             COALESCE(g_id, domain) AS operator,
+             ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools" : "NULL::text AS dns_email, NULL::text[] AS dns_tools")},
+             ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}
+      FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
+        ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
+      WHERE ${where}
     )
     SELECT (SELECT count(*)::int FROM f) AS total,
            (SELECT (count(*) FILTER (WHERE plus))::int FROM f)       AS c_plus,
@@ -393,6 +462,9 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            ${sql.unsafe(wantApps ? appsFacet : "'[]'::jsonb")}                   AS f_apps,
            ${sql.unsafe(multiFacet("plugins"))} AS f_plugins,
            ${sql.unsafe(multiFacet("technologies"))} AS f_tech,
+           ${sql.unsafe(facetSub("dns_email"))}     AS f_email_provider,
+           ${sql.unsafe(dnsToolFacet)}              AS f_dns_tool,
+           ${sql.unsafe(facetSub("nt_reason"))}     AS f_not_trading,
            (SELECT jsonb_build_object(
               '7',   count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE launched_on >= CURRENT_DATE - 30),
@@ -411,6 +483,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
         activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
         payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins), tech: toFacet(agg.f_tech),
+        emailProvider: toFacet(agg.f_email_provider), dnsTool: toFacet(agg.f_dns_tool), notTrading: toFacet(agg.f_not_trading),
       },
       recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
     };
@@ -428,7 +501,8 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            crux_rank, crux_rank_month, crux_trend,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-100')) AS top100,
            (domain IN (SELECT domain FROM store_tags WHERE tag='top-500')) AS top500,
-           g_id AS grp_id, g_sites AS grp_sites
+           g_id AS grp_id, g_sites AS grp_sites,
+           ${side.nt ? sql`(SELECT nt.reason FROM store_not_trading nt WHERE nt.domain = imported_stores.domain)` : sql`NULL::text`} AS nt_reason
     FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
     WHERE ${where}
     ORDER BY ${order}
@@ -463,10 +537,12 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         cruxRank: r.crux_rank == null ? null : Number(r.crux_rank),
         cruxRankMonth: (r.crux_rank_month as string) ?? null,
         cruxTrend: (r.crux_trend as string) ?? null,
+        notTrading: (r.nt_reason as string) ?? null,
         score: Number(r.fit_score) || 0,
       };
     }),
-    facets: { ...A.facets, tech: A.facets.tech ?? [] },   // default: aggregates cached before the tech facet shipped
+    // Defaults for aggregates cached (browse_cache, up to 26h) before a facet shipped.
+    facets: { ...A.facets, tech: A.facets.tech ?? [], emailProvider: A.facets.emailProvider ?? [], dnsTool: A.facets.dnsTool ?? [], notTrading: A.facets.notTrading ?? [] },
     recency: A.recency,
   };
 }
@@ -518,7 +594,8 @@ export type ExportCell = string | number | boolean | null;
  *  Sheets export (which needs real cells, not an escaped CSV string). */
 export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header: string[]; rows: ExportCell[][] }> {
   const sql = db();
-  const where = buildWhere(f);
+  const side = await sideTables();
+  const where = buildWhere(f, side);
   const usd = sql.unsafe(usdSqlExpr());
   const band = sql.unsafe(bandSqlExpr());
   const out = await sql<Record<string, unknown>[]>`
@@ -530,8 +607,11 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
            contact_shared_count, contact_email_guess, contact_guess_status, payments, shipping_providers,
            logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin,
            price_min, price_max, products_sold, plan AS shopify_plan, description,
-           instagram_followers, facebook_followers, first_product_at, first_seen
-    FROM imported_stores WHERE ${where}
+           instagram_followers, facebook_followers, first_product_at, first_seen,
+           ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools, dns.dns_verified" : DNS_NULLS)},
+           ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}
+    FROM imported_stores ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
+    WHERE ${where}
     ORDER BY ${sql.unsafe(ORDER.sales)}
     LIMIT ${EXPORT_CAP}`;
   // Shopify add-ons live in `apps` (apps.shopify.com slugs); every other CMS exposes them as `plugins`
@@ -543,6 +623,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   const shipMerged = (a: unknown, b: unknown) => [...new Set(`${a ?? ""};${b ?? ""}`.split(";").map((x) => x.trim()).filter(Boolean))].join("; ") || null;
   // `date` columns arrive as Date objects from postgres.js; a raw Date stringifies to the
   // full locale form, which spreadsheets then refuse to sort. Emit plain ISO days.
+  const list = (v: unknown) => (Array.isArray(v) && v.length ? v.join("; ") : null);
   const dayCell = (v: unknown) => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
   // contact_type is exported next to the address on purpose: a CSV of bare emails is exactly the
   // artefact customers complain about, because nothing in it says which rows are worth a send.
@@ -550,7 +631,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // normalised one. Both ship: the native pair is what a merchant recognises, the USD one is
   // what sorts across markets. shopify_plan is the plan-tier ladder (see the plan-detection
   // work), not Terrain's subscription plan.
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen"];
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "email_provider", "dns_tools", "dns_verified", "not_trading"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
@@ -568,7 +649,8 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
       r.instagram, r.instagram_followers == null ? null : Number(r.instagram_followers),
       r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
       r.tiktok, r.linkedin,
-      r.description, dayCell(r.first_product_at), dayCell(r.first_seen)] as ExportCell[];
+      r.description, dayCell(r.first_product_at), dayCell(r.first_seen),
+      r.dns_email, list(r.dns_tools), list(r.dns_verified), r.nt_reason] as ExportCell[];
   });
   // Header and row width drift silently — two lists kept in one order by hand. Catch it here
   // rather than in a customer's spreadsheet.

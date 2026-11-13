@@ -5,8 +5,16 @@
  * (ground truth) show up in the dashboard.
  *
  *   node --env-file=.env.local scripts/sync-checkout-payments.mjs [path/to/checkout_cache.json]
+ *   node --env-file=.env.local scripts/sync-checkout-payments.mjs --migrate     # ONCE: creates store_not_trading
  *
  * Run it after a checkout-probe run (e.g. of the Plus queue) to close the loop.
+ *
+ * It also syncs WHY a store had nothing to buy into the side table store_not_trading (keyed by
+ * imported_stores.domain; imported_stores itself is too hot to ALTER). Since shopify-radar 504d29b
+ * the probe's cache note says: frozen (HTTP 402, Shopify suspended it), password_page, unreachable,
+ * or no_variant (answered, but no product found); not_accepting_orders comes from the checkout page.
+ * A later probe that reaches a product clears the row. live_status stays verify-liveness's: this
+ * table is an observation from the probe, not a churn verdict, and never writes churn_log.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -23,7 +31,34 @@ const www2 = (d) => [d, "www." + d];
 
 if (!process.env.DATABASE_URL) { console.error("DATABASE_URL not set (--env-file=.env.local)"); process.exit(2); }
 
+// Notes that say why the probe found nothing to buy. Before shopify-radar 504d29b (2026-11-12) the
+// probe wrote "no_variant" for any store whose /products.json refused it — mostly proxy 429s, so it
+// said nothing about trading. Entries written since carry a `storefront` key; only those count.
+const NOT_TRADING_NOTES = new Set(["frozen", "password_page", "not_accepting_orders", "unreachable", "no_variant"]);
+const notTradingReason = (rec) => {
+  if (rec?.gateways?.length) return null;
+  const note = String(rec?.note || "");
+  if (!NOT_TRADING_NOTES.has(note)) return null;
+  if (note === "no_variant" && !(rec && "storefront" in rec)) return null;
+  return note;
+};
+// The probe reached a product (it got as far as the checkout): the store was trading at probe time.
+const reachedProduct = (rec) => Boolean(rec?.gateways?.length)
+  || /^(no_gateways_found|no_checkout_http_)/.test(String(rec?.note || ""));
+
+async function migrate() {
+  const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 1,
+    connection: { statement_timeout: 60000, lock_timeout: 5000 } });
+  try {
+    await sql`CREATE TABLE IF NOT EXISTS store_not_trading (
+      domain text PRIMARY KEY, reason text NOT NULL, source text NOT NULL DEFAULT 'checkout_probe',
+      observed_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now())`;
+    console.log("store_not_trading ready.");
+  } finally { await sql.end(); }
+}
+
 async function main() {
+  if (process.argv.includes("--migrate")) return migrate();
   let cache;
   try { cache = JSON.parse(readFileSync(cachePath, "utf8")); }
   catch (e) { console.error(`Could not read ${cachePath}: ${e.message}`); process.exit(1); }
@@ -95,6 +130,22 @@ async function main() {
     .filter(([, rec]) => !(rec?.gateways?.length)
       && (_TERMINAL_NOTES.has(rec?.note) || Number(rec?.attempts || 0) >= _MAX_ATTEMPTS))
     .map(([d]) => clean(d));
+  // Not trading: the WHOLE cache's current reasons (a few thousand rows; the upsert skips unchanged
+  // ones), so the table converges even across missed runs. Clearing needs fresh evidence only: a
+  // store's cache entry is its latest probe, so a flip to "reached a product" is always fresh once.
+  const ntByDomain = new Map();
+  for (const [domain, rec] of Object.entries(cache)) {
+    const reason = notTradingReason(rec);
+    if (!reason) continue;
+    const d = clean(domain), at = rec?.probed_at || null;
+    const prev = ntByDomain.get(d);   // www. and apex can both be cache keys: keep the later probe
+    if (!prev || String(at || "") > String(prev.at || "")) ntByDomain.set(d, { reason, at });
+  }
+  const tradingAgain = Object.entries(cache).filter(([, rec]) => fresh(rec) && reachedProduct(rec)).map(([d]) => clean(d))
+    .filter((d) => !ntByDomain.has(d));
+  const ntTally = {};
+  for (const { reason } of ntByDomain.values()) ntTally[reason] = (ntTally[reason] || 0) + 1;
+
   console.log(`${verified.length.toLocaleString()} domains with verified checkout data · ${checkedEmpty.length.toLocaleString()} confirmed no-gateway (probed, none chosen) · ${exhausted.length.toLocaleString()} probe-exhausted.`);
 
   const POOL = 8, CONCURRENCY = 6; // CONCURRENCY < POOL so queries never queue past
@@ -248,6 +299,33 @@ async function main() {
       console.log(`  ↳ parked ${r.count.toLocaleString()} probe-exhausted stores (terminal / max-attempts) — they leave the initial queue.`);
     }
     if (changed) console.log(`  ↳ logged ${changed} payment-provider shift(s) to payment_changes.`);
+
+    // Not-trading reasons → store_not_trading. The table comes from --migrate only; until it exists
+    // this step says so and the rest of the sync carries on.
+    const [{ nt_ok }] = await sql`SELECT to_regclass('public.store_not_trading') IS NOT NULL AS nt_ok`;
+    if (!nt_ok) {
+      console.log("  ↳ store_not_trading missing — run once with --migrate to sync not-trading reasons.");
+    } else {
+      const rows = [...ntByDomain].map(([d, v]) => [d, v.reason, v.at]);
+      let upserted = 0, cleared = 0;
+      for (let i = 0; i < rows.length; i += 1000) {
+        // Keyed on imported_stores.domain as stored (www. or not), so the app's PK lookups hit.
+        const r = await sql`INSERT INTO store_not_trading (domain, reason, observed_at)
+          SELECT s.domain, v.reason, v.at::timestamptz
+          FROM (VALUES ${sql(rows.slice(i, i + 1000))}) AS v(d, reason, at)
+          JOIN imported_stores s ON s.domain IN (v.d, 'www.' || v.d)
+          ON CONFLICT (domain) DO UPDATE SET reason = EXCLUDED.reason, observed_at = EXCLUDED.observed_at, updated_at = now()
+          WHERE store_not_trading.reason IS DISTINCT FROM EXCLUDED.reason
+             OR store_not_trading.observed_at IS DISTINCT FROM EXCLUDED.observed_at`;
+        upserted += r.count;
+      }
+      for (let i = 0; i < tradingAgain.length; i += 2000) {
+        const r = await sql`DELETE FROM store_not_trading WHERE domain = ANY(${tradingAgain.slice(i, i + 2000).flatMap(www2)})`;
+        cleared += r.count;
+      }
+      const t = Object.entries(ntTally).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v.toLocaleString()}`).join(" · ");
+      console.log(`  ↳ not trading in the cache: ${t || "none"} — ${upserted.toLocaleString()} rows written, ${cleared.toLocaleString()} cleared (trading again).`);
+    }
     // Advance the incremental watermark only after a successful pass.
     writeFileSync(statePath, JSON.stringify({ last_synced_at: new Date().toISOString() }));
   } finally {

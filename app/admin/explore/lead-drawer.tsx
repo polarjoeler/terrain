@@ -5,6 +5,7 @@ import { marketLabel, marketFlag } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
 import { isOpenSource } from "@/lib/platforms";
+import { NOT_TRADING, dnsStackTools, emailProviderLabel } from "@/lib/store-signals";
 import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, toUsd, type RevenueBand } from "@/lib/fx";
 import { updateStore, type StorePatch } from "./store-edit-action";
 
@@ -77,13 +78,21 @@ const BUILDER_SOURCE: Record<string, string> = {
 };
 const builderSourceLabel = (s: string) => BUILDER_SOURCE[s] ?? s;
 
-function Chips({ items, tone = "cream", start }: { items: string[]; tone?: string; start?: boolean }) {
-  const c = tone === "mint" ? "bg-mint/15 text-mint" : tone === "cyan" ? "bg-cyan/15 text-cyan" : tone === "lilac" ? "bg-lilac/15 text-lilac" : "bg-cream/10 text-cream/70";
+function Chips({ items, tone = "cream", start, title }: { items: string[]; tone?: string; start?: boolean; title?: string }) {
+  const c = tone === "mint" ? "bg-mint/15 text-mint" : tone === "cyan" ? "bg-cyan/15 text-cyan" : tone === "lilac" ? "bg-lilac/15 text-lilac"
+    : tone === "outline" ? "border border-lilac/35 text-lilac/90" : "bg-cream/10 text-cream/70";
   return (
     <span className={`flex flex-wrap gap-1 ${start ? "" : "justify-end"}`}>
-      {items.map((i) => <span key={i} className={`rounded-full px-2 py-0.5 text-xs ${c}`}>{i}</span>)}
+      {items.map((i) => <span key={i} title={title} className={`rounded-full px-2 py-0.5 text-xs ${c}`}>{i}</span>)}
     </span>
   );
+}
+
+/** Tools found only in the store's DNS records — the ones the page scan didn't already list. */
+const techKey = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, "");
+function dnsOnlyTools(stack: string[], dnsTools: string[]): string[] {
+  const seen = new Set(stack.map(techKey));
+  return dnsStackTools(dnsTools).filter((t) => !seen.has(techKey(t)));
 }
 
 // Woo activity tier badge — the "real store vs stale build" reveal, color-coded by strength.
@@ -246,6 +255,12 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   // found (LinkedIn, the web) while the only address is still info@, so prefer that address's own kind.
   const emailKind = (email && data?.contacts?.find((c) => c.email === email)?.kind) || data?.contact_type || null;
   const group = data?.group && data.group.others.length > 0 ? data.group : null;
+  const stack = data ? normalizeTechStack(data) : [];
+  const dnsTools = data?.dns ? dnsOnlyTools(stack, data.dns.tools) : [];
+  // Not trading (checkout probe). A Shopify-frozen store is also what verify-liveness marks `dead`
+  // (the same 402), so the header shows one badge for it, not "dead" and "frozen" side by side.
+  const nt = data?.notTrading ? { ...data.notTrading, meta: NOT_TRADING[data.notTrading.reason] } : null;
+  const showLive = !!data?.live_status && data.live_status !== "active" && !(data.live_status === "dead" && nt?.reason === "frozen");
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={data?.name || domain}>
@@ -259,7 +274,13 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 {data?.platform && <span className={`rounded px-1.5 py-0.5 font-medium ${platTone(data.platform)}`}>{platName(data.platform)}</span>}
                 {data?.plus && <span className="rounded bg-lilac/15 px-1.5 py-0.5 font-semibold text-lilac">⚡ Plus</span>}
                 {data?.country && <span className="text-cream/55">{marketFlag(data.country)} {cleanMarket(data.country)}{data.city ? ` · ${data.city}` : ""}</span>}
-                {data?.live_status && data.live_status !== "active" && <span className="rounded bg-orange/15 px-1.5 py-0.5 text-orange">{data.live_status}</span>}
+                {showLive && <span className="rounded bg-orange/15 px-1.5 py-0.5 text-orange">{data!.live_status}</span>}
+                {nt && (
+                  <span title={`${nt.meta?.hint ?? nt.reason}${nt.observedAt ? ` · checkout probe, ${fmtDate(nt.observedAt)}` : ""}`}
+                    className={`rounded px-1.5 py-0.5 ${nt.meta?.hard ? "bg-orange/15 text-orange" : "bg-cream/10 text-cream/55"}`}>
+                    {nt.meta?.hard ? "Not trading · " : ""}{nt.meta?.label ?? nt.reason}
+                  </span>
+                )}
               </div>
               <h2 className="truncate font-display text-2xl font-bold tracking-tight text-cream">{data?.name || domain}</h2>
               <a href={`https://${domain}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-cream/45 transition hover:text-mint">{domain} ↗</a>
@@ -487,11 +508,23 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 </Card>
               )}
 
-              {normalizeTechStack(data).length > 0 && (
+              {(stack.length > 0 || dnsTools.length > 0) && (
                 <Card title="Apps & tech">
-                  <div className="pt-1"><Chips items={normalizeTechStack(data)} tone="lilac" start /></div>
+                  <div className="space-y-1.5 pt-1">
+                    {stack.length > 0 && <Chips items={stack} tone="lilac" start />}
+                    {/* Outlined = seen only in the store's DNS (SPF, DKIM, verification records): a tool it
+                        sends mail through or has an account with, which the page itself doesn't load. */}
+                    {dnsTools.length > 0 && <Chips items={dnsTools} tone="outline" start title="Seen in the store's DNS records" />}
+                    {dnsTools.length > 0 && <p className="text-[11px] text-cream/35">Outlined: seen in DNS records only</p>}
+                  </div>
                 </Card>
               )}
+
+              <Card title="Email & domain" fields={[
+                ["Email provider", data.dns?.emailProvider ? emailProviderLabel(data.dns.emailProvider, data.domain) : null],
+                ["Verified accounts", data.dns?.verified.length ? <Chips items={data.dns.verified} tone="cyan" /> : null],
+                ["DNS checked", data.dns && (data.dns.emailProvider || data.dns.verified.length) ? <span className="font-mono text-[13px]">{fmtDate(data.dns.checkedAt)}</span> : null],
+              ]} />
 
               <Card title="Timeline" fields={[
                 ["Launched", fmtLaunch(data.launched_at, data.launched_source)],
