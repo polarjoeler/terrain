@@ -369,6 +369,13 @@ const ROLE_WORD = /\b(founder|co-?founder|owner|director|managing director|ceo|m
 // extractors read. Measured, not imagined: every one of these appeared in a stored contact_name
 // in the first live batch ("Details Call us", "built gaming rigs", "Egoli Gas", "Oak And Ore").
 const NAME_STOP = new Set([
+  // Section headings that sit immediately before the name in store copy and get swallowed with it:
+  // "About Doryce Sher" -> about@, "Meet Jako Vorster" -> meet@. trimNameEdges already strips
+  // leading/trailing stop-words; these were simply missing from the list. None is a plausible
+  // given name or surname, so listing them cannot reject a real person.
+  "about", "meet", "welcome", "story", "team", "menu", "categories", "category", "leadership",
+  "staff", "founder", "founders", "owner", "owners", "hello", "hi", "read", "learn", "view",
+  "discover", "explore", "home",
   "contact", "details", "detail", "call", "us", "we", "our", "your", "you", "my", "me", "the", "and",
   "or", "by", "to", "of", "for", "with", "from", "please", "click", "here", "more", "info",
   "information", "customer", "customers", "service", "services", "support", "help", "additional",

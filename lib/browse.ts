@@ -65,6 +65,13 @@ export type BrowseFilters = {
   reachableContact?: boolean;
   /** Drop addresses whose domain publishes no MX — the bounce list. */
   deliverable?: boolean;
+  /** Stores where we INFERRED a personal address from the owner's name and a verifier then
+   *  confirmed the mailbox accepts mail (contact_guess_status = 'verified').
+   *  Deliberately NOT folded into reachableContact: that filter means the merchant PUBLISHED an
+   *  address that reaches a person, whereas this means the mailbox provably exists and the person
+   *  behind it is our inference. Different strength of claim, so it stays a separate choice and no
+   *  saved list silently changes meaning. */
+  verifiedGuess?: boolean;
   tier?: "top100" | "top500";
   /** Store groups (scripts/build-store-groups.mjs): `grouped` = stores whose operator runs other
    *  stores too; `group` = every store in one group (the drawer's "show all"). */
@@ -119,6 +126,9 @@ export type BrowseStats = {
   /** Distinct operators behind the filtered set (a store group counts once): "500 stores, N
    *  conversations". Undefined on aggregates cached before it shipped. */
   operators?: number;
+  /** Stores carrying a personal address we inferred and a verifier then confirmed as deliverable.
+   *  Undefined on aggregates cached before it shipped. */
+  verifiedGuess?: number;
 };
 
 export type BrowseResult = {
@@ -208,6 +218,7 @@ function buildWhere(f: BrowseFilters) {
   if (f.contactType?.length) conds.push(sql`contact_type = ANY(${f.contactType})`);
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
+  if (f.verifiedGuess) conds.push(sql`contact_guess_status = 'verified'`);
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
   if (f.grouped) conds.push(sql.unsafe(`domain IN ${GROUPED_SET}`));
   if (f.group) conds.push(sql`domain IN (SELECT domain FROM store_group_members WHERE group_id = ${f.group})`);
@@ -368,6 +379,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
+             (contact_guess_status = 'verified') AS verified_guess,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at,
              COALESCE(g_id, domain) AS operator
@@ -378,6 +390,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            (SELECT (count(*) FILTER (WHERE has_email))::int FROM f)  AS c_email,
            (SELECT (count(*) FILTER (WHERE reachable))::int FROM f)   AS c_reachable,
            (SELECT (count(*) FILTER (WHERE will_bounce))::int FROM f) AS c_bounce,
+           (SELECT (count(*) FILTER (WHERE verified_guess))::int FROM f) AS c_vguess,
            (SELECT count(DISTINCT operator)::int FROM f)              AS c_operators,
            ${sql.unsafe(facetSub("contact_type"))}  AS f_contact,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
@@ -404,7 +417,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
     A = {
       total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0) },
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), verifiedGuess: Number(agg.c_vguess ?? 0) },
       facets: {
         country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
         band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
