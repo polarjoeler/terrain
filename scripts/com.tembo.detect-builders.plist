@@ -9,7 +9,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>/Users/joel/storepulse/scripts/detect-builders-sweep.sh</string>
+		<string>/Users/joel/storepulse/scripts/detect-builders-world.sh</string>
 	</array>
 	<!-- Weekly worldwide hosted-platform DNS sweep (DNS only, small batched writes, max 3 DB conns).
 	     Not RunAtLoad: the first run is a manual, watched one. -->
