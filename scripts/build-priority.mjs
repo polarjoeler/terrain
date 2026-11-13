@@ -19,7 +19,8 @@
  * Product count is left out on purpose (Joel: misleading).
  *
  * Store groups (the LEGO case): stores run by one operator form one ACCOUNT. The account scores its
- * best store plus 4 points per doubling of its store count, and every store in it carries that
+ * best store plus 4 points per doubling of its SITE count (distinct store_group_members.site — the
+ * same store under www./shop./account./mail. counts once), and every store in it carries that
  * account score and rank, within each market. `market_rank` counts accounts, not sites, so "top 1,000" is 1,000 accounts.
  *
  * A signal we don't have is UNKNOWN, not zero: the score is the weighted mean of the signals we do
@@ -44,7 +45,7 @@ const MIGRATE = process.argv.includes("--migrate");
 const SHOW = (arg("--show", "ZA") || "ZA").toUpperCase();
 
 const W = { traffic: 30, social: 20, team: 15, plus: 15, revenue: 15, growth: 5 };
-const GROUP_BONUS = 4;   // points per doubling of an account's store count
+const GROUP_BONUS = 4;   // points per doubling of an account's distinct SITE count
 
 async function migrate(sql) {
   await sql`CREATE TABLE IF NOT EXISTS store_priority (
@@ -52,7 +53,7 @@ async function migrate(sql) {
     country       text,
     platform      text,
     account       text NOT NULL,      -- store group id when the store is in a group, else the domain
-    account_size  int  NOT NULL DEFAULT 1,
+    account_size  int  NOT NULL DEFAULT 1,  -- distinct SITES in the account, not domain rows (see the bonus below)
     score         real NOT NULL,      -- 0-100, this store's own signals
     account_score real NOT NULL,      -- 0-100, the account's best store + the group bonus
     market_rank   int,                -- account rank within the country (1 = biggest); NULL without a country
@@ -96,6 +97,10 @@ async function main() {
                CASE WHEN s.plan_tier = 'plus' OR s.plus THEN 1 WHEN s.plan_tier = 'advanced_or_annual' THEN 0.4
                     WHEN s.plan_tier IS NOT NULL THEN 0 END::real AS plus,
                (lower(s.platform) = 'shopify') AS plus_applies,
+               -- The SITE this row belongs to. store_group_members.site already collapses the same
+               -- store's several hostnames (www./shop./account./mail. variants, myshopify aliases)
+               -- onto one key, which is what the group bonus below must count — see the acc CTE.
+               COALESCE(m.site, s.domain) AS site,
                CASE WHEN ${revExpr()} IS NOT NULL
                     THEN GREATEST(0, LEAST(1, (log(GREATEST(${revExpr()}, 1)::numeric) - 3) / 3)) END::real AS revenue,
                CASE s.crux_trend WHEN 'up' THEN 1 WHEN 'new' THEN 0.5 WHEN 'flat' THEN 0 WHEN 'down' THEN 0 END::real AS growth
@@ -128,11 +133,16 @@ async function main() {
         * (0.6 + 0.4 * (${den})::numeric / ${app}))::numeric, 2)`);
 
       // 2. Accounts: best store + bonus per doubling of size, then rank accounts within each country.
+      //    Size counts distinct SITES, not domain rows. Counting rows paid the bonus for the same
+      //    store listed under several hostnames: ciovita scored 71.47 + 4·log2(5) = 80.76 off five
+      //    rows that store_group_members calls two sites, so it ranked ZA #12 on a bonus it had not
+      //    earned. Measured 2026-11-13: 253 of 990 multi-store accounts were inflated this way, by
+      //    up to +8.00 points. Sites are what "one operator runs N stores" was ever meant to mean.
       await tx.unsafe(`CREATE TEMP TABLE pr ON COMMIT DROP AS
         WITH acc AS (
           -- per market: a group's US flagship must not lift its small Nigerian sites
-          SELECT account, country, count(*) AS size,
-                 LEAST(100, max(score) + ${GROUP_BONUS} * log(2, count(*)::numeric))::real AS account_score
+          SELECT account, country, count(DISTINCT site) AS size,
+                 LEAST(100, max(score) + ${GROUP_BONUS} * log(2, count(DISTINCT site)::numeric))::real AS account_score
             FROM pr_sig GROUP BY account, country),
         ranked AS (
           SELECT p.*, a.size AS account_size, round(a.account_score::numeric, 2)::real AS account_score
@@ -212,7 +222,7 @@ async function main() {
     for (const r of top) {
       const parts = [r.t, r.s, r.e, r.p, r.r].map((v) => (v == null ? " · " : Number(v).toFixed(1))).join(" ");
       const ds = r.domains.length > 70 ? r.domains.slice(0, 67) + "…" : r.domains;
-      console.log(`    ${String(r.market_rank).padStart(3)}  ${Number(r.account_score).toFixed(1).padStart(5)}  [${parts}]  ${r.account_size > 1 ? `(${r.account_size} stores) ` : ""}${ds}`);
+      console.log(`    ${String(r.market_rank).padStart(3)}  ${Number(r.account_score).toFixed(1).padStart(5)}  [${parts}]  ${r.account_size > 1 ? `(${r.account_size} sites) ` : ""}${ds}`);
     }
   } finally {
     await sql.end();

@@ -226,6 +226,12 @@ async function main() {
       rows = await sql`
         SELECT domain, live_miss FROM imported_stores
         WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
+          -- not_a_store rows are not storefronts (a parked install, or an infrastructure /
+          -- customer-account hostname of a store we already track: mail./account./cpanel.).
+          -- Re-checking whether a mail host is "live" spends the one residential IP's budget on
+          -- a question with no answer worth having — and they sorted HIGH here, because they
+          -- inherit their account's score from store_priority.
+          AND activity_tier IS DISTINCT FROM 'not_a_store'
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
         ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
