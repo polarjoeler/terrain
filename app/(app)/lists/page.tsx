@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { listLists } from "@/lib/lists";
 import { marketLabel } from "@/lib/markets";
 import { platformLabel } from "@/lib/platforms";
+import { emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import type { ExploreInitial } from "@/app/admin/explore/explorer";
 import { ListsView } from "./lists-view";
 
@@ -19,6 +20,10 @@ function summarize(view: ExploreInitial): string {
   if (v.band?.length) parts.push(v.band.join(", "));
   if (v.payment?.length) parts.push("pays " + v.payment.slice(0, 2).join(", "));
   if (v.activity?.length) parts.push(v.activity.join(", "));
+  if (v.emailProvider?.length) parts.push("mail on " + v.emailProvider.slice(0, 2).map((e) => emailProviderLabel(e)).join(", "));
+  if (v.dnsTool?.length) parts.push("uses " + v.dnsTool.slice(0, 2).join(", "));
+  if (v.notTrading?.length) parts.push("not trading: " + v.notTrading.map(notTradingLabel).join(", "));
+  if (v.hideNotTrading) parts.push("trading only");
   if (v.launched) parts.push("launched " + v.launched);
   if (v.recency) parts.push("new " + v.recency);
   if (v.plus) parts.push("Shopify Plus");

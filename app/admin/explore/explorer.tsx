@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { saveListAction } from "@/app/(app)/lists/actions";
 import { marketLabel } from "@/lib/markets";
 import { isOpenSource, platformLabel } from "@/lib/platforms";
+import { NOT_TRADING, emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import { scoreColor } from "@/lib/revenue";
 import { bandTone, REVENUE_BANDS, bandDisplay, floorBand } from "@/lib/fx";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
@@ -176,6 +177,8 @@ export type ExploreInitial = {
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
   grouped?: boolean; group?: string; groupLabel?: string;   // store groups: multi-store operators / one group
+  emailProvider?: string[]; dnsTool?: string[];   // DNS scan (store_dns): mailbox provider, tools in SPF/DKIM/TXT
+  notTrading?: string[]; hideNotTrading?: boolean;   // checkout probe: why there was nothing to buy
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
   status?: "migrated" | "dead"; checkedDays?: number;
 };
@@ -222,6 +225,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   const [platform, setPlatform] = useState<Set<string>>(new Set(initial?.platform));
   const [activity, setActivity] = useState<Set<string>>(new Set(initial?.activity)); // Woo: selling/active/dormant
   const [hosting, setHosting] = useState<Set<string>>(new Set(initial?.hosting));
+  const [emailProvider, setEmailProvider] = useState<Set<string>>(new Set(initial?.emailProvider));
+  const [dnsTool, setDnsTool] = useState<Set<string>>(new Set(initial?.dnsTool));
+  // "Not trading" (checkout probe): pick reasons to see only those stores, or hide the definite ones.
+  // The two are exclusive — turning one on clears the other, so the list never silently empties.
+  const [notTrading, setNotTrading] = useState<Set<string>>(new Set(initial?.notTrading));
+  const [hideNotTrading, setHideNotTrading] = useState(initial?.hideNotTrading ?? false);
   const [plusOnly, setPlusOnly] = useState(initial?.plus ?? false);
   const [emailOnly, setEmailOnly] = useState(initial?.email ?? false);
   // "Reaches a person" — a named address or a decision-maker's role mailbox. The filter the
@@ -270,6 +279,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     tech: tech.size ? [...tech] : undefined,
     activity: activity.size ? [...activity] : undefined,
     hosting: hosting.size ? [...hosting] : undefined,
+    emailProvider: emailProvider.size ? [...emailProvider] : undefined,
+    dnsTool: dnsTool.size ? [...dnsTool] : undefined,
+    notTrading: notTrading.size ? [...notTrading] : undefined,
+    hideNotTrading: hideNotTrading || undefined,
     plus: plusOnly || undefined,
     hasEmail: emailOnly || undefined,
     reachableContact: reachableOnly || undefined,
@@ -282,7 +295,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
@@ -317,6 +330,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     apps: fv(data.facets.apps),
     plugins: fv(data.facets.plugins),
     tech: fv(data.facets.tech),
+    emailProvider: fv(data.facets.emailProvider ?? []),
+    dnsTool: fv(data.facets.dnsTool ?? []),
+    // Definite reasons first (frozen, password page, not accepting orders), then the soft ones.
+    notTrading: fv(data.facets.notTrading ?? []).sort((a, b) => Number(!!NOT_TRADING[b[0]]?.hard) - Number(!!NOT_TRADING[a[0]]?.hard) || b[1] - a[1]),
     contactType: fv(data.facets.contactType).sort((a, b) => (CONTACT_ORDER[a[0]] ?? 9) - (CONTACT_ORDER[b[0]] ?? 9)),
   };
 
@@ -339,8 +356,8 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     operators: data.stats.operators,
   };
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setEmailProvider(new Set()); setDnsTool(new Set()); setNotTrading(new Set()); setHideNotTrading(false); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + emailProvider.size + dnsTool.size + notTrading.size + (hideNotTrading ? 1 : 0) + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
@@ -431,6 +448,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
       reachable: reachableOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
       grouped: groupedOnly || undefined, group: group?.id, groupLabel: group?.label,
+      emailProvider: arr(emailProvider), dnsTool: arr(dnsTool), notTrading: arr(notTrading), hideNotTrading: hideNotTrading || undefined,
       sort: sort !== "new" ? sort : undefined,
     };
   };
@@ -483,6 +501,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet
+          </button>
+          <button onClick={() => { setHideNotTrading((p) => !p); setNotTrading(new Set()); }} title="Hide stores the checkout probe found frozen by Shopify, behind a password page, or not accepting orders" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${hideNotTrading ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${hideNotTrading ? "border-orange bg-orange" : "border-cream/25"}`} /> Hide stores not trading
           </button>
           <button onClick={() => setGroupedOnly((p) => !p)} title="The same operator runs other stores too — one conversation covers several" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${groupedOnly ? "bg-cyan/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${groupedOnly ? "border-cyan bg-cyan" : "border-cream/25"}`} /> Runs other stores
@@ -542,11 +563,15 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} defaultOpen={false} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} defaultOpen={false} />
         {facets.contactType.length > 0 && <Facet title="Contact quality" values={facets.contactType} selected={contactType} onToggle={toggle(setContactType)} label={(v) => CONTACT_LABEL[v] ?? v} defaultOpen={false} />}
+        {(facets.emailProvider.length > 0 || emailProvider.size > 0) && <Facet title="Email provider" values={facets.emailProvider} selected={emailProvider} onToggle={toggle(setEmailProvider)} label={(v) => emailProviderLabel(v)} defaultOpen={false} />}
         <Facet title="Payment" values={facets.payment} selected={payment} onToggle={toggle(setPayment)} defaultOpen={false} />
         <Facet title="Shipping" values={facets.shipping} selected={shipping} onToggle={toggle(setShipping)} defaultOpen={false} />
         {shopifySelected && <Facet title="Apps" values={facets.apps} selected={app} onToggle={toggle(setApp)} defaultOpen={false} />}
         {facets.plugins.length > 0 && <Facet title="Plugins" values={facets.plugins} selected={plugin} onToggle={toggle(setPlugin)} defaultOpen={false} />}
         {facets.tech.length > 0 && <Facet title="Technologies" values={facets.tech} selected={tech} onToggle={toggle(setTech)} defaultOpen={false} />}
+        {(facets.dnsTool.length > 0 || dnsTool.size > 0) && <Facet title="Tools in DNS" values={facets.dnsTool} selected={dnsTool} onToggle={toggle(setDnsTool)} defaultOpen={false} />}
+        {(facets.notTrading.length > 0 || notTrading.size > 0) && <Facet title="Not trading" values={facets.notTrading} selected={notTrading}
+          onToggle={(v) => { setHideNotTrading(false); toggle(setNotTrading)(v); }} label={notTradingLabel} defaultOpen={false} />}
         {country.size > 0 && <Facet title="City" values={facets.city} selected={city} onToggle={toggle(setCity)} defaultOpen={false} />}
       </aside>
 
@@ -689,6 +714,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                               <button type="button" onClick={(e) => { e.stopPropagation(); setGroup({ id: l.groupId!, label: `${l.name ?? l.domain}'s group` }); setLimit(PAGE); }}
                                 title={`The same operator runs ${l.groupSites} stores — show them all`}
                                 className="shrink-0 rounded bg-cyan/15 px-1 py-0.5 text-[8px] font-bold text-cyan hover:bg-cyan/25">✦ {l.groupSites} STORES</button>
+                            )}
+                            {l.notTrading && NOT_TRADING[l.notTrading]?.hard && (
+                              <span title={NOT_TRADING[l.notTrading].hint} className="shrink-0 rounded bg-orange/20 px-1 py-0.5 text-[8px] font-bold uppercase text-orange">{NOT_TRADING[l.notTrading].short}</span>
                             )}
                             {l.activityTier && l.activityTier !== "not_a_store" && (
                               <span className={`shrink-0 rounded px-1 py-0.5 text-[8px] font-bold uppercase ${l.activityTier === "selling" ? "bg-mint/20 text-mint" : l.activityTier === "active" ? "bg-cyan/20 text-cyan" : "bg-orange/20 text-orange"}`}>{l.activityTier}</span>

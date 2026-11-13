@@ -4,6 +4,7 @@
 import { db as sharedDb } from "./db";
 import { getStoreGroup, type StoreGroup } from "./store-groups";
 import { getStoreBrands, type StoreBrand } from "./brands";
+import { sideTables } from "./browse";
 
 function db() {
   return sharedDb();
@@ -55,6 +56,12 @@ export type LeadDetail = {
    *  `confirmed` = a strong signal (self-declared portfolio / linked public credit); weaker signals
    *  (text credit, generator/theme, code comment) surface as unconfirmed until verified. */
   builtBy: { name: string; website: string | null; source: string; confidence: string; confirmed: boolean } | null;
+  /** What the store's public DNS says (store_dns, scripts/dns-tech.mjs), or null when not scanned yet.
+   *  Hosting is deliberately absent: it is meaningful only for open-source platforms and already sits
+   *  on the store row (hosting_provider), where the drawer gates it with isOpenSource(). */
+  dns: { emailProvider: string | null; tools: string[]; verified: string[]; checkedAt: string } | null;
+  /** Why the checkout probe found nothing to buy (store_not_trading), or null when it did / never looked. */
+  notTrading: { reason: string; observedAt: string | null } | null;
 };
 
 /** The single best builder→store edge for a store, or null. Confidence-ranked, confirmed first. */
@@ -74,9 +81,18 @@ export async function getStoreBuilder(domain: string): Promise<LeadDetail["built
   return { name: r.name, website, source: r.source, confidence: r.confidence, confirmed: Boolean(r.published) };
 }
 
+type SideRaw = {
+  dns_raw: { email_provider: string | null; tools: string[] | null; verified: string[] | null; checked_at: string; gone: boolean } | null;
+  nt_raw: { reason: string; observed_at: string | null } | null;
+};
+
 export async function getLeadDetail(domain: string): Promise<LeadDetail | null> {
   const d = domain.trim().toLowerCase();
-  const [r] = await db()<LeadDetail[]>`
+  const sql = db();
+  // The side tables ride along in the one row query (PK lookups), so the drawer pays no extra round
+  // trip for them. Left out while a table doesn't exist yet (before its script's --migrate).
+  const side = await sideTables();
+  const [r] = await sql<(LeadDetail & SideRaw)[]>`
     SELECT domain, name, category, country, city, theme, platform, plus, published,
            activity_tier, activity_score, hosting_provider, hosting_asn, platform_version, plugins, technologies,
            payments, shipping_providers, free_shipping, logistics_apps, apps,
@@ -89,9 +105,20 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
            source, live_status,
            crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence,
-           COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags
+           COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags,
+           ${side.dns ? sql`(SELECT to_jsonb(x) FROM (SELECT email_provider, tools, verified, checked_at, gone
+              FROM store_dns sd WHERE sd.domain = imported_stores.domain) x)` : sql`NULL::jsonb`} AS dns_raw,
+           ${side.nt ? sql`(SELECT to_jsonb(x) FROM (SELECT reason, observed_at
+              FROM store_not_trading nt WHERE nt.domain = imported_stores.domain) x)` : sql`NULL::jsonb`} AS nt_raw
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
   if (!r) return null;
+  const { dns_raw: dr, nt_raw: nr } = r;
+  delete (r as Partial<SideRaw>).dns_raw;
+  delete (r as Partial<SideRaw>).nt_raw;
+  r.dns = dr && !dr.gone
+    ? { emailProvider: dr.email_provider, tools: dr.tools ?? [], verified: dr.verified ?? [], checkedAt: dr.checked_at }
+    : null;
+  r.notTrading = nr ? { reason: nr.reason, observedAt: nr.observed_at } : null;
   // Sequential, not Promise.all: the shared pool is small (see memory: postgres-pool-deadlock). A
   // missing or failing group lookup never costs the drawer the rest of the store.
   r.group = await getStoreGroup(d).catch(() => null);

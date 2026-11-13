@@ -14,7 +14,7 @@
  * Results land in the side table `store_dns` (detail data stays out of the hot store table). Only
  * hosting is copied onto imported_stores, and only where it was never checked.
  *
- *   node --env-file=.env.local scripts/dns-tech.mjs --migrate                 # ONCE: creates store_dns
+ *   node --env-file=.env.local scripts/dns-tech.mjs --migrate                 # ONCE: creates store_dns + indexes
  *   node --env-file=.env.local scripts/dns-tech.mjs [--limit 20000] [--concurrency 48] [--dry-run]
  *   node --env-file=.env.local scripts/dns-tech.mjs --domains a.com,b.co.za --dry-run
  *
@@ -161,6 +161,9 @@ async function main() {
         domain text PRIMARY KEY, email_provider text, tools text[], verified text[], mx text[], spf text[], dkim text[],
         hosting text, asn int, gone boolean NOT NULL DEFAULT false, checked_at timestamptz NOT NULL DEFAULT now())`;
       await sql`CREATE INDEX IF NOT EXISTS idx_store_dns_tools ON store_dns USING gin (tools)`;
+      // The app's Email-provider filter (lib/browse.ts) is an EXISTS on email_provider; without this it
+      // seq-scans store_dns (measured 2026-11-13). Safe to re-run: existing objects are skipped.
+      await sql`CREATE INDEX IF NOT EXISTS idx_store_dns_email ON store_dns (email_provider)`;
       console.log("store_dns ready."); return;
     }
     const [{ ok }] = await sql`SELECT to_regclass('public.store_dns') IS NOT NULL ok`;

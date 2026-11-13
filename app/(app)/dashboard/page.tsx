@@ -168,6 +168,8 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
     country: initial?.country, platform: initial?.platform, category: initial?.category, band: initial?.band,
     theme: initial?.theme, city: initial?.city, payment: initial?.payment, shipping: initial?.shipping,
     app: initial?.apps, plugin: initial?.plugins, tech: initial?.tech, activity: initial?.activity, hosting: initial?.hosting,
+    emailProvider: initial?.emailProvider, dnsTool: initial?.dnsTool,
+    notTrading: initial?.notTrading, hideNotTrading: initial?.hideNotTrading || undefined,
     plus: initial?.plus || undefined, hasEmail: initial?.email || undefined, noPayment: initial?.noPayment || undefined,
     reachableContact: initial?.reachable || undefined, contactType: initial?.contactType,
     tier: (initial?.tier || undefined) as BrowseFilters["tier"],
