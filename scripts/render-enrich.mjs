@@ -18,6 +18,7 @@
  *
  *    node --env-file=.env.local scripts/render-enrich.mjs --domains a.co.za,b.com --dry
  *    node --env-file=.env.local scripts/render-enrich.mjs --country ZA --limit 100 --concurrency 2
+ *    node --env-file=.env.local scripts/render-enrich.mjs --country ZA,KE,NG --top 1000 --limit 100   # sprint
  *    node --env-file=.env.local scripts/render-enrich.mjs                 # default: ZA bot-blocked tail
  */
 import postgres from "postgres";
@@ -31,6 +32,11 @@ const NAV_MS = Number(arg("--nav-ms", 25000));
 const SETTLE_MS = Number(arg("--settle-ms", 2500));   // let late scripts (gateways, tag managers) fire
 const DOMAINS = (arg("--domains", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const cArg = arg("--country", null);
+// --top N: the sprint. First the stores of each market's top N accounts (store_priority.market_rank)
+// that still lack tech OR payments and haven't been rendered in 30 days, biggest first; whatever is
+// left of --limit then goes to the usual bot-blocked tail. Payment widgets (BNPL, PSP scripts) load
+// on the storefront, so a render often finds the gateway a plain fetch missed.
+const TOP = Number(arg("--top", 0));
 const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : ["ZA"];
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
@@ -137,14 +143,32 @@ async function main() {
     }
     // Target: explicit --domains, else the bot-blocked high-value tail — published rows in the focus
     // market(s) that deep-enrich already TRIED (deep_enriched_at set) yet still have no technologies.
-    const rows = DOMAINS.length
-      ? await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores WHERE domain = ANY(${DOMAINS})`
-      : await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores
+    const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
+    const top = !DOMAINS.length && TOP > 0 && hasPriority
+      ? await sql`SELECT s.domain, s.platform, s.payments, s.technologies, s.email, p.country, p.market_rank
+          FROM store_priority p JOIN imported_stores s ON s.domain = p.domain
+          WHERE p.country = ANY(${countries}) AND p.market_rank <= ${TOP}
+            -- not Shopify: its storefronts share the home IP's ~1,200/day Shopify budget with the contact
+            -- lane, and Shopify payments come from the proxied checkout probe, which orders by the same rank
+            AND p.platform IS DISTINCT FROM 'shopify'
+            AND s.published AND (s.live_status IS NULL OR s.live_status NOT IN ('dead', 'migrated'))
+            AND (COALESCE(s.technologies, '') = '' OR COALESCE(s.payments, '') = '')
+            AND (s.render_enriched_at IS NULL OR s.render_enriched_at < now() - interval '30 days')
+          ORDER BY p.market_rank, p.account_score DESC
+          LIMIT ${LIMIT}`
+      : [];
+    if (TOP > 0 && !hasPriority) console.log("--top: store_priority not built yet — tail only.");
+    if (top.length) console.log(`top-${TOP} sprint: ${top.length} store(s) missing tech or payments (down to rank ${top[top.length - 1].market_rank})`);
+    const tail = DOMAINS.length || top.length >= LIMIT ? [] : await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores
           WHERE published AND UPPER(country) = ANY(${countries}) AND activity_tier IS DISTINCT FROM 'not_a_store'
             AND (technologies IS NULL OR technologies = '') AND deep_enriched_at IS NOT NULL
             AND (render_enriched_at IS NULL OR render_enriched_at < now() - interval '60 days')
+            ${top.length ? sql`AND NOT (domain = ANY(${top.map((r) => r.domain)}))` : sql``}
           ORDER BY revenue_ballpark_usd DESC NULLS LAST, crux_rank ASC NULLS LAST
-          LIMIT ${LIMIT}`;
+          LIMIT ${LIMIT - top.length}`;
+    const rows = DOMAINS.length
+      ? await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores WHERE domain = ANY(${DOMAINS})`
+      : [...top, ...tail];
     if (!rows.length) { console.log("Nothing to render-enrich."); return; }
     console.log(`render-enrich: ${rows.length} store(s) at concurrency ${CONC}${DRY ? " [DRY]" : ""}…\n`);
 
