@@ -15,6 +15,7 @@
  *   node --env-file=.env.local scripts/woo-checkout-probe.mjs [--limit 300] [--concurrency 6] [--dry-run]
  */
 import postgres from "postgres";
+import { workReady } from "./lib/work-ready.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "300"), 10);
@@ -169,7 +170,13 @@ async function main() {
     // `(activity_tier IN ('selling','active')) DESC`) forces a full sort of the whole Woo candidate
     // set and statement-times-out on the throttled DB (same bug fixed in ai-enrich/deep-enrich);
     // discovered_at DESC uses idx_imported_discovered (index scan, no sort), so it stays fast.
-    const rows = await sql`
+    // store_work_woo is a partial index on exactly this selection, so the pick no longer reads the
+    // whole store table (58GB/day on 2026-11-10). Falls back to the old query before the migration.
+    const rows = (await workReady(sql)) ? await sql`
+      SELECT domain, discovered_at FROM store_work
+      WHERE platform = 'woocommerce' AND live AND woo_at IS NULL AND (NOT has_pay OR pay_woo_plugin)
+      ORDER BY discovered_at DESC NULLS LAST
+      LIMIT ${LIMIT}` : await sql`
       SELECT domain, discovered_at FROM imported_stores
       WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND woo_checkout_at IS NULL

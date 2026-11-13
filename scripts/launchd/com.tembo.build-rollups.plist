@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tembo.build-rollups</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/joel/storepulse/scripts/build-rollups.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/joel/storepulse/logs/build-rollups.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/joel/storepulse/logs/build-rollups.out.log</string>
+	<!-- Every hour at :05. Rex's clock is PST, so the 14:05 run is 00:05 SAST: the run that closes
+	     the SAST day in metrics_daily. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Minute</key>
+		<integer>5</integer>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/joel/storepulse</string>
+</dict>
+</plist>
