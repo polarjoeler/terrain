@@ -81,8 +81,8 @@ export function aggregate(sql, from, to) {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, onnotice: () => {} });
   try {
-    await sql`SET statement_timeout = 600000`;
-    await sql`SET lock_timeout = 10000`;
+    // Transaction pooler: a bare SET lasts one statement, so long reads SET LOCAL inside their own transaction.
+    const long = (fn) => sql.begin(async (tx) => { await tx.unsafe(`SET LOCAL statement_timeout = '10min'`); return fn(tx); });
     if (has("--migrate")) {
       for (const q of MIGRATE) await sql.unsafe(q);
       console.log("store_rollup + metrics_daily ready.");
@@ -98,14 +98,14 @@ async function main() {
       // Discovery history only: created_at is a store's first insert, so per-day counts are exact.
       // Every other lane timestamp is a last touch, so its history can't be rebuilt — it accrues daily.
       const days = num("--backfill-days", 90);
-      const rows = await sql`
+      const rows = await long((sql) => sql`
         SELECT (created_at AT TIME ZONE ${TZ})::date AS day, country, platform,
           jsonb_build_object('found', count(*)::int,
-            'found_bought', count(*) FILTER (WHERE source = ANY(${BOUGHT}) OR source LIKE 'storeleads%')::int) m
+            'found_bought', count(*) FILTER (WHERE source = ANY(${BOUGHT}) OR source LIKE 'storeleads%' OR source LIKE 'builtwith%')::int) m
           FROM store_work
          WHERE created_at >= (date_trunc('day', now() AT TIME ZONE ${TZ}) - ${days} * interval '1 day') AT TIME ZONE ${TZ}
            AND created_at < date_trunc('day', now() AT TIME ZONE ${TZ}) AT TIME ZONE ${TZ}
-         GROUP BY 1, 2, 3`;
+         GROUP BY 1, 2, 3`);
       console.log(`backfill: ${rows.length.toLocaleString()} day×country×platform cells over ${days} days`);
       if (!DRY) {
         for (let i = 0; i < rows.length; i += 2000) {
@@ -122,7 +122,7 @@ async function main() {
 
     // 1. Rolling rollup (last 24h flows).
     const t0 = Date.now();
-    const roll = await aggregate(sql, sql`now() - interval '24 hours'`, sql`now()`);
+    const roll = await long((tx) => aggregate(tx, tx`now() - interval '24 hours'`, tx`now()`));
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     const sum = (k) => roll.reduce((s, r) => s + (r.m[k] || 0), 0);
     console.log(`rollup: ${roll.length} cells in ${secs}s · ${sum("stores").toLocaleString()} stores · ${sum("live").toLocaleString()} live · found 24h ${sum("found").toLocaleString()} · pay checks 24h ${sum("pay_n").toLocaleString()} · ai 24h ${sum("ai_n").toLocaleString()}`);
@@ -141,9 +141,8 @@ async function main() {
     const [{ y }] = await sql`SELECT ((now() AT TIME ZONE ${TZ})::date - 1)::text y`;
     const closed = (await sql`SELECT 1 FROM metrics_daily WHERE day = ${y}::date AND m ? 'live' LIMIT 1`).length > 0;
     if (!closed || has("--force-day")) {
-      const from = sql`(${y}::date)::timestamp AT TIME ZONE ${TZ}`;
-      const to = sql`(${y}::date + 1)::timestamp AT TIME ZONE ${TZ}`;
-      const day = await aggregate(sql, from, to);
+      const day = await long((tx) => aggregate(tx, tx`(${y}::date)::timestamp AT TIME ZONE ${TZ}`,
+        tx`(${y}::date + 1)::timestamp AT TIME ZONE ${TZ}`));
       for (const r of day) for (const k of Object.keys(r.m)) if (k.startsWith("last_")) delete r.m[k];
       console.log(`metrics_daily ${y}: ${day.length} cells · found ${day.reduce((s, r) => s + (r.m.found || 0), 0).toLocaleString()}`);
       if (!DRY) {

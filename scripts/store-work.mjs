@@ -101,8 +101,9 @@ export const MIGRATE = [
      WHERE (${SLIM.slice(1).map((c) => `w.${c}`).join(", ")}) IS DISTINCT FROM (${SLIM.slice(1).map((c) => `EXCLUDED.${c}`).join(", ")});
      RETURN NULL;
    END $$`,
-  `DROP TRIGGER IF EXISTS store_work_sync ON imported_stores`,
-  `CREATE TRIGGER store_work_sync AFTER INSERT OR DELETE OR UPDATE OF ${WATCHED.join(", ")}
+  // CREATE OR REPLACE (PG14+) takes SHARE ROW EXCLUSIVE: it waits for writers but never blocks reads.
+  // DROP TRIGGER would take ACCESS EXCLUSIVE and, queued behind a long scan, freeze the whole table.
+  `CREATE OR REPLACE TRIGGER store_work_sync AFTER INSERT OR DELETE OR UPDATE OF ${WATCHED.join(", ")}
      ON imported_stores FOR EACH ROW EXECUTE FUNCTION store_work_sync()`,
   // Queue indexes. Each is partial on exactly its lane's eligibility, so a pick reads only the
   // stores that lane could take, never the whole table.
@@ -115,15 +116,35 @@ export const MIGRATE = [
   `CREATE INDEX IF NOT EXISTS store_work_created ON store_work (created_at DESC)`,
 ];
 
+// DATABASE_URL is the transaction pooler (:6543), where a bare SET only lasts one statement. So every
+// timeout is SET LOCAL inside the transaction that needs it.
+const inTx = (sql, fn, stmt = "10min", lock = "3s") => sql.begin(async (tx) => {
+  await tx.unsafe(`SET LOCAL statement_timeout = '${stmt}'`);
+  await tx.unsafe(`SET LOCAL lock_timeout = '${lock}'`);
+  return fn(tx);
+});
+// DDL touching imported_stores: give up after 3s in the lock queue (so writers stall at most 3s), then retry.
+async function ddl(sql, q) {
+  for (let i = 1; ; i++) {
+    try { return await inTx(sql, (tx) => tx.unsafe(q)); }
+    catch (e) {
+      if (e.code !== "55P03" || i >= 8) throw e;
+      console.log(`  lock busy, retry ${i}/7 in ${5 * i}s`); await new Promise((r) => setTimeout(r, 5000 * i));
+    }
+  }
+}
+
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, onnotice: () => {} });
   try {
-    await sql`SET statement_timeout = 600000`;
-    await sql`SET lock_timeout = 10000`;
     const exists = !!(await sql`SELECT to_regclass('public.store_work') t`)[0].t;
 
     if (has("--migrate")) {
-      for (const q of MIGRATE) { await sql.unsafe(q); console.log("ok:", q.trim().split("\n")[0].slice(0, 90)); }
+      // Mark the backfill as pending BEFORE the table appears, so no reader (lib/work-ready.mjs) switches
+      // to a store_work that's still empty. --backfill clears the marker when it finishes.
+      if (!exists) await sql`INSERT INTO app_settings (key, value) VALUES ('store-work.backfill', '')
+        ON CONFLICT (key) DO NOTHING`;
+      for (const q of MIGRATE) { await ddl(sql, q); console.log("ok:", q.trim().split("\n")[0].slice(0, 90)); }
       console.log("store_work ready — trigger live. Next: --backfill, then --sync-priority.");
       return;
     }
@@ -139,7 +160,7 @@ async function main() {
       let total = 0;
       const t0 = Date.now();
       for (;;) {
-        const r = await sql`
+        const r = await inTx(sql, (sql) => sql`
           WITH b AS (SELECT s FROM imported_stores s WHERE s.domain > ${cursor} ORDER BY s.domain LIMIT ${BATCH}),
           ins AS (
             INSERT INTO store_work (${sql.unsafe(SLIM.join(", "))}, score, market_rank)
@@ -147,12 +168,15 @@ async function main() {
               FROM b, LATERAL store_work_of(b.s) w
               LEFT JOIN store_priority p ON p.domain = w.domain
             ON CONFLICT (domain) DO NOTHING RETURNING 1)
-          SELECT (SELECT max((b.s).domain) FROM b) last, (SELECT count(*) FROM b)::int seen, (SELECT count(*) FROM ins)::int added`;
+          SELECT (SELECT max((b.s).domain) FROM b) last, (SELECT count(*) FROM b)::int seen, (SELECT count(*) FROM ins)::int added`.then(async (r) => {
+            // Cursor saved in the same transaction as the batch, so a crash never skips or repeats rows.
+            if (r[0].seen) await sql`INSERT INTO app_settings (key, value) VALUES ('store-work.backfill', ${r[0].last})
+              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+            return r;
+          }));
         const { last, seen, added } = r[0];
         if (!seen) break;
         total += added; cursor = last;
-        await sql`INSERT INTO app_settings (key, value) VALUES ('store-work.backfill', ${cursor})
-          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
         process.stdout.write(`\r  backfill: ${total.toLocaleString()} added · at ${cursor.slice(0, 30).padEnd(30)} · ${Math.round((Date.now() - t0) / 1000)}s`);
       }
       console.log(`\nbackfill done: ${total.toLocaleString()} rows added.`);
@@ -161,13 +185,12 @@ async function main() {
     }
 
     if (has("--sync-priority")) {
-      const r = await sql`
+      const { r, c } = await inTx(sql, async (sql) => ({ r: await sql`
         UPDATE store_work w SET score = p.account_score, market_rank = p.market_rank
           FROM store_priority p
-         WHERE p.domain = w.domain AND (w.score, w.market_rank) IS DISTINCT FROM (p.account_score, p.market_rank)`;
-      const c = await sql`
+         WHERE p.domain = w.domain AND (w.score, w.market_rank) IS DISTINCT FROM (p.account_score, p.market_rank)`, c: await sql`
         UPDATE store_work w SET score = NULL, market_rank = NULL
-         WHERE w.score IS NOT NULL AND NOT EXISTS (SELECT 1 FROM store_priority p WHERE p.domain = w.domain)`;
+         WHERE w.score IS NOT NULL AND NOT EXISTS (SELECT 1 FROM store_priority p WHERE p.domain = w.domain)` }));
       console.log(`sync-priority: ${r.count.toLocaleString()} scores updated, ${c.count.toLocaleString()} cleared.`);
       return;
     }
