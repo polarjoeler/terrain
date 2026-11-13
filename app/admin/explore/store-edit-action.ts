@@ -68,6 +68,22 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   }
   // A manual country fix must survive re-enrichment: country-enrich skips country_source='manual'.
   if ("country" in set) set.country_source = "manual";
+  // A hand-set revenue (a typed figure or a band picked in the drawer) must win over the MODELED
+  // price immediately: revExpr() reads COALESCE(revenue_ballpark_usd, usd(estimated_monthly_sales)),
+  // so leaving the ballpark columns in place would keep showing the model's band until the next
+  // revenue-ballpark run. Do here exactly what that script's manual branch does (it keys off these
+  // store_edits rows to leave the store alone from now on).
+  if ("estimated_monthly_sales" in set) {
+    set.revenue_ballpark_usd = null;
+    set.revenue_ballpark_zar = null;
+    set.revenue_low_usd = null;
+    set.revenue_high_usd = null;
+    set.revenue_low_zar = null;
+    set.revenue_high_zar = null;
+    set.revenue_band = null;
+    set.revenue_model = "manual";
+    set.revenue_confidence = "good";
+  }
   // A manual contact edit is authoritative — stamp it so the contact lane treats it as done (and
   // should skip contact_source='manual'), and mark it "named" so it counts toward "reaches a person".
   if (CONTACT_FIELDS.some((f) => f in set)) {
