@@ -3,6 +3,7 @@
  *  computed Lead Fit Score, so the client can facet/sort/search instantly. */
 
 import { db as sharedDb } from "./db";
+import { canonicalApps } from "./apps-canon.ts";
 
 // DB `platform` values NOT yet launched to customers — kept in sync with lib/platforms.ts
 // (customerVisible:false there). Inlined, like VISIBLE_MARKETS below, so the standalone
@@ -61,15 +62,6 @@ export type ExploreLead = {
   score: number;         // 0–100 Lead Fit Score
 };
 
-// Apps are stored as raw Shopify app-store URLs (some concatenated). Extract the
-// slug of each PUBLIC app — which drops custom/private apps (they have no app-store
-// URL) — and render a clean name. Aliases tidy the most common ones.
-const APP_ALIAS: Record<string, string> = {
-  inbox: "Shopify Inbox", "product-reviews": "Shopify Reviews", geolocation: "Shopify Geolocation",
-  judgeme: "Judge.me", "klaviyo-email-marketing": "Klaviyo", "customer-privacy-banner": "Privacy Banner",
-  "whatsapp-chat-for-support": "WhatsApp Chat", instafeed: "Instafeed", pagefly: "PageFly",
-  omnisend: "Omnisend", mailchimp: "Mailchimp",
-};
 // Shipping values that are not carriers. "shopify" is Shopify's own built-in rate
 // layer — present on ~9,900 stores and meaningless as a filter — and the
 // shopify_provided_* variants are its internal rate-estimation layers.
@@ -132,14 +124,17 @@ function canonicaliseTheme<T extends { theme: string | null }>(rows: T[]): void 
     if (r.theme) r.theme = winner.get(r.theme.toLowerCase()) ?? r.theme;
   }
 }
-
-const APP_SKIP = new Set(["partners", "collections", "browse", "categories", "stores"]); // app-store links, not installed apps
+ // app-store links, not installed apps
 function cleanApps(raw: string | null): string | null {
-  if (!raw) return null;
-  const slugs = [...raw.matchAll(/apps\.shopify\.com\/([a-z0-9][a-z0-9-]*)/gi)].map((m) => m[1].toLowerCase()).filter((s) => !APP_SKIP.has(s));
-  if (!slugs.length) return null; // only custom/private apps → nothing public to show
-  const names = [...new Set(slugs)].map((s) => APP_ALIAS[s] ?? s.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "));
-  return names.join(";");
+  // Delegates to the shared canonicaliser (lib/apps-canon.ts). The old implementation extracted
+  // apps.shopify.com slugs and returned null otherwise, silently discarding every NAME-form value.
+  // That was 47% of rows with app data when the bug was found (2026-10-28); re-measured
+  // 2026-11-13 it is 1,806,865 of 1,806,940 — effectively ALL of them, because the feeders now
+  // deliver names rather than URLs (only 75 rows still hold an apps.shopify.com link). It is the
+  // customer path: lib/tech-stack.ts handles the name form correctly but is only read by the admin
+  // lead drawer, so apps rendered for an admin and were blank for the 39,174 customer-visible
+  // stores that have them.
+  return canonicalApps(raw);
 }
 
 // The imported estimated_monthly_sales is in each store's LOCAL currency, so we

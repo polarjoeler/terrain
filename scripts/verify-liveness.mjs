@@ -202,13 +202,24 @@ async function main() {
     // out the dead/frozen stores that are dragging down real coverage) instead of the whole base.
     const fromFile = opt("--from-file", "");
     let rows;
+    // Biggest first by the shared priority score (scripts/build-priority.mjs), the same order the
+    // payments, contact and render lanes use since #136. It replaces raw estimated_monthly_sales,
+    // which is each store's LOCAL currency (a rand figure beat a dollar one 18 to 1) and empty on
+    // ~63% of rows — so with a 300-store budget per run this lane was spending it on a near-random
+    // slice. store_priority only ranks stores believed LIVE, so an already-dead store has no row
+    // and sorts last on the fallback, which is the right order for a re-check anyway.
+    const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
+    const sizeOrder = hasPriority
+      ? sql`(SELECT p.account_score FROM store_priority p WHERE p.domain = imported_stores.domain) DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST`
+      : sql`estimated_monthly_sales DESC NULLS LAST`;
+
     if (fromFile) {
       const doms = readFileSync(fromFile, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
       rows = await sql`
         SELECT domain, live_miss FROM imported_stores
         WHERE domain = ANY(${doms})
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
-        ORDER BY estimated_monthly_sales DESC NULLS LAST
+        ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
       console.log(`Verifying ${rows.length.toLocaleString()} stores from ${fromFile}…`);
     } else {
@@ -216,9 +227,9 @@ async function main() {
         SELECT domain, live_miss FROM imported_stores
         WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
-        ORDER BY estimated_monthly_sales DESC NULLS LAST
+        ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
-      console.log(`Verifying ${rows.length.toLocaleString()} stores (highest value first)…`);
+      console.log(`Verifying ${rows.length.toLocaleString()} stores (biggest first)…`);
     }
 
     const tally = { active: 0, migrated: 0, dead: 0 };

@@ -164,3 +164,28 @@ export function bandDisplay(band: RevenueBand, country: string | null): { local:
     usd: fmt("$", loZ * FX.ZAR, hiZ == null ? null : hiZ * FX.ZAR),
   };
 }
+
+/** The figure to STORE when an admin picks a band instead of typing an amount: the band's midpoint,
+ *  expressed in the store's own currency (what `estimated_monthly_sales` holds).
+ *
+ *  A band isn't a stored value anywhere — the pill, the revenue sort, the facet counts and the export
+ *  all derive it from the one USD figure (see revExpr/bandSqlExpr) — so a hand-picked band needs no
+ *  column of its own: the midpoint always sits inside its own edges, which means revenueBand() and
+ *  bandSqlExpr() re-derive EXACTLY the band that was picked, in TS and in SQL alike. The currency
+ *  fallback chain matches usdExpr()/toUsd() (row currency → country's currency → USD); using a
+ *  different default here would convert the figure back to a different band.
+ *
+ *  "New" is the no-data floor, not a range, so it has no figure — null, i.e. clear the estimate. The
+ *  open-ended top band uses 1.2× its floor. */
+export function bandMidpointLocal(
+  band: RevenueBand,
+  country: string | null,
+  currency?: string | null,
+): number | null {
+  if (band === "New" || band === "—") return null;
+  const [loZ, hiZ] = BAND_ZAR[band] ?? [0, 0];
+  const midZar = hiZ == null ? loZ * 1.2 : (loZ + hiZ) / 2;
+  const ccy = ((currency || "").trim() || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD").toUpperCase();
+  const rate = FX[ccy] ?? 1;                     // USD per 1 local unit
+  return Math.round((midZar * FX.ZAR) / rate);   // ZAR → USD → local
+}

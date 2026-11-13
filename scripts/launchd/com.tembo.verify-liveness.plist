@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.tembo.verify-liveness</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>/Users/joel/storepulse/scripts/verify-liveness.sh</string></array>
+  <key>WorkingDirectory</key><string>/Users/joel/storepulse</string>
+  <!-- 12h. Paired with --limit 300 this is ~600 direct Shopify reads/day, which shares the one
+       residential-IP budget with contact-enrich; see the header of verify-liveness.sh. -->
+  <key>StartInterval</key><integer>43200</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/Users/joel/storepulse/logs/verify-liveness.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/joel/storepulse/logs/verify-liveness.err.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict></plist>

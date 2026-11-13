@@ -13,5 +13,10 @@ echo "===== build-priority $(date '+%F %T') ====="
 
 node --no-warnings --env-file=.env.local scripts/build-priority.mjs --show ZA || echo "!! build-priority failed"
 
+# Copy the new scores onto the slim work table the queues pick from (changed rows only), then spot-check
+# that the trigger is keeping store_work in step with imported_stores. Both no-op before the migration.
+node --no-warnings --env-file=.env.local scripts/store-work.mjs --sync-priority || echo "!! store-work sync failed"
+node --no-warnings --env-file=.env.local scripts/store-work.mjs --verify 2000 || echo "!! store-work drift — see above"
+
 node --env-file=.env.local scripts/heartbeat.mjs build-priority "idle — done" >/dev/null 2>&1 || true
 echo "===== build-priority done $(date '+%T') ====="

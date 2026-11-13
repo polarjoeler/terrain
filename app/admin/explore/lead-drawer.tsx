@@ -6,6 +6,7 @@ import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
 import { isOpenSource } from "@/lib/platforms";
 import { NOT_TRADING, dnsStackTools, emailProviderLabel } from "@/lib/store-signals";
+import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, toUsd, type RevenueBand } from "@/lib/fx";
 import { updateStore, type StorePatch } from "./store-edit-action";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
@@ -212,11 +213,23 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
     const res = await updateStore(data.domain, patch);
     setSaving(false);
     if ("error" in res) { setSaveErr(res.error); return; }
-    setData({ ...data, name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
+    // A manual revenue drops the modeled price (see store-edit-action), so the read-only "Ballpark
+    // revenue" row below has to go with it rather than keep showing the model's range.
+    const revChanged = (patch.estimated_monthly_sales ?? null) !== (data.estimated_monthly_sales ?? null);
+    setData({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null } : {}), name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
     setEditing(false);
   }
 
   if (!domain) return null;
+  // The band the figure in the edit form falls in. Nothing stores a band: the Explorer pill, the
+  // revenue sort, the facet counts and the export all derive it from this one figure (revExpr /
+  // bandSqlExpr), so the dropdown below is a view of the amount, not a second field.
+  const typedLocal = Number(form.revenue);
+  const formBand: RevenueBand = revenueBand(
+    form.revenue.trim() === "" || !Number.isFinite(typedLocal)
+      ? null
+      : toUsd(typedLocal, data?.currency ?? null, data?.country ?? null),
+  );
   const money = (v: string | null, ccy?: string | null) => (v != null ? `${ccy ? ccy + " " : ""}${Math.round(Number(v)).toLocaleString()}` : null);
   const social = (handle: string | null, url: string, followers: number | null) =>
     handle ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">{handle}{followers ? ` · ${followers.toLocaleString()}` : ""}</a> : null;
@@ -299,6 +312,35 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                       className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60" />
                   </label>
                 ))}
+                {/* Pick a band instead of inventing a precise figure. Storing the band's MIDPOINT in the
+                    store's currency is what makes this work with no new column: revenueBand() and
+                    bandSqlExpr() re-derive exactly the band that was picked, so the pill, the revenue
+                    sort, the facets and the CSV all agree. Picking a band fills the amount above;
+                    typing an amount moves the band here. */}
+                <label className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs text-cream/45">Revenue band</span>
+                  <select
+                    value={formBand}
+                    onChange={(e) => {
+                      const mid = bandMidpointLocal(e.target.value as RevenueBand, data.country, data.currency);
+                      setForm((f) => ({ ...f, revenue: mid == null ? "" : String(mid) }));
+                    }}
+                    className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60"
+                  >
+                    {REVENUE_BANDS.map((b) => (
+                      <option key={b} value={b} className="bg-ink-deep">
+                        {b === "New" ? "New \u2014 no revenue signal" : `${b} \u00b7 ${bandDisplay(b, data.country).usd}/mo`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="text-[11px] leading-snug text-cream/35">
+                  {formBand === "New"
+                    ? "Saves no figure \u2014 the store reads as New until the pipeline prices it again."
+                    : `Saves ${data.currency ? data.currency + " " : ""}${typedLocal.toLocaleString()}/mo${
+                        typedLocal === bandMidpointLocal(formBand, data.country, data.currency) ? " (band midpoint)" : ""
+                      }; bands as ${formBand}.`}
+                </p>
                 <label className="flex items-center gap-3">
                   <span className="w-28 shrink-0 text-xs text-cream/45">Published</span>
                   <input type="checkbox" checked={form.published} onChange={(e) => setForm((f) => ({ ...f, published: e.target.checked }))} className="h-4 w-4 accent-cyan" />
