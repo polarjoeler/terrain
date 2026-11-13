@@ -8,6 +8,7 @@
  *   node --env-file=.env.local scripts/health-check.mjs
  */
 import postgres from "postgres";
+import { rollupFresh } from "./lib/work-ready.mjs";
 import { statSync } from "fs";
 import { homedir, hostname } from "os";
 import { execFileSync } from "child_process";
@@ -50,8 +51,21 @@ add("discovery", mins(t.ins) != null && mins(t.ins) <= 60 * 6,
 //     stalling (deep-enrich Oct 23–28, contact Oct 25–27). A batch lane that drained its queue
 //     legitimately goes quiet, so a bare recency check would cry wolf — gate on BACKLOG: only
 //     unhealthy when work is still pending AND nothing has been written within the limit.
+// With a fresh store_rollup (scripts/build-rollups.mjs, hourly) these come from ~3,000 summary rows
+// instead of a whole-table read every hour. The rollup is up to ~1h behind, so the woo limit allows
+// for that. Falls back to the direct count when the rollup is missing or stale.
 const LIVE = sql`published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))`;
-const [e] = await sql`SELECT
+const useRollup = await rollupFresh(sql, 150);
+const R = (k) => sql`COALESCE(sum((m->>${k})::int), 0)::int`;
+const RMAX = (k, where = sql`true`) => sql`max((m->>${k})::timestamptz) FILTER (WHERE ${where})`;
+const [e] = useRollup ? await sql`SELECT
+  ${RMAX("last_deep", sql`platform = 'shopify'`)} enr_shop,
+  ${RMAX("last_deep", sql`platform NOT IN ('shopify', '')`)} enr_non,
+  ${RMAX("last_contact")} contact, ${RMAX("last_woo")} woo,
+  COALESCE(sum((m->>'todo_deep')::int) FILTER (WHERE platform = 'shopify'), 0)::int shop_todo,
+  COALESCE(sum((m->>'todo_deep')::int) FILTER (WHERE platform NOT IN ('shopify', '')), 0)::int non_todo,
+  ${R("todo_contact")} contact_todo, ${R("todo_woo")} woo_todo
+  FROM store_rollup` : await sql`SELECT
   max(deep_enriched_at) FILTER (WHERE platform ILIKE 'shopify%') enr_shop,
   max(deep_enriched_at) FILTER (WHERE platform NOT ILIKE 'shopify%' AND platform IS NOT NULL) enr_non,
   max(contact_checked_at) contact, max(woo_checkout_at) woo,
@@ -68,7 +82,13 @@ const stallRule = (name, ageMin, limitMin, todo, minTodo = 1000) =>
 stallRule("deep-enrich-shopify", mins(e.enr_shop), 60 * 30, e.shop_todo);   // Lucy/Rain, ~daily
 stallRule("deep-enrich-nonshop", mins(e.enr_non), 60 * 30, e.non_todo);     // Rex, ~daily
 stallRule("contact-enrich", mins(e.contact), 60 * 26, e.contact_todo);      // runs through the day
-stallRule("woo-checkout", mins(e.woo), 200, e.woo_todo, 50);               // 2-hourly → stale past ~3.3h
+stallRule("woo-checkout", mins(e.woo), useRollup ? 260 : 200, e.woo_todo, 50);   // 2-hourly → stale past ~3.3h (+1h rollup lag)
+{
+  const [x] = await sql`SELECT to_regclass('public.store_rollup') IS NOT NULL t`;
+  // Before the migration there's nothing to watch; once the table exists, a stale rollup is a stall.
+  add("rollups", useRollup || !x.t, useRollup ? "store_rollup fresh (hourly)"
+    : x.t ? "store_rollup older than 2.5h — build-rollups stalled; counted the store table directly" : "store_rollup not set up yet");
+}
 
 // 1c. CT discovery FRESHNESS (added 2026-11-06). "discovery" above only proves that SOMETHING
 //     landed — VPS landings alone satisfy it — so a tailer that fell ~25 days behind and was reading
@@ -116,7 +136,9 @@ for (const p of ["shopify-radar/checkout_cache.json"]) {
 
 // 3. Backlog sanity — a huge focus-market payment queue that isn't draining means the probe is stuck.
 const FOCUS = ["ZA", "KE", "NG", "JP"];
-const [q] = await sql`SELECT COUNT(*) FILTER (WHERE published AND UPPER(country)=ANY(${FOCUS}) AND (lower(platform)='shopify' OR platform IS NULL) AND payments_checked_at IS NULL AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')))::int n FROM imported_stores`;
+const [q] = useRollup
+  ? await sql`SELECT COALESCE(sum((m->>'todo_pay')::int), 0)::int n FROM store_rollup WHERE country = ANY(${FOCUS})`
+  : await sql`SELECT COUNT(*) FILTER (WHERE published AND UPPER(country)=ANY(${FOCUS}) AND (lower(platform)='shopify' OR platform IS NULL) AND payments_checked_at IS NULL AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')))::int n FROM imported_stores`;
 add("payment-backlog", true, `${Number(q.n).toLocaleString()} focus stores unprobed (informational)`);
 
 // Report + persist each verdict to agent_heartbeat so it surfaces on /ops.

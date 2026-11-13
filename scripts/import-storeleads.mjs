@@ -11,6 +11,7 @@
 
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
+import { canonicalApps } from "../lib/apps-canon.ts";
 
 const SOURCE = "storeleads-2026-08";
 const BATCH = 150; // small batches keep each INSERT under Supabase's statement timeout
@@ -97,7 +98,8 @@ function mapRow(r) {
     instagram_followers: int(r.instagram_followers),
     facebook_followers: int(r.facebook_followers),
     employee_count: int(r.employee_count),
-    apps: (r.installed_apps || "").trim() || null,
+    // StoreLeads sends NAME-form apps (the read path used to discard these entirely).
+    apps: canonicalApps(r.installed_apps),
     store_created: isoDate(r.created),
     first_seen: isoDate(r.created),
     launched_at: monthOf(r.created),

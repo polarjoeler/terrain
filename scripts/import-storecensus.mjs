@@ -25,6 +25,7 @@
  *    node --env-file=.env.local scripts/source-liveness.mjs --source storecensus --country JP
  */
 import postgres from "postgres";
+import { canonicalApps, canonicalTechnologies } from "../lib/apps-canon.ts";
 import { readFileSync } from "fs";
 import { createInterface } from "readline";
 import { createReadStream } from "fs";
@@ -95,7 +96,9 @@ async function main() {
       payments: cleanPays(r.pays, r.country), payments_source: cleanPays(r.pays, r.country) ? SRC : null, payments_checked_at: cleanPays(r.pays, r.country) ? now : null,
       store_created: created, launched_at: launchFrom(created), launched_source: launchFrom(created) ? SRC : null,
       // wide fields — all gap-filled below, never clobbering our own probes
-      apps: list(r.apps), technologies: list(r.tech),
+      // Canonicalised at the write boundary so the column keeps ONE spelling per app —
+      // see lib/apps-canon.ts (mixed ';'/'|'/':' delimiters, URL-vs-name forms).
+      apps: canonicalApps(list(r.apps)), technologies: canonicalTechnologies(list(r.tech)),
       instagram: r.ig || null, facebook: r.fb || null, twitter: r.tw || null, youtube: r.yt || null,
       linkedin: r.li || null, pinterest: r.pin || null, tiktok: r.tiktok || null,
       product_count: int(r.prod), variant_count: int(r.variants), avg_product_price: num(r.avgprice),

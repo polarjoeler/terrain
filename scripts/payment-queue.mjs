@@ -15,6 +15,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import postgres from "postgres";
+import { workReady, rollupFresh } from "./lib/work-ready.mjs";
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
@@ -172,7 +173,24 @@ async function main() {
     const rankCol = hasPriority
       ? sql`(SELECT market_rank FROM store_priority p WHERE p.domain = imported_stores.domain)`
       : sql`NULL::int`;
-    const eligible = await sql`
+    // With the slim work table in place the pick reads only the store_work_pay index (live, published,
+    // Shopify/unclassified, by market) instead of the whole store table — the ~95GB/day reader on
+    // 2026-11-10. Same eligibility, same columns; `sales` is dropped (the priority score replaced it).
+    const useWork = await workReady(sql);
+    const tagIn = (t) => sql`(w.domain IN (SELECT domain FROM store_tags WHERE tag = ${t}))`;
+    const eligible = useWork ? await sql`
+      SELECT w.domain, NULL::numeric sales, w.discovered_at, w.source, w.country, w.score, w.market_rank,
+        (NOT w.has_pay AND w.pay_at IS NULL) AS needs_initial, w.plus,
+        ${tagIn("top-100")} AS t100, ${tagIn("top-500")} AS t500, (w.country IN ('KE', 'NG')) AS new_market
+      FROM store_work w
+      WHERE w.published AND w.live AND w.platform IN ('shopify', '')
+        ${CLIST.length ? sql`AND w.country = ANY(${CLIST})` : sql``}
+        ${PLUS ? sql`AND w.plus`
+               : sql`AND ( (NOT w.has_pay AND w.pay_at IS NULL)
+                   OR ( (w.plus OR w.domain IN (SELECT domain FROM store_tags WHERE tag IN ('top-100','top-500')))
+                        AND w.pay_at < now() - (${HV_REPROBE_DAYS}::int * interval '1 day') )
+                   OR w.pay_at < now() - (${TAIL_REPROBE_DAYS}::int * interval '1 day') )`}`
+    : await sql`
       SELECT domain, estimated_monthly_sales sales, live_status, discovered_at, source, country,
         ${pri} AS score, ${rankCol} AS market_rank,
         ((payments IS NULL OR payments = '') AND payments_checked_at IS NULL) AS needs_initial,
@@ -291,7 +309,10 @@ async function main() {
     writeFileSync(OUT, queue.map((r) => r.domain).join("\n") + "\n");
     const tagged = queue.filter((r) => r.t100 || r.t500).length;
 
-    const [cov] = await sql`
+    // Coverage line: from the hourly rollup when it's fresh (a whole-table count otherwise).
+    const [cov] = (await rollupFresh(sql))
+      ? await sql`SELECT COALESCE(sum((m->>'pay')::int), 0)::int have, COALESCE(sum((m->>'live')::int), 0)::int live FROM store_rollup`
+      : await sql`
       SELECT
         COUNT(*) FILTER (WHERE payments IS NOT NULL AND payments <> '')::int have,
         COUNT(*) FILTER (WHERE COALESCE(live_status,'active') NOT IN ('dead','migrated'))::int live

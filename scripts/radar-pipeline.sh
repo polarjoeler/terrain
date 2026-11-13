@@ -17,11 +17,10 @@ export NVM_DIR="$HOME/.nvm"
 cd /Users/joel/storepulse || exit 1
 node --env-file=.env.local scripts/heartbeat.mjs pipeline >/dev/null 2>&1 || true
 # Target markets for the budget-consuming enrichment steps (AI enrich, checkout probes).
-# ct-tail is TLD-agnostic and lands the whole global CT firehose, so without this scope
-# those steps would burn Haiku credits + checkout probes on global stores we don't sell to.
-# Scope = all of Africa (the country set geo.py tags, matching the VPS "Africa" market) + JP.
+# The list itself now lives in scripts/lib/markets.sh so this file and verify-liveness.sh cannot
+# drift apart; the rationale for the scope is in that file.
 # (Radar/fingerprint stays ZA-only — a separate, intentional scope in radar-fingerprint.mjs.)
-MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP"
+source "$HOME/storepulse/scripts/lib/markets.sh"
 
 echo "===== radar pipeline $(date '+%Y-%m-%d %H:%M:%S') ====="
 
