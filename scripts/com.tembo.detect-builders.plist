@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tembo.detect-builders</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/joel/storepulse/scripts/detect-builders-world.sh</string>
+	</array>
+	<!-- Weekly worldwide hosted-platform DNS sweep (DNS only, small batched writes, max 3 DB conns).
+	     Not RunAtLoad: the first run is a manual, watched one. -->
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/joel/storepulse/logs/detect-builders.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/joel/storepulse/logs/detect-builders.out.log</string>
+	<key>StartInterval</key>
+	<integer>604800</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/joel/storepulse</string>
+</dict>
+</plist>

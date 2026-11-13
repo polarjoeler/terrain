@@ -48,6 +48,28 @@ const CANON: Record<string, string> = {
   swell: "Swell",
   commercetools: "commercetools",
   crystallize: "Crystallize",
+  // hosted platforms added to shopify-radar/hosted_platforms.json on 2026-11-13 — pinned so a
+  // detector's casing can't split them (names match rows already in the DB where those exist)
+  "big cartel": "Big Cartel",
+  bigcartel: "Big Cartel",
+  shopline: "Shopline",
+  shoplazza: "Shoplazza",
+  "tiendanube/nuvemshop": "Tiendanube/Nuvemshop",
+  tiendanube: "Tiendanube/Nuvemshop",
+  nuvemshop: "Tiendanube/Nuvemshop",
+  "weebly/square online": "Weebly/Square Online",
+  weebly: "Weebly/Square Online",
+  "square online": "Weebly/Square Online",
+  "godaddy website builder": "GoDaddy Website Builder",
+  youcan: "YouCan",
+  lightfunnels: "LightFunnels",
+  easyorders: "EasyOrders",
+  "easy orders": "EasyOrders",
+  salla: "Salla",
+  duda: "Duda",
+  site123: "SITE123",
+  strikingly: "Strikingly",
+  jimdo: "Jimdo",
 };
 
 /** Canonical spelling for a raw detector value. Unknown values pass through trimmed,
