@@ -41,6 +41,7 @@ const PER_PLATFORM = Number(arg("--per-platform", 1500));
 const PER_PLAT = 2;                                  // in-flight fetches per platform edge
 const FOCUS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
 const cArg = arg("--country", null);
+const pArg = arg("--platform", null);   // narrow to platforms (comma list, case-insensitive), for testing
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : null;   // null = worldwide
 
 // Self-hosted / not-DNS-fingerprintable dedicated platforms (HTTP-labelled by reconcile-probed).
@@ -52,6 +53,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HOSTED = JSON.parse(readFileSync(join(HERE, "lib", "hosted-platforms.json"), "utf8")).platforms
   .filter((p) => p.kind === "commerce").map((p) => p.name.toLowerCase()).filter((n) => !NOT_HERE.has(n));
 export const STORE_CMS = [...new Set([...SELF_HOSTED, ...HOSTED])];
+// Sources whose platform/country labels aren't evidence. crux-ranked stamps the CrUX market as the
+// country and its platform tags are vendor guesses (2026-11-13: balenciaga.com "JP", cartier.com "MA",
+// builtwith.com "Salesforce Commerce Cloud"); publishing them would put global brands into African
+// dashboards. They stay banked until their country is re-derived.
+const UNTRUSTED_SOURCES = ["crux-ranked"];
+// Staging / API / dev hosts of real stores — never a lead in their own right.
+const NON_PROD_HOST = String.raw`^(dev|stg|stage|staging|test|uat|qa|preview|sandbox|api|admin|cms)[-.]|[-.](stg|staging|dev|uat|sandbox)[-.]`;
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
@@ -140,6 +148,9 @@ async function main() {
          WHERE NOT published AND lower(platform) = ANY(${STORE_CMS})
            AND (live_status IS NULL OR live_status <> 'dead')
            AND activity_tier IS DISTINCT FROM 'not_a_store'
+           AND coalesce(source, '') <> ALL(${UNTRUSTED_SOURCES})
+           AND domain !~* ${NON_PROD_HOST}
+           ${pArg ? sql`AND lower(platform) = ANY(${pArg.toLowerCase().split(",")})` : sql``}
            ${countries ? sql`AND upper(country) = ANY(${countries})` : sql``}
            ${retry}
       ) t WHERE rn <= ${PER_PLATFORM}
