@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { marketLabel, marketFlag } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
+import { isOpenSource } from "@/lib/platforms";
 import { updateStore, type StorePatch } from "./store-edit-action";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
@@ -426,7 +427,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 ["Theme", data.theme],
                 ["Activity", data.platform === "woocommerce" && data.activity_tier ? <TierBadge tier={data.activity_tier} score={data.activity_score} /> : null],
                 [data.platform?.toLowerCase() === "magento" ? "Magento version" : "Woo version", data.platform === "woocommerce" || data.platform?.toLowerCase() === "magento" ? data.platform_version : null],
-                ["Hosting", (data.platform === "woocommerce" || data.platform?.toLowerCase() === "magento") && data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null],
+                ["Hosting", isOpenSource(data.platform) && data.hosting_provider ? `${data.hosting_provider}${data.hosting_asn ? ` · AS${data.hosting_asn}` : ""}` : null],
               ]} />
 
               {data.brands && data.brands.brands.length > 0 && (
