@@ -56,8 +56,10 @@ export const STORE_CMS = [...new Set([...SELF_HOSTED, ...HOSTED])];
 // Sources whose platform/country labels aren't evidence. crux-ranked stamps the CrUX market as the
 // country and its platform tags are vendor guesses (2026-11-13: balenciaga.com "JP", cartier.com "MA",
 // builtwith.com "Salesforce Commerce Cloud"); publishing them would put global brands into African
-// dashboards. They stay banked until their country is re-derived.
+// dashboards. They stay banked until crux-country.mjs re-derives their country.
 const UNTRUSTED_SOURCES = ["crux-ranked"];
+// …unless crux-country.mjs (or a store-level lane) has since backed the country with evidence.
+const EVIDENCED_COUNTRY = ["cctld", "crux-home", "shop_meta", "shopify_meta", "storefront", "payment_geo", "manual"];
 // Staging / API / dev hosts of real stores — never a lead in their own right.
 const NON_PROD_HOST = String.raw`^(dev|stg|stage|staging|test|uat|qa|preview|sandbox|api|admin|cms)[-.]|[-.](stg|staging|dev|uat|sandbox)[-.]`;
 
@@ -148,7 +150,7 @@ async function main() {
          WHERE NOT published AND lower(platform) = ANY(${STORE_CMS})
            AND (live_status IS NULL OR live_status <> 'dead')
            AND activity_tier IS DISTINCT FROM 'not_a_store'
-           AND coalesce(source, '') <> ALL(${UNTRUSTED_SOURCES})
+           AND (coalesce(source, '') <> ALL(${UNTRUSTED_SOURCES}) OR country_source = ANY(${EVIDENCED_COUNTRY}))
            AND domain !~* ${NON_PROD_HOST}
            ${pArg ? sql`AND lower(platform) = ANY(${pArg.toLowerCase().split(",")})` : sql``}
            ${countries ? sql`AND upper(country) = ANY(${countries})` : sql``}
