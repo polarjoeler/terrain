@@ -264,6 +264,10 @@ TODO: commit completeness.mjs + today's Rex-local edits (ai-enrich rotator, tuni
 
 **Supabase capacity (2026-10-23):** storage is NOT the constraint (~4.3 GB of 8 GB Pro; disk beyond ~$0.125/GB). Compute (queries over large tables) is the ceiling. **Already on Pro + Medium compute add-on.** Next lever if load tightens = Large (~$110/mo), NOT the Team plan ($599, a seats/features jump — wrong lever). The data-ownership stance keeps us off Large: bought/background global stays `published=false` behind partial indexes (`WHERE published`) so the hot product never scans it — it's just cheap storage. Keep heavy analytical scans (refresh-browse / completeness / insights) scoped to focus markets.
 
+## 5o. meta-identify — the country-less Shopify backlog (2026-11-13)
+
+~1.29M published Shopify stores had no country, 99% fresh `ct_tail` .com finds with no free signal (no currency/language/CrUX, generic TLD). `scripts/meta-identify.mjs` fetches `/meta.json` (Shopify's own registered country + shop_id/myshopify_domain) via the Webshare fleet — it refuses to run without `STORE_PROBE_PROXY_FILE`. Measured: ~13/s at concurrency 24, 86–88% placed, ~1% 429. Hourly on Rex (`com.tembo.meta-identify`, 20k/run, lock-guarded) → backlog clears in ~3 days and then keeps pace with intake. Writes `country_source='shop_meta'` (GB→UK); misses stamp `country_checked_at` + `country_source='meta_miss:<reason>'` (`frozen_402` ≈7% is a free churn signal; `html_at_meta`/`http_404` = off Shopify). Reset misses with `country_source LIKE 'meta_miss:%'`.
+
 ## 6. Open decisions (need Joel)
 
 - [ ] **Cutover go/no-go** — flip the 24 jobs Adam→Rex?
