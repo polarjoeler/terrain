@@ -480,11 +480,16 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       COUNT(*) FILTER (WHERE za)::int                                      AS churn_total,
       COUNT(*) FILTER (WHERE za AND live_checked_at IS NOT NULL)::int      AS churn_checked,
       COUNT(*) FILTER (WHERE za AND live_status = 'active')::int           AS churn_active,
-      -- "migrated" = we detected the store now runs a NON-Shopify platform (live_platform).
-      -- We count that signal directly, NOT live_status='migrated' — confirming that status needs
-      -- 2 consecutive monthly checks, so real moves sit as 'active' with a non-Shopify platform
-      -- for up to a month and were showing as 0 migrations. live_platform is the true signal.
-      COUNT(*) FILTER (WHERE za AND live_platform IS NOT NULL AND live_platform <> 'Shopify')::int AS churn_migrated,
+      -- "migrated" = the store's LIVE platform differs from the one we recorded for it. Counted
+      -- off live_platform rather than live_status='migrated' on purpose: confirming that status
+      -- needs 2 consecutive checks, so real moves sit as 'active' with a changed platform for up
+      -- to a month and were showing as 0 migrations.
+      -- The comparison is against COALESCE(platform,'Shopify'), not the literal 'Shopify'. The
+      -- literal silently assumed every checked store was Shopify to begin with — true only while
+      -- the liveness queue happened to hold Shopify stores. Any WooCommerce store it checked got
+      -- live_platform='WooCommerce' and was counted here as a migration despite never moving.
+      COUNT(*) FILTER (WHERE za AND live_platform IS NOT NULL
+        AND lower(live_platform) <> lower(COALESCE(platform, 'Shopify')))::int AS churn_migrated,
       COUNT(*) FILTER (WHERE za AND live_status = 'dead')::int             AS churn_dead,
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
