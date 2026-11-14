@@ -52,7 +52,14 @@ CREATE TABLE IF NOT EXISTS imported_stores (
   first_seen       TEXT,
   published        BOOLEAN NOT NULL DEFAULT false,
   source           TEXT,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Currency codes are stored CANONICALLY: ISO 4217, upper-case, or NULL (lib/fx.ts normalizeCcy).
+  -- Without this the column drifted: measured 2026-11-13, 89 codes were held in BOTH cases, so
+  -- `currency = 'ZAR'` silently returned 15,764 of the 23,525 South African stores and nothing
+  -- looked wrong. The constraint is what lets a reader write the plain comparison. On an existing
+  -- database it is added by scripts/normalise-currency-case.mjs (ADD ... NOT VALID, then VALIDATE,
+  -- which takes no ACCESS EXCLUSIVE lock) — never as a bare ALTER here, which this file replays.
+  CONSTRAINT imported_stores_currency_iso CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$')
 );
 CREATE INDEX IF NOT EXISTS idx_imported_published ON imported_stores(published);
 
@@ -307,7 +314,9 @@ CREATE TABLE IF NOT EXISTS lead_overrides (
   hidden        BOOLEAN NOT NULL DEFAULT false,
   note          TEXT,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_by    TEXT
+  updated_by    TEXT,
+  -- Same canonical form as imported_stores.currency — an override feeds the same readers.
+  CONSTRAINT lead_overrides_currency_iso CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$')
 );
 -- Full overridable field set — every Lead attribute an admin can correct.
 ALTER TABLE lead_overrides ADD COLUMN IF NOT EXISTS category                TEXT;
