@@ -88,6 +88,14 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ;
 -- Our own verified liveness (separate from the source's `status` snapshot).
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_status TEXT;      -- active | migrated | dead
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_platform TEXT;    -- detected platform when migrated
+-- A platform MOVE, recorded on the store itself rather than inferred from a discrepancy.
+-- `platform` is healed to the new platform when a move is confirmed, so the old
+-- live_platform-vs-platform difference disappears — these two columns are what survives, and they
+-- carry something the discrepancy never did: WHEN. migrated_at is the last time we confirmed the
+-- store selling on the old platform (same estimate churn_log.died_at uses), so a cohort like
+-- "replatformed in the last 90 days" is answerable; live_checked_at only ever said when WE looked.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS migrated_from TEXT;
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS migrated_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_checked_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL DEFAULT 0;
 -- First time a liveness check CONFIRMED this store live. A death only counts as
@@ -105,6 +113,8 @@ CREATE INDEX IF NOT EXISTS idx_imported_sales ON imported_stores(estimated_month
 -- recency on the checked_at/launched/created timestamps. Without these the pages full-scan 100k+
 -- rows per query and time out under worker write-load. (Added live 2026-09; kept here to persist.)
 CREATE INDEX IF NOT EXISTS idx_is_live_universe    ON imported_stores (country, platform, live_status) WHERE published;
+-- Partial: only moved stores have the column set, which is a small fraction of the table.
+CREATE INDEX IF NOT EXISTS idx_is_migrated_at      ON imported_stores (migrated_at DESC) WHERE migrated_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_is_live_checked     ON imported_stores (live_checked_at DESC NULLS LAST);
 -- The customer-facing visibility gate (published AND real store), by country. The Explorer filters
 -- a PLAIN country=ANY(...) while insights/getHomeStats go through upper(country); both need an index

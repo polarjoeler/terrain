@@ -82,6 +82,13 @@ export type BrowseFilters = {
   discoveredDays?: number;    // we first tracked it within N days
   status?: "migrated" | "dead"; // show stores in this terminal state (overrides the default live-only filter)
   checkedDays?: number;       // ...whose status was confirmed within N days (pairs with `status`)
+  /** Replatformed within N days — stores that MOVED platform and are still trading, dated by
+   *  migrated_at (when they left) rather than by when we noticed. Unlike `status: "migrated"`,
+   *  this is an ordinary filter over LIVE leads: a confirmed move now heals `platform` and returns
+   *  the store to active, so these rows sit in the normal lead universe and combine with every
+   *  other facet — payments, contact quality, revenue band. That combination is the point: a store
+   *  that just replatformed is re-choosing its payment provider, its apps and its agency. */
+  migratedDays?: number;
   sort?: SortKey;
   limit?: number; offset?: number;
   refresh?: boolean;          // internal: force a fresh aggregate (bypass caches) — used by refresh-browse
@@ -263,6 +270,7 @@ function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   }
   if (f.plus) conds.push(sql`plus`);
   if (f.hasEmail) conds.push(sql`${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> ''`);
+  if (f.migratedDays) conds.push(sql`migrated_at >= now() - ${f.migratedDays}::int * interval '1 day'`);
   if (f.contactType?.length) conds.push(sql`contact_type = ANY(${f.contactType})`);
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
@@ -495,6 +503,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
            activity_tier, ${sql.unsafe(bestEmailSql)} AS email,
            contact_type, contact_name, contact_role, contact_email_guess, contact_guess_status, whatsapp, contact_mx_ok, contact_shared_count,
+           migrated_from, migrated_at,
            instagram, facebook, tiktok,
            instagram_followers, facebook_followers, product_count, avg_product_price, currency,
            ${usd}::int AS usd, ${sql.unsafe(scoreExpr())} AS fit_score, discovered_at, ${launchSel},
@@ -524,6 +533,8 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         estMonthlySales: sales, band: revenueBand(sales),
         productCount: r.product_count == null ? null : Number(r.product_count), aovUsd: aov,
         email, instagram: (r.instagram as string) ?? null, facebook: (r.facebook as string) ?? null, tiktok: (r.tiktok as string) ?? null,
+        migratedFrom: (r.migrated_from as string) ?? null,
+        migratedAt: r.migrated_at ? new Date(r.migrated_at as string).toISOString().slice(0, 10) : null,
         contactType: (r.contact_type as string) ?? null, contactName: (r.contact_name as string) ?? null,
         contactRole: (r.contact_role as string) ?? null,
         contactEmailGuess: (r.contact_email_guess as string) ?? null, contactGuessStatus: (r.contact_guess_status as string) ?? null,
@@ -608,6 +619,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
            logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin,
            price_min, price_max, products_sold, plan AS shopify_plan, description,
            instagram_followers, facebook_followers, first_product_at, first_seen,
+           migrated_from, migrated_at,
            ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools, dns.dns_verified" : DNS_NULLS)},
            ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}
     FROM imported_stores ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
@@ -631,7 +643,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // normalised one. Both ship: the native pair is what a merchant recognises, the USD one is
   // what sorts across markets. shopify_plan is the plan-tier ladder (see the plan-detection
   // work), not Terrain's subscription plan.
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "email_provider", "dns_tools", "dns_verified", "not_trading"];
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "migrated_from", "migrated_at", "email_provider", "dns_tools", "dns_verified", "not_trading"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
@@ -650,6 +662,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
       r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
       r.tiktok, r.linkedin,
       r.description, dayCell(r.first_product_at), dayCell(r.first_seen),
+      r.migrated_from, dayCell(r.migrated_at),
       r.dns_email, list(r.dns_tools), list(r.dns_verified), r.nt_reason] as ExportCell[];
   });
   // Header and row width drift silently — two lists kept in one order by hand. Catch it here

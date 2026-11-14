@@ -22,6 +22,7 @@ export default async function Dashboard({
     theme?: string; city?: string; category?: string; band?: string;
     new?: string; nopay?: string; launched?: string; list?: string;
     plus?: string; status?: string; checked?: string; group?: string; grouped?: string;
+    replatformed?: string;
   }>;
 }) {
   const email = await currentUser();
@@ -63,13 +64,16 @@ export default async function Dashboard({
     ? (sp.launched as "7d" | "30d" | "90d" | "365d") : undefined;
   const status = sp.status === "migrated" || sp.status === "dead" ? sp.status : undefined;
   const checkedDays = sp.checked && /^\d{1,4}$/.test(sp.checked) ? Number(sp.checked) : undefined;
+  // ?replatformed=90 — stores that MOVED platform in the last N days and are still trading. Unlike
+  // ?status=migrated (a terminal-state view), these are live leads, so the usual facets still apply.
+  const migratedDays = sp.replatformed && /^\d{1,4}$/.test(sp.replatformed) ? Number(sp.replatformed) : undefined;
   const drill: ExploreInitial = {
     q: sp.q,
     country: sp.country ? [sp.country] : undefined,
     payment: csv(sp.payment), shipping: csv(sp.shipping), theme: csv(sp.theme),
     city: csv(sp.city), category: csv(sp.category), band: csv(sp.band),
     recency, launched, noPayment: sp.nopay === "1",
-    plus: sp.plus === "1" || undefined, status, checkedDays,
+    plus: sp.plus === "1" || undefined, status, checkedDays, migratedDays,
     group: sp.group || undefined, grouped: sp.grouped === "1" || undefined,
   };
   // ?list=<id> opens a Saved list — its stored view fully re-seeds the Explorer (overrides any drill).
@@ -120,7 +124,7 @@ export default async function Dashboard({
         <div className="flex items-center justify-between gap-3 rounded-xl border border-cyan/25 bg-cyan/[0.06] px-4 py-2.5 text-sm">
           <span className="text-cream/85">
             Showing {status === "migrated" ? "stores that migrated off-platform" : status === "dead" ? "stores that went dark" : "Shopify Plus stores"}
-            {launched ? ` · launched in the last ${launched.replace("d", " days")}` : checkedDays ? ` · in the last ${checkedDays} days` : ""}.
+            {launched ? ` · launched in the last ${launched.replace("d", " days")}` : migratedDays ? ` · replatformed in the last ${migratedDays} days` : checkedDays ? ` · in the last ${checkedDays} days` : ""}.
           </span>
           <Link href="/dashboard" className="shrink-0 font-medium text-cyan hover:underline">Clear →</Link>
         </div>
@@ -174,7 +178,7 @@ async function BrowseSection({ initial }: { initial?: import("@/app/admin/explor
     reachableContact: initial?.reachable || undefined, contactType: initial?.contactType,
     tier: (initial?.tier || undefined) as BrowseFilters["tier"],
     grouped: initial?.grouped || undefined, group: initial?.group,
-    status: initial?.status, checkedDays: initial?.checkedDays,
+    status: initial?.status, checkedDays: initial?.checkedDays, migratedDays: initial?.migratedDays,
     launchedDays: initial?.launched ? LMAP[initial.launched] : undefined,
     discoveredDays: initial?.recency ? RMAP[initial.recency] : undefined,
     sort: initial?.sort as BrowseFilters["sort"],

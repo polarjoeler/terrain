@@ -488,8 +488,11 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       -- literal silently assumed every checked store was Shopify to begin with — true only while
       -- the liveness queue happened to hold Shopify stores. Any WooCommerce store it checked got
       -- live_platform='WooCommerce' and was counted here as a migration despite never moving.
-      COUNT(*) FILTER (WHERE za AND live_platform IS NOT NULL
-        AND lower(live_platform) <> lower(COALESCE(platform, 'Shopify')))::int AS churn_migrated,
+      -- Two shapes count, because a confirmed move now HEALS platform (verify-liveness.mjs):
+      -- afterwards platform = live_platform and the discrepancy is gone, so migrated_at is the
+      -- durable marker. The discrepancy arm still catches a move seen but not yet confirmed.
+      COUNT(*) FILTER (WHERE za AND (migrated_at IS NOT NULL
+        OR (live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'Shopify')))))::int AS churn_migrated,
       COUNT(*) FILTER (WHERE za AND live_status = 'dead')::int             AS churn_dead,
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
@@ -722,21 +725,34 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     GROUP BY 1 ORDER BY n DESC`;
   const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
 
-  // NET platform migration for the market (cross-platform — ignores the platform filter): a store
-  // whose live_platform differs from its original platform has MOVED. Per CMS: gained (moved TO it)
-  // vs lost (moved OFF it). Normalised to a lower-case slug so 'shopify' and 'Shopify' net out.
+  // NET platform migration for the market (cross-platform — ignores the platform filter). Per CMS:
+  // gained (moved TO it) vs lost (moved OFF it), normalised to a lower-case slug so 'shopify' and
+  // 'Shopify' net out.
+  //
+  // A move is read from ONE place — a `moved` set that resolves from/to for both shapes a moved
+  // store can be in. A confirmed move heals platform and sets migrated_from, so from=migrated_from
+  // and to=platform; a move seen but not yet confirmed still shows as the old live_platform-vs-
+  // platform discrepancy, so from=platform and to=live_platform. Before this, only the second shape
+  // was handled, which meant the table would have silently emptied as moves got confirmed.
   const migRows = await sql<{ platform: string; gained: number; lost: number }[]>`
+    WITH moved AS (
+      SELECT
+        CASE WHEN migrated_from IS NOT NULL THEN lower(migrated_from)
+             ELSE lower(COALESCE(platform, 'shopify')) END AS from_p,
+        CASE WHEN migrated_from IS NOT NULL THEN lower(COALESCE(platform, 'shopify'))
+             ELSE lower(live_platform) END                 AS to_p
+      FROM imported_stores
+      WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
+        AND (migrated_from IS NOT NULL
+             OR (live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))))
+    )
     SELECT p AS platform,
       COUNT(*) FILTER (WHERE dir = 'to')::int   AS gained,
       COUNT(*) FILTER (WHERE dir = 'from')::int AS lost
     FROM (
-      SELECT lower(live_platform) p, 'to' dir FROM imported_stores
-        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
-          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+      SELECT to_p   AS p, 'to'   AS dir FROM moved WHERE to_p   IS NOT NULL
       UNION ALL
-      SELECT lower(COALESCE(platform, 'shopify')) p, 'from' dir FROM imported_stores
-        WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
-          AND live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))
+      SELECT from_p AS p, 'from' AS dir FROM moved WHERE from_p IS NOT NULL
     ) t GROUP BY 1`;
   const migrations = migRows
     .map((r) => ({ platform: r.platform, gained: Number(r.gained), lost: Number(r.lost), net: Number(r.gained) - Number(r.lost) }))

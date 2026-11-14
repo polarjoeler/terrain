@@ -38,6 +38,9 @@ export type LeadDetail = {
   launched_at: string | null; launched_source: string | null;
   first_seen: string | null; first_product_at: string | null; discovered_at: string | null;
   source: string | null; live_status: string | null;
+  /** Platform history: where it used to run, and when it left (our last-confirmed-selling estimate
+   *  on the old platform). `platform` above is where it runs NOW. */
+  migrated_from: string | null; migrated_at: string | null;
   /** CrUX traffic-rank bucket, the CrUX month it is from (so the drawer can show how fresh the
    *  ranking is) and the move since the previous month we hold. */
   crux_rank: number | null; crux_rank_month: string | null; crux_trend: string | null;
@@ -103,7 +106,7 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            contacts, whatsapp, linkedin, contact_mx_provider, contact_shared_count,
            instagram, facebook, tiktok, instagram_followers, facebook_followers,
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
-           source, live_status,
+           source, live_status, migrated_from, migrated_at,
            crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence,
            COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags,
            ${side.dns ? sql`(SELECT to_jsonb(x) FROM (SELECT email_provider, tools, verified, checked_at, gone

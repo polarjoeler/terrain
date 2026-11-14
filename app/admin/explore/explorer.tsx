@@ -181,6 +181,8 @@ export type ExploreInitial = {
   notTrading?: string[]; hideNotTrading?: boolean;   // checkout probe: why there was nothing to buy
   // Terminal-state deep links (Overview "Migrations" / "Went dark" chips) — SSR-only, no UI control.
   status?: "migrated" | "dead"; checkedDays?: number;
+  /** "Replatformed in the last N days" — live leads that moved platform, not a terminal state. */
+  migratedDays?: number;
 };
 
 export type ExportUsage = {
@@ -293,9 +295,14 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     group: group?.id,
     launchedDays: launched ? LAUNCH_OPTS.find((o) => o.key === launched)?.days : undefined,
     discoveredDays: recency ? RECENCY_OPTS.find((o) => o.key === recency)?.days : undefined,
+    // Held from props rather than state ON PURPOSE. status/checkedDays are SSR-only, so those deep
+    // links evaporate the moment a facet changes; the replatformed cohort has to survive that,
+    // because its value IS the combination — "replatformed in the last 90 days AND on Peach AND
+    // reaches a person" is the query, and losing the first term silently answers a different one.
+    migratedDays: initial?.migratedDays,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
