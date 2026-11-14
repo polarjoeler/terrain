@@ -7,9 +7,16 @@
  * Works top-down by estimated_monthly_sales, so the highest-value merchants are
  * verified first (interrupt any time — the head is already done). Classifies:
  *   active   — /products.json serves a catalogue (live Shopify)
- *   migrated — reachable, but no longer Shopify (records the platform)
+ *   migrated — reachable, and positively identified as a DIFFERENT platform than we recorded
  *   dead     — unreachable across 2 consecutive checks
  * Resumable: skips anything checked within --min-age-days.
+ *
+ * SHOPIFY-ONLY, and the queue enforces it. The liveness signal here IS /products.json, which only
+ * Shopify serves — so a WooCommerce store cannot pass the `active` test no matter how healthy it
+ * is. It reads as "reachable, not Shopify, platform identified = WooCommerce" and was therefore
+ * marked `migrated`, which both logs a fake churn event and pulls the store out of the
+ * customer-visible base (lib/browse.ts excludes dead/migrated). Non-Shopify liveness needs a
+ * platform-appropriate probe — for Woo that is the Store API already used by scripts/lib/woo-catalog.mjs.
  */
 
 import { readFileSync } from "node:fs";
@@ -168,7 +175,7 @@ async function classify(domain) {
   return { reachable: true, shopify: false, platform };
 }
 
-function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }) {
+function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }, knownPlatform = null) {
   // A single bad check is not churn. A store can throw one timeout, one DNS blip, a
   // Cloudflare/WAF interstitial, or a maintenance page and still be perfectly alive — so
   // the reachable/migrated terminal states require DEAD_AFTER/MIGRATE_AFTER consecutive
@@ -186,7 +193,18 @@ function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }
   // often a Cloudflare/WAF challenge or a parked/maintenance page masking a still-live Shopify
   // store — so we must NOT churn it (that's the "migrated → unknown" false-positive that pulled
   // ~640 live stores out of the base). Keep it active and wait for a clearer signal.
-  if (platform) return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
+  //
+  // AND the platform has to have CHANGED. Identifying "WooCommerce" on a store we already recorded
+  // as WooCommerce is not a migration, it is this Shopify-only probe meeting a non-Shopify store —
+  // yet it used to return "migrated", logging fake churn and removing a live store from the base.
+  // This is the third incarnation of the same false-positive (first on a single non-Shopify
+  // response, then on "migrated → unknown"), so the guard lives HERE rather than only in the
+  // queue: --from-file feeds in arbitrary domains and bypasses any queue-level filter.
+  // A migration needs a BEFORE as well as an after. With no recorded platform we never knew the
+  // store was Shopify, so identifying one now is a CLASSIFICATION, not a move — live_platform is
+  // still written (the data improves) but the store stays active rather than churning.
+  const moved = !!platform && !!knownPlatform && platform.toLowerCase() !== knownPlatform.toLowerCase();
+  if (moved) return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
   return { status: "active", miss: 0 };
 }
 
@@ -216,7 +234,7 @@ async function main() {
     if (fromFile) {
       const doms = readFileSync(fromFile, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
       rows = await sql`
-        SELECT domain, live_miss FROM imported_stores
+        SELECT domain, live_miss, platform FROM imported_stores
         WHERE domain = ANY(${doms})
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
         ORDER BY ${sizeOrder}
@@ -224,13 +242,18 @@ async function main() {
       console.log(`Verifying ${rows.length.toLocaleString()} stores from ${fromFile}…`);
     } else {
       rows = await sql`
-        SELECT domain, live_miss FROM imported_stores
+        SELECT domain, live_miss, platform FROM imported_stores
         WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
-          -- not_a_store rows are not storefronts (a parked install, or an infrastructure /
-          -- customer-account hostname of a store we already track: mail./account./cpanel.).
-          -- Re-checking whether a mail host is "live" spends the one residential IP's budget on
-          -- a question with no answer worth having — and they sorted HIGH here, because they
-          -- inherit their account's score from store_priority.
+          -- Shopify (or not yet classified) only: see the SHOPIFY-ONLY note in the header. Without
+          -- this the queue holds ~58,000 non-Shopify stores in the sold markets — 46,339 of them
+          -- WooCommerce, the half Partner is sold on — every one of which this probe would read as
+          -- a migration and drop from the customer base.
+          AND (platform IS NULL OR lower(platform) = 'shopify')
+          -- ...and a storefront at all. not_a_store rows are a parked install, or an infrastructure
+          -- / customer-account hostname of a store we already track (mail./account./cpanel.).
+          -- Asking whether a mail host is "live" spends the one residential IP's budget on a
+          -- question with no answer worth having — and they sorted HIGH here, because they inherit
+          -- their account's score from store_priority.
           AND activity_tier IS DISTINCT FROM 'not_a_store'
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
         ORDER BY ${sizeOrder}
@@ -289,9 +312,9 @@ async function main() {
 
     async function worker() {
       while (i < rows.length) {
-        const { domain, live_miss } = rows[i++];
+        const { domain, live_miss, platform: knownPlatform } = rows[i++];
         const res = await classify(domain).catch(() => ({ reachable: false, shopify: false, platform: null }));
-        const { status, miss } = nextStatus(null, live_miss || 0, res);
+        const { status, miss } = nextStatus(null, live_miss || 0, res, knownPlatform);
         if (await persist(domain, status, res, miss)) {
           tally[status] = (tally[status] || 0) + 1;
         } else {
