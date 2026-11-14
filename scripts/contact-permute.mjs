@@ -36,13 +36,27 @@ const VERIFY = has("--verify");
 // vendor, and is the only honest way to know the hit rate before paying to verify anything.
 const HOLDOUT = has("--holdout");
 const LIMIT = Number(arg("--limit", 5000));
-const COUNTRY = arg("--country", null);
-const MX_ONLY = has("--mx-ok");           // only domains whose mail host has been confirmed
 
 // Verification vendor: left unset by default so a run can never silently spend. Any provider with
 // a single-address GET endpoint fits by changing these two env vars.
-const VERIFY_URL = process.env.EMAIL_VERIFY_URL || "";    // e.g. https://api.millionverifier.com/api/v3/?api=KEY&email=
+const VENDOR = (arg("--vendor", process.env.EMAIL_VERIFY_VENDOR || "") || "").toLowerCase();
+const MAILVERI = VENDOR === "mailveri";
+// MailVeri's own docs contradict themselves — form field vs JSON body, Authorization: Bearer vs
+// X-Api-Key — so the adapter below tries one shape and falls back, and --probe settles which is
+// real on a single credit instead of discovering it 900 addresses into a batch.
+const VERIFY_URL = process.env.EMAIL_VERIFY_URL
+  || (MAILVERI ? "https://api.mailveri.com/v1/verify-mail/" : "");    // e.g. https://api.millionverifier.com/api/v3/?api=KEY&email=
 const VERIFY_KEY = process.env.EMAIL_VERIFY_KEY || "";
+const PROBE = arg("--probe", "");          // verify ONE address, dump the raw response, spend 1 credit
+// Credits are a FINITE, non-replenishing pot. Without a cap a run walks the queue until the vendor
+// cuts it off, having spent the whole balance on whatever happened to sort first. --max-credits
+// stops cleanly while there is still budget left to aim.
+const MAX_CREDITS = Number(arg("--max-credits", 0)) || Infinity;
+// Guesses generated in an earlier pass had contact_guess_checked_at stamped even though nothing
+// verified them, so the normal selection (checked_at IS NULL) can never see them again.
+// --reverify targets exactly those stranded rows and tests the guess already stored.
+const REVERIFY = has("--reverify");
+let BALANCE = null;                        // vendor-reported credits remaining, if it tells us
 
 // Guessing an address at gmail.com is meaningless — the local-part is not derived from the person's
 // employer. Only ever permute against a domain the business controls.
@@ -53,14 +67,11 @@ const domainOf = (e) => { const m = /@([a-z0-9.-]+\.[a-z]{2,})$/i.exec(String(e 
 
 // Dutch/Afrikaans/Portuguese particles are part of the surname, and SA surnames are full of them.
 const PARTICLES = new Set(["van", "van der", "von", "de", "du", "le", "la", "da", "dos", "den", "ter"]);
-const NOT_A_PERSON = /\b(distribution|products?|retail|trading|holdings|enterprises?|solutions|services|group|studio|store|shop|boutique|company|pty|ltd)\b/;
 /** "Francois le Roux" → {first:"francois", last:"leroux", lastBare:"roux"} */
 function parseName(v) {
-  const flat = String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/^(dr|prof|professor|mr|mrs|ms|miss|sir|adv|rev|pastor)\.?\s+/, "");    // dr@ is nobody's mailbox
-  if (NOT_A_PERSON.test(flat)) return null;
+  const flat = String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const words = flat.split(/[^a-z]+/).filter(Boolean);
-  if (words.length < 1 || PARTICLES.has(words[0])) return null;   // "Dr van Niekerk" leaves only a surname
+  if (words.length < 1) return null;
   const first = words[0];
   // A hyphenated given name is often kept intact in the mailbox — the holdout found Kay-Leigh
   // at kay-leigh@, which splitting on non-letters had reduced to kay@.
@@ -86,23 +97,79 @@ function candidates(name, domain) {
   return [...new Set(out)];
 }
 
+let POST_SHAPE = null;   // learned once: which body/auth combination this vendor actually accepts
+
+async function callVendor(email, shape) {
+  const headers = shape.auth === "x-api-key"
+    ? { "X-Api-Key": VERIFY_KEY }
+    : { Authorization: `Bearer ${VERIFY_KEY}` };
+  let url = VERIFY_URL, init = { headers, signal: AbortSignal.timeout(20000) };
+  if (shape.method === "POST") {
+    init.method = "POST";
+    if (shape.body === "form") {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      init.body = new URLSearchParams({ mail: email }).toString();
+    } else {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify({ email, mail: email });
+    }
+  } else {
+    url = VERIFY_URL.includes("{email}")
+      ? VERIFY_URL.replace("{email}", encodeURIComponent(email))
+      : `${VERIFY_URL}${encodeURIComponent(email)}`;
+  }
+  return fetch(url, init);
+}
+
 async function verifyOne(email) {
   if (!VERIFY_URL) return { status: "unverified", raw: null };
-  const url = VERIFY_URL.includes("{email}")
-    ? VERIFY_URL.replace("{email}", encodeURIComponent(email))
-    : `${VERIFY_URL}${encodeURIComponent(email)}`;
-  const res = await fetch(url, {
-    headers: VERIFY_KEY ? { Authorization: `Bearer ${VERIFY_KEY}` } : {},
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`verify ${res.status}`);
-  const body = await res.json();
-  // Normalise the common vendor vocabularies onto our own four states. A catch-all domain accepts
-  // EVERYTHING, so a "valid" from one is not evidence — recording it as valid would manufacture
-  // exactly the false confidence this whole lane exists to remove.
+
+  let res, body;
+  if (MAILVERI) {
+    // Try the shape that worked last time; otherwise walk the candidates once.
+    // form + Bearer is what MailVeri's OWN Google Apps Script sends, so it leads. The rest stay
+    // as fallback only because the public docs describe something different.
+    const shapes = POST_SHAPE ? [POST_SHAPE] : [
+      { method: "POST", body: "form", auth: "bearer" },
+      { method: "POST", body: "json", auth: "bearer" },
+      { method: "POST", body: "form", auth: "x-api-key" },
+      { method: "POST", body: "json", auth: "x-api-key" },
+    ];
+    let lastErr = null;
+    for (const shape of shapes) {
+      res = await callVendor(email, shape);
+      if (res.ok) { POST_SHAPE = shape; break; }
+      // 400/401/415 means "wrong shape" — keep looking. Anything else is a real failure.
+      if (![400, 401, 403, 415, 422].includes(res.status)) break;
+      lastErr = `${res.status} on ${shape.body}/${shape.auth}`;
+      res = null;
+    }
+    if (!res) throw new Error(`verify rejected every request shape (${lastErr})`);
+    if (!res.ok) throw new Error(`verify ${res.status}`);
+    body = await res.json();
+  } else {
+    res = await callVendor(email, { method: "GET" });
+    if (!res.ok) throw new Error(`verify ${res.status}`);
+    body = await res.json();
+  }
+
+  if (body && body.balance != null) BALANCE = body.balance;
+  // error 2 = insufficient credits. Every further call is a guaranteed failure, so surface it as
+  // a distinct condition the run can halt on rather than logging 800 identical errors.
+  if (body && body.error === 2) { const e = new Error(`out of credits: ${body.message ?? ""}`); e.outOfCredits = true; throw e; }
+  if (PROBE) console.log("  raw response: " + JSON.stringify(body));
+
   const raw = String(body.result ?? body.status ?? body.state ?? "").toLowerCase();
-  if (/catch.?all|accept.?all|unknown/.test(raw)) return { status: "catch_all", raw };
-  if (/^(ok|valid|deliverable)$/.test(raw)) return { status: "verified", raw };
+  // A catch-all domain accepts EVERYTHING, so a "valid" from one is not evidence — recording it as
+  // valid would manufacture exactly the false confidence this whole lane exists to remove.
+  // UNKNOWN is kept SEPARATE from catch-all: it means the vendor could not determine an answer,
+  // which is a retryable non-result, not a statement about the domain.
+  if (/catch.?all|accept.?all/.test(raw)) return { status: "catch_all", raw };
+  // A guess that lands on a role inbox IS deliverable but is not the person we inferred, so it
+  // must not be promoted as a personal address.
+  if (/role.?account|role_account/.test(raw)) return { status: "role", raw };
+  // FULL_INBOX is a full mailbox, which proves the mailbox EXISTS — that is what we are testing.
+  if (/^(ok|valid|deliverable|full.?inbox)$/.test(raw)) return { status: "verified", raw };
   if (/invalid|undeliverable|disposable|reject/.test(raw)) return { status: "rejected", raw };
   return { status: "unverified", raw };
 }
@@ -136,6 +203,20 @@ async function main() {
       process.exit(3);
     }
 
+    // --probe spends ONE credit to learn the vendor's real request/response contract before a
+    // batch commits the rest. Prints the accepted request shape and the raw body verbatim.
+    if (PROBE) {
+      if (!VERIFY_URL) { console.error("--probe needs EMAIL_VERIFY_URL or --vendor mailveri."); process.exit(3); }
+      if (!VERIFY_KEY) { console.error("--probe needs EMAIL_VERIFY_KEY."); process.exit(3); }
+      console.log(`probing ${VERIFY_URL} with ${PROBE}`);
+      const r = await verifyOne(PROBE);
+      console.log(`  accepted shape: ${POST_SHAPE ? `${POST_SHAPE.method} ${POST_SHAPE.body}/${POST_SHAPE.auth}` : "GET"}`);
+      console.log(`  vendor status:  ${r.raw}`);
+      console.log(`  mapped to:      ${r.status}`);
+      if (BALANCE != null) console.log(`  credits left:   ${BALANCE}`);
+      return;
+    }
+
     if (HOLDOUT) {
       const known = await sql`SELECT domain, contact_name, contact_email FROM imported_stores
         WHERE contact_type = 'named' AND contact_name IS NOT NULL AND contact_email IS NOT NULL`;
@@ -163,21 +244,26 @@ async function main() {
       return;
     }
 
-    const rows = await sql`
-      SELECT domain, contact_name, contact_email, contact_type, email
+    const rows = REVERIFY
+      ? await sql`
+      SELECT domain, contact_name, contact_email, contact_type, email, contact_email_guess
+      FROM imported_stores
+      WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+        AND contact_name IS NOT NULL
+        AND contact_type IS DISTINCT FROM 'named'
+        AND contact_mx_ok IS NOT FALSE        -- a domain that bounces makes every guess pointless
+        AND contact_email_guess IS NOT NULL
+        AND contact_guess_status = 'unverified'
+      ORDER BY estimated_monthly_sales DESC NULLS LAST
+      LIMIT ${LIMIT}`
+      : await sql`
+      SELECT domain, contact_name, contact_email, contact_type, email, contact_email_guess
       FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND contact_name IS NOT NULL
         AND contact_type IS DISTINCT FROM 'named'
         AND contact_mx_ok IS NOT FALSE        -- a domain that bounces makes every guess pointless
         AND contact_guess_checked_at IS NULL
-        AND coalesce(activity_tier,'') NOT IN ('not_a_store','dormant')
-        -- Path-hosted sellers share the marketplace's domain, so first@domain means nothing there.
-        AND domain NOT LIKE '%/%' AND domain NOT LIKE '%.myshopify.com'
-        -- A name on several unrelated stores is a theme demo or a model error (Harvey Spector, John Doe).
-        AND contact_name NOT IN (SELECT contact_name FROM imported_stores WHERE contact_name IS NOT NULL GROUP BY 1 HAVING count(*) >= 3)
-        ${COUNTRY ? sql`AND country = ${COUNTRY}` : sql``}
-        ${MX_ONLY ? sql`AND contact_mx_ok` : sql``}
       ORDER BY estimated_monthly_sales DESC NULLS LAST
       LIMIT ${LIMIT}`;
     if (!rows.length) { console.log("no candidates — run contact-enrich first, or all are done."); return; }
@@ -185,7 +271,7 @@ async function main() {
     console.log(`contact-permute: ${rows.length} candidate(s)${DRY ? " [DRY]" : ""}`
       + `${VERIFY ? " · VERIFYING (paid)" : " · generate only (free; pass --verify to test them)"}`);
 
-    let generated = 0, skipped = 0, verified = 0, rejected = 0, catchAll = 0, cost = 0;
+    let generated = 0, skipped = 0, verified = 0, rejected = 0, catchAll = 0, cost = 0, budgetStop = false;
     for (const r of rows) {
       // Permute against the business's own mail domain — the one its published address uses when
       // that is its own, else the store domain.
@@ -198,19 +284,57 @@ async function main() {
       const fresh = cands.filter((c) => c.split("@")[0] !== existingLocal);
       if (!fresh.length) { skipped++; continue; }
 
+      // When re-verifying, test the address we already published into the column first: that is the
+      // one downstream consumers have seen, so it is the one that needs a verdict.
+      if (REVERIFY && r.contact_email_guess) {
+        const g = String(r.contact_email_guess).toLowerCase();
+        // A stored guess may sit on a domain belonging to a DIFFERENT business: when contact_email
+        // was null the generator fell back to the vendor-imported `email`, which is not always this
+        // store's. edgars.co.za inherited norman@stagheaddesigns.com that way. Verifying it would
+        // spend a credit and, if it came back VALID, bolt a stranger's address onto the store.
+        // A guess is only legitimate on the store's own domain or on the one its published
+        // contact address already uses.
+        // Compare against the store's OWN domain and the domain of its CRAWLED contact address.
+        // Not against `dom`: when contact_email is null, `dom` is itself derived from the
+        // vendor-imported `email`, so a contaminated guess agreed with its own bad source and
+        // sailed through. edgars.co.za -> norman@stagheaddesigns.com passed this way.
+        // contact_email is read off the store's own pages, so it can vouch for a second domain
+        // (shop.kznsagallery.co.za legitimately mails as kznsagallery.co.za); the vendor field
+        // cannot vouch for anything.
+        const gDom = g.split("@")[1];
+        const ownDom = clean(r.domain);
+        const crawledDom = domainOf(r.contact_email);
+        const ok = gDom === ownDom || (crawledDom && gDom === crawledDom);
+        if (!ok) {
+          console.log(`  ~ ${r.domain}: stored guess ${g} is on an unrelated domain — skipped, not billed`);
+          skipped++; continue;
+        }
+        fresh.sort((a, b) => (a === g ? -1 : b === g ? 1 : 0));
+        if (!fresh.includes(g)) fresh.unshift(g);
+      }
+
       let pick = fresh[0], status = "unverified", pattern = fresh[0].split("@")[0].includes(".") ? "first.last" : "first";
       if (VERIFY) {
         for (const c of fresh) {
+          if (cost >= MAX_CREDITS) { budgetStop = true; break; }
           cost++;
           let v;
           try { v = await verifyOne(c); }
-          catch (e) { console.log(`  ! ${c}: ${e.message}`); break; }
+          catch (e) {
+            console.log(`  ! ${c}: ${e.message}`);
+            if (e.outOfCredits) { budgetStop = true; }
+            break;
+          }
           if (v.status === "verified") { pick = c; status = "verified"; verified++; break; }
           if (v.status === "catch_all") { pick = c; status = "catch_all"; catchAll++; break; }
           if (v.status === "rejected") { rejected++; continue; }
         }
         if (status === "unverified" && rejected) pick = fresh[0];
         pattern = pick.split("@")[0].includes(".") ? "first.last" : "first";
+      }
+      if (budgetStop) {
+        console.log(`\n  stopped: hit the --max-credits ceiling of ${MAX_CREDITS}. Nothing further was billed.`);
+        break;
       }
       generated++;
       if (DRY) {
@@ -223,7 +347,10 @@ async function main() {
       }
     }
     console.log(`\nDone. ${generated} guessed, ${skipped} skipped (freemail domain, or the guess is what we already hold).`);
-    if (VERIFY) console.log(`  verified ${verified} · catch-all ${catchAll} · rejected ${rejected} · ${cost} verification calls billed`);
+    if (VERIFY) {
+      console.log(`  verified ${verified} · catch-all ${catchAll} · rejected ${rejected} · ${cost} verification calls billed`);
+      if (BALANCE != null) console.log(`  credits left at vendor: ${BALANCE}`);
+    }
     else console.log(`  All stored as status='unverified' — a guess, labelled as one. Nothing claims these are real yet.`);
   } finally { await sql.end(); }
 }
