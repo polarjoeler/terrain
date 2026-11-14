@@ -201,6 +201,10 @@ async function main() {
       FROM imported_stores
       WHERE published
         AND COALESCE(live_status, 'active') NOT IN ('dead', 'migrated')
+        -- not_a_store = not a storefront (parked install, or an infrastructure / customer-account
+        -- hostname of a store we already track). Probing a checkout there burns the shared
+        -- residential IP budget to re-learn the parent store's gateways.
+        AND activity_tier IS DISTINCT FROM 'not_a_store'
         -- checkout_probe.py is SHOPIFY-specific (products.json + Shopify checkout). Feeding it
         -- WooCommerce/other-platform stores just burns budget on guaranteed no_variant results —
         -- those are the Woo probe's job. Keep NULL (unclassified, most likely Shopify).
