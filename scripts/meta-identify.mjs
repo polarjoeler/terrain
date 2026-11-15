@@ -22,11 +22,21 @@
  * `UPDATE ... SET country_checked_at=NULL, country_source=NULL WHERE country_source LIKE 'meta_miss:%'`).
  * A 429 is not an answer — it stays queued, and a throttle streak ends the run.
  *
+ * "Unreachable" (no response after an in-run retry, or a 5xx) is NOT final on its own — verified
+ * 2026-11-14, 3/25 answered on a later re-fetch. It is split by a DNS lookup:
+ *   · NXDOMAIN / no A record      → meta_miss:dns_gone        (final)
+ *   · resolves off Shopify's /24  → meta_miss:dns_off_shopify (final)
+ *   · still on Shopify            → meta_retry:<n>, retried after RETRY_AFTER, up to MAX_ATTEMPTS,
+ *                                   then meta_miss:unreachable.
+ * The retry tier can't use an index (no schema change), so it only runs every RETRY_EVERY_H hours
+ * (or with --retry-now). --requeue-unreachable converts pre-fix meta_miss:unreachable rows once.
+ *
  * Writes: country (GB→UK, the project's canonical code), country_source='shop_meta',
  * country_checked_at, and the shop_* identity columns with COALESCE so existing values win.
  * Grouped UPDATE ... FROM unnest() every FLUSH rows — never row-by-row.
  */
 import postgres from "postgres";
+import { Resolver } from "node:dns/promises";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
@@ -39,6 +49,26 @@ const MAX_429_STREAK = 25;          // across all workers; at conc 24 a handful 
 const MAX_429_RATE = 0.2;           // …but a sustained 20% means the pool is being clamped
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const ALIAS = { GB: "UK" };         // lib/countries.ts uses UK; GB rows fall into region "Other"
+const MAX_ATTEMPTS = 3;             // runs that may see a Shopify-hosted store silent before it's final
+const RETRY_AFTER = "1 day";
+const RETRY_EVERY_H = 6;            // the retry query has no index; keep it to 4 runs a day
+const RETRY_LIMIT = 3000;
+const RETRY_NOW = process.argv.includes("--retry-now");
+const REQUEUE = process.argv.includes("--requeue-unreachable");
+
+const resolver = new Resolver({ timeout: 4000, tries: 2 });
+resolver.setServers(["1.1.1.1", "8.8.8.8"]);
+// DNS is exempt from the Shopify-edge rate budget, so this costs nothing against the pool.
+async function dnsClass(domain) {
+  try {
+    const ips = await resolver.resolve4(domain);
+    if (!ips.length) return "gone";
+    return ips.some((ip) => ip.startsWith("23.227.38.")) ? "shopify" : "off_shopify";
+  } catch (e) {
+    if (e.code === "ENOTFOUND" || e.code === "ENODATA") return "gone";
+    return "unknown";               // resolver timeout etc. — not evidence either way, so retry
+  }
+}
 
 const PROXIES = loadProxies();
 if (!PROXIES.length && !DIRECT) {
@@ -97,14 +127,34 @@ async function main() {
             AND shop_country ~ '^[A-Za-z]{2}$' AND country_source IS DISTINCT FROM 'manual'`).count;
     console.log(`tier 0: ${fromExisting} store(s) ${DRY ? "would be" : ""} placed from an existing shop_country`);
 
-    const crux = await sql`SELECT domain FROM imported_stores WHERE ${base} AND crux_rank IS NOT NULL
-      ORDER BY crux_rank LIMIT ${LIMIT}`;
-    const active = crux.length < LIMIT ? await sql`SELECT domain FROM imported_stores WHERE ${base}
-      AND live_status = 'active' AND crux_rank IS NULL LIMIT ${LIMIT - crux.length}` : [];
-    const rest = crux.length + active.length < LIMIT ? await sql`SELECT domain FROM imported_stores WHERE ${base}
-      AND live_status IS NULL LIMIT ${LIMIT - crux.length - active.length}` : [];
-    const rows = [...crux, ...active, ...rest].map((r) => r.domain);
-    console.log(`queue: ${rows.length} (crux ${crux.length}, active ${active.length}, unchecked ${rest.length}), `
+    // One-off: rows stamped meta_miss:unreachable before the DNS split get one more look as attempt 1.
+    if (REQUEUE && !DRY) {
+      const n = (await sql`UPDATE imported_stores SET country_source = 'meta_retry:1'
+        WHERE published AND country IS NULL AND platform = 'Shopify'
+          AND country_source = 'meta_miss:unreachable'`).count;
+      console.log(`requeued ${n} pre-fix unreachable row(s) as meta_retry:1`);
+    }
+
+    // Retry tier — Shopify-hosted stores that were silent last time. Unindexed, so gated by hour.
+    const attempts = new Map();
+    const retryDue = RETRY_NOW || REQUEUE || new Date().getHours() % RETRY_EVERY_H === 0;
+    const retry = retryDue ? await sql`SELECT domain, country_source FROM imported_stores
+      WHERE published AND country IS NULL AND platform = 'Shopify'
+        AND country_source LIKE 'meta_retry:%' AND country_checked_at < now() - ${RETRY_AFTER}::interval
+      LIMIT ${Math.min(RETRY_LIMIT, LIMIT)}` : [];
+    for (const r of retry) attempts.set(r.domain, parseInt(r.country_source.split(":")[1], 10) || 1);
+
+    let crux = [], active = [];
+    const room = () => LIMIT - retry.length - crux.length - active.length;
+    crux = await sql`SELECT domain FROM imported_stores WHERE ${base} AND crux_rank IS NOT NULL
+      ORDER BY crux_rank LIMIT ${Math.max(0, LIMIT - retry.length)}`;
+    active = room() > 0 ? await sql`SELECT domain FROM imported_stores WHERE ${base}
+      AND live_status = 'active' AND crux_rank IS NULL LIMIT ${room()}` : [];
+    const rest = room() > 0 ? await sql`SELECT domain FROM imported_stores WHERE ${base}
+      AND live_status IS NULL LIMIT ${room()}` : [];
+    const rows = [...retry, ...crux, ...active, ...rest].map((r) => r.domain);
+    console.log(`queue: ${rows.length} (retry ${retry.length}${retryDue ? "" : " — not due this hour"}, crux ${crux.length}, `
+      + `active ${active.length}, unchecked ${rest.length}), `
       + `concurrency ${CONC}, ${PROXIES.length ? `${PROXIES.length} proxies` : "DIRECT"}${DRY ? " [DRY RUN]" : ""}`);
 
     let i = 0, done = 0, hit = 0, throttled = 0, streak = 0, stopped = false;
@@ -156,6 +206,18 @@ async function main() {
           hits.push({ domain, country: c, shop_id: Number(m.id) || null, shop_country: m.country || null,
             city: m.city || null, province: m.province || null, currency: m.currency || null,
             myshop: m.myshopify_domain || null });
+        } else if (r.transient) {
+          // Silence isn't an answer. DNS (free, off the Shopify budget) says whether to keep trying.
+          const dns = await dnsClass(domain);
+          const n = (attempts.get(domain) ?? 0) + 1;
+          let src;
+          if (dns === "gone") src = "meta_miss:dns_gone";
+          else if (dns === "off_shopify") src = "meta_miss:dns_off_shopify";
+          else if (n >= MAX_ATTEMPTS) src = "meta_miss:unreachable";
+          else src = `meta_retry:${n}`;
+          const why = src.split(":")[0] === "meta_retry" ? "retry_later" : src.split(":")[1];
+          misses[why] = (misses[why] ?? 0) + 1;
+          stamps.push({ domain, src });
         } else {
           const why = r.shop ? "no_country" : r.miss;
           misses[why] = (misses[why] ?? 0) + 1;
