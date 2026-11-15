@@ -160,6 +160,10 @@ async function main() {
       SELECT s.domain, s.country FROM imported_stores s
       LEFT JOIN store_catalog_fp f ON f.domain = s.domain
       WHERE s.published AND (s.live_status IS NULL OR s.live_status NOT IN ('dead','migrated'))
+        -- an alias hostname (mail./account./staging. of a store we already track) answers
+        -- products.json with the PARENT's catalogue, so fingerprinting it mints a guaranteed
+        -- duplicate clone match and spends a products.json read to do it
+        AND s.activity_tier IS DISTINCT FROM 'not_a_store'
         AND upper(s.country) = ANY(${COUNTRIES ?? FP_MARKETS}) AND s.product_count > 0
         AND lower(s.platform) IS DISTINCT FROM 'woocommerce'
         AND (f.domain IS NULL OR f.fp_at < now() - make_interval(days => ${FP_STALE_DAYS}))
@@ -170,6 +174,7 @@ async function main() {
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}` : await sql`
       SELECT domain, country FROM imported_stores
       WHERE published AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+        AND activity_tier IS DISTINCT FROM 'not_a_store'   -- see the fingerprint query above
         ${RECHECK
           // the two bug signatures: count truncated at the 250 page-limit, or an inflated AOV
           ? sql`AND catalog_checked_at IS NOT NULL AND (product_count >= 250 OR avg_product_price > 2000)`

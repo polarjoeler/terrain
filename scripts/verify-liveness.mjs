@@ -249,6 +249,12 @@ async function main() {
           -- WooCommerce, the half Partner is sold on — every one of which this probe would read as
           -- a migration and drop from the customer base.
           AND (platform IS NULL OR lower(platform) = 'shopify')
+          -- ...and a storefront at all. not_a_store rows are a parked install, or an infrastructure
+          -- / customer-account hostname of a store we already track (mail./account./cpanel.).
+          -- Asking whether a mail host is "live" spends the one residential IP's budget on a
+          -- question with no answer worth having — and they sorted HIGH here, because they inherit
+          -- their account's score from store_priority.
+          AND activity_tier IS DISTINCT FROM 'not_a_store'
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
         ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
