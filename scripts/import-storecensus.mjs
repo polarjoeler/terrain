@@ -26,6 +26,7 @@
  */
 import postgres from "postgres";
 import { canonicalApps, canonicalTechnologies } from "../lib/apps-canon.ts";
+import { normalizeCcy } from "../lib/fx.ts";
 import { readFileSync } from "fs";
 import { createInterface } from "readline";
 import { createReadStream } from "fs";
@@ -92,7 +93,10 @@ async function main() {
       published: PUBLISHED, source: SRC, discovered_at: today,
       estimated_monthly_sales: salesNum(r.s),
       city: r.city || null, region: prefecture(r.state, r.city), geo_checked_at: (r.city || r.state) ? now : null,
-      theme: r.theme || null, plan: r.plan || null, currency: r.cur || null, category: r.vert || null,
+      theme: r.theme || null, plan: r.plan || null,
+      // StoreCensus emits the code lower-case ("zar"), StoreLeads upper-case ("ZAR"); passing either
+      // through verbatim is what split 89 codes across both cases. Canonicalise at the boundary.
+      currency: normalizeCcy(r.cur), category: r.vert || null,
       payments: cleanPays(r.pays, r.country), payments_source: cleanPays(r.pays, r.country) ? SRC : null, payments_checked_at: cleanPays(r.pays, r.country) ? now : null,
       store_created: created, launched_at: launchFrom(created), launched_source: launchFrom(created) ? SRC : null,
       // wide fields — all gap-filled below, never clobbering our own probes

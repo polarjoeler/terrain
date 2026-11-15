@@ -9,6 +9,7 @@ import { currentUser, isAdmin } from "@/lib/auth";
 import { db, ensureSchema } from "@/lib/radar/db";
 import { getOverride, saveOverride, clearOverride, type Override } from "@/lib/overrides";
 import { cleanDomain } from "@/lib/radar/catalog";
+import { normalizeCcy } from "@/lib/fx";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +51,7 @@ export async function POST(req: Request) {
     name: clean(body.name) as string | null,
     email: clean(body.email) as string | null,
     country: clean(body.country) as string | null,
-    currency: clean(body.currency) as string | null,
+    currency: normalizeCcy(clean(body.currency) as string | null),
     plus: body.plus == null ? null : Boolean(body.plus),
     theme: clean(body.theme) as string | null,
     product_count: numOr(body.product_count),

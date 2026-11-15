@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { canonicalApps } from "../lib/apps-canon.ts";
+import { normalizeCcy } from "../lib/fx.ts";
 
 const SOURCE = "storeleads-2026-08";
 const BATCH = 150; // small batches keep each INSERT under Supabase's statement timeout
@@ -82,7 +83,7 @@ function mapRow(r) {
     name: demoji((r.merchant_name || r.title || domain).trim()),
     merchant_name: demoji((r.merchant_name || "").trim()) || null,
     country: (r.country_code || "ZA").trim().toUpperCase(),
-    currency: (r.currency || "").trim() || null,
+    currency: normalizeCcy(r.currency),   // canonical upper-case; see lib/fx.ts
     email: first(r.emails),
     phone: first(r.phones),
     plus: /plus/i.test(plan || ""),

@@ -13,6 +13,7 @@ import type { Lead } from "./leads";
 import { cleanPayments } from "./payments-taxonomy";
 import { applyOverrides } from "./overrides";
 import { VISIBLE_MARKETS } from "./markets";
+import { normalizeCcy } from "./fx.ts";
 
 let _ready: Promise<void> | null = null;
 
@@ -100,7 +101,7 @@ export async function importCsv(text: string, source = "csv"): Promise<ImportRes
       ) VALUES (
         ${domain}, ${get("name") || null}, ${get("country").toUpperCase() || null},
         ${num(get("product_count"))}, ${num(get("price_min"))}, ${num(get("price_max"))},
-        ${get("currency") || null}, ${get("email") || null}, ${get("theme") || null},
+        ${normalizeCcy(get("currency"))}, ${get("email") || null}, ${get("theme") || null},
         ${plus}, ${get("payments") || null}, ${get("first_product_at") || null},
         ${get("first_seen") || null}, ${source}, false
       )
@@ -518,7 +519,7 @@ export async function syncFromSheet(): Promise<{
     product_count: l.productCount,
     price_min: l.priceMin,
     price_max: l.priceMax,
-    currency: l.currency ?? null,
+    currency: normalizeCcy(l.currency),
     first_seen: date(l.firstSeen),
     first_product_at: date(l.firstProductAt),
     discovered_at: date(l.firstSeen),

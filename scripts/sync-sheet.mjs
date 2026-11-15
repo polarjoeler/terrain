@@ -15,6 +15,7 @@
  */
 
 import postgres from "postgres";
+import { normalizeCcy } from "../lib/fx.ts";
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -152,7 +153,7 @@ async function main() {
         product_count: num(r[COL.productCount]),
         price_min: num(r[COL.priceMin]),
         price_max: num(r[COL.priceMax]),
-        currency: str(r[COL.currency]),
+        currency: normalizeCcy(str(r[COL.currency])),   // canonical upper-case; see lib/fx.ts
         first_seen: date(r[COL.firstSeen]),
         first_product_at: fpa,
         discovered_at: date(r[COL.firstSeen]),

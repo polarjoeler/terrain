@@ -23,8 +23,32 @@ export const CCY_BY_COUNTRY: Record<string, string> = {
   NA: "NAD", RW: "RWF", ZM: "ZMW", ET: "ETB", ZW: "ZWL", LY: "LYD",
 };
 
-/** Currency is stored inconsistently cased ("ZAR" and "zar" both occur), so
- *  every lookup normalises first. */
+/** THE canonical stored form of a currency code: ISO 4217, upper-case, or NULL when the value
+ *  isn't a currency code at all.
+ *
+ *  Every write of `imported_stores.currency` / `lead_overrides.currency` goes through this, and a
+ *  CHECK constraint on both columns (`currency ~ '^[A-Z]{3}$'`) enforces it in the database, so a
+ *  reader may compare with a plain `currency = 'ZAR'`.
+ *
+ *  It was not always so. Measured 2026-11-13, before the normalising pass: 2,083,792 rows held a
+ *  lower-case code and 31,341 an upper-case one, and 89 codes appeared in BOTH cases — ZAR worst of
+ *  all, because its two cases came from different lanes (StoreLeads writes 'ZAR', StoreCensus
+ *  writes 'zar'), so `currency = 'ZAR'` returned 15,764 of 23,525 South African stores and
+ *  `currency = 'zar'` the other 7,761. Neither query was wrong-looking. Upper-case is canonical
+ *  because ISO 4217 is, because FX/CCY_BY_COUNTRY above are keyed that way (a lower-case code
+ *  missing this table is the ~18.5x revenue bug in the file header), and because `country` and
+ *  `shop_currency` are already stored upper-case.
+ *
+ *  A value that isn't three letters is not a currency — the import carried four of them
+ *  ("$", "id", "hantam88", "ريال سعودي") — and becomes NULL rather than a code nothing can price. */
+export function normalizeCcy(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(s) ? s : null;
+}
+
+/** Readers keep normalising on the way in as well as on the way out: the column is canonical now,
+ *  but a `.toUpperCase()` here costs nothing and a reader that assumes it is the one thing that
+ *  would turn a future regression back into silently mispriced revenue. */
 export function toUsd(sales: number | null, currency: string | null, country: string | null): number | null {
   if (sales == null) return null;
   const ccy = (currency || CCY_BY_COUNTRY[(country ?? "").toUpperCase()] || "USD").toUpperCase();
