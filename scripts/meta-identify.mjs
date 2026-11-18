@@ -31,6 +31,16 @@
  * The retry tier can't use an index (no schema change), so it only runs every RETRY_EVERY_H hours
  * (or with --retry-now). --requeue-unreachable converts pre-fix meta_miss:unreachable rows once.
  *
+ * LIVENESS — a miss is also a liveness observation, applied with verify-liveness's own rules
+ * (nextStatus): 402 frozen / 423 locked → live_status 'dead' on first sight; 404/410/DNS-gone →
+ * live_miss+1, 'dead' once it reaches DEAD_AFTER (2) consecutive misses. The second observation
+ * comes from the retry tier, which re-fetches gone rows at live_miss=1 a day later. Reachable but
+ * not Shopify (html_at_meta / dns_off_shopify) is NOT churned — same guard as verify-liveness.
+ * Every flip gets a churn_log row in verify-liveness's shape (historic = never verified live, so
+ * it stays out of period churn). --backfill-liveness applies this to misses stamped before it
+ * existed, with no fetching. Undo: live_status back to NULL/active where country_source LIKE
+ * 'meta_miss:%' AND live_status='dead', plus the matching churn_log rows.
+ *
  * Writes: country (GB→UK, the project's canonical code), country_source='shop_meta',
  * country_checked_at, and the shop_* identity columns with COALESCE so existing values win.
  * Grouped UPDATE ... FROM unnest() every FLUSH rows — never row-by-row.
@@ -52,9 +62,15 @@ const ALIAS = { GB: "UK" };         // lib/countries.ts uses UK; GB rows fall in
 const MAX_ATTEMPTS = 3;             // runs that may see a Shopify-hosted store silent before it's final
 const RETRY_AFTER = "1 day";
 const RETRY_EVERY_H = 6;            // the retry query has no index; keep it to 4 runs a day
-const RETRY_LIMIT = 3000;
+const RETRY_LIMIT = parseInt(arg("--retry-limit", "3000"), 10);
 const RETRY_NOW = process.argv.includes("--retry-now");
 const REQUEUE = process.argv.includes("--requeue-unreachable");
+const BACKFILL = process.argv.includes("--backfill-liveness");
+const DEAD_AFTER = 2;                                         // = verify-liveness.mjs DEAD_AFTER
+const DEAD_NOW = new Set(["frozen_402", "http_423"]);         // Shopify suspended/locked: first sight
+const GONE = new Set(["http_404", "http_410", "dns_gone"]);   // 2-miss protected
+const GONE_SRC = [...GONE].map((g) => `meta_miss:${g}`);
+const LIVE_SRC = [...DEAD_NOW, ...GONE].map((g) => `meta_miss:${g}`);
 
 const resolver = new Resolver({ timeout: 4000, tries: 2 });
 resolver.setServers(["1.1.1.1", "8.8.8.8"]);
@@ -127,6 +143,66 @@ async function main() {
             AND shop_country ~ '^[A-Za-z]{2}$' AND country_source IS DISTINCT FROM 'manual'`).count;
     console.log(`tier 0: ${fromExisting} store(s) ${DRY ? "would be" : ""} placed from an existing shop_country`);
 
+    // A miss as a liveness observation — verify-liveness's nextStatus rules, applied in bulk.
+    // `entries` = [{domain, src}]. Returns how many stores flipped to dead.
+    async function applyLiveness(entries) {
+      const why = (e) => e.src.split(":")[1];
+      const deadNow = entries.filter((e) => DEAD_NOW.has(why(e))).map((e) => e.domain);
+      const gone = entries.filter((e) => GONE.has(why(e))).map((e) => e.domain);
+      const flipped = [];
+      if (deadNow.length) {
+        const r = await sql`UPDATE imported_stores SET live_status = 'dead',
+            live_miss = COALESCE(live_miss, 0) + 1, live_checked_at = now()
+          WHERE domain = ANY(${deadNow}) AND live_status IS DISTINCT FROM 'dead'
+            AND live_status IS DISTINCT FROM 'migrated'
+          RETURNING domain`;
+        flipped.push(...r.map((x) => x.domain));
+      }
+      if (gone.length) {
+        const r = await sql`UPDATE imported_stores SET
+            live_miss = COALESCE(live_miss, 0) + 1, live_checked_at = now(),
+            live_status = CASE WHEN COALESCE(live_miss, 0) + 1 >= ${DEAD_AFTER} THEN 'dead' ELSE live_status END
+          WHERE domain = ANY(${gone}) AND live_status IS DISTINCT FROM 'dead'
+            AND live_status IS DISTINCT FROM 'migrated'
+          RETURNING domain, live_status`;
+        flipped.push(...r.filter((x) => x.live_status === "dead").map((x) => x.domain));
+      }
+      // Same snapshot verify-liveness writes. historic = never verified live → out of period churn.
+      if (flipped.length) await sql`
+        INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
+          discovered_at, category, theme, city, estimated_monthly_sales, payments,
+          shipping_providers, free_shipping, plus, historic, died_at)
+        SELECT domain, name, country, 'dead', NULL, first_seen,
+          discovered_at, category, theme, city, estimated_monthly_sales, payments,
+          shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL), last_alive_at
+        FROM imported_stores WHERE domain = ANY(${flipped})
+        ON CONFLICT (domain) DO NOTHING`;
+      return flipped.length;
+    }
+
+    // One-off: misses stamped before the liveness step existed get their first observation now.
+    // No fetching — the observation already happened when they were stamped. Rows with live_miss
+    // already >= 1 are skipped so a re-run can't count the same observation twice.
+    if (BACKFILL) {
+      const rows = await sql`SELECT domain, country_source AS src FROM imported_stores
+        WHERE published AND platform = 'Shopify' AND country_source = ANY(${LIVE_SRC})
+          AND COALESCE(live_miss, 0) = 0
+          AND live_status IS DISTINCT FROM 'dead' AND live_status IS DISTINCT FROM 'migrated'
+        ${process.argv.includes("--limit") ? sql`LIMIT ${LIMIT}` : sql``}`;
+      const by = {};
+      for (const r of rows) by[r.src] = (by[r.src] ?? 0) + 1;
+      console.log(`backfill-liveness: ${rows.length} row(s)`, by, DRY ? "[DRY RUN]" : "");
+      if (!DRY) {
+        let dead = 0;
+        for (let k = 0; k < rows.length; k += 2000) {
+          dead += await applyLiveness(rows.slice(k, k + 2000));
+          if ((k / 2000) % 10 === 0) console.log(`  ${Math.min(k + 2000, rows.length)}/${rows.length}  dead so far ${dead}`);
+        }
+        console.log(`backfill-liveness done: ${dead} flipped to dead (gone rows now at live_miss=1 await a 2nd look).`);
+      }
+      return;
+    }
+
     // One-off: rows stamped meta_miss:unreachable before the DNS split get one more look as attempt 1.
     if (REQUEUE && !DRY) {
       const n = (await sql`UPDATE imported_stores SET country_source = 'meta_retry:1'
@@ -135,14 +211,27 @@ async function main() {
       console.log(`requeued ${n} pre-fix unreachable row(s) as meta_retry:1`);
     }
 
-    // Retry tier — Shopify-hosted stores that were silent last time. Unindexed, so gated by hour.
+    // Retry tier — Shopify-hosted stores that were silent last time, plus gone stores (404/410/DNS)
+    // waiting for the second consecutive miss that makes them dead. Unindexed, so gated by hour.
     const attempts = new Map();
     const retryDue = RETRY_NOW || REQUEUE || new Date().getHours() % RETRY_EVERY_H === 0;
-    const retry = retryDue ? await sql`SELECT domain, country_source FROM imported_stores
+    // Two queries, half the budget each, so ~19k silent retries can't starve the gone confirmations.
+    const half = Math.floor(Math.min(RETRY_LIMIT, LIMIT) / 2);
+    const confirm = retryDue ? await sql`SELECT domain, country_source FROM imported_stores
       WHERE published AND country IS NULL AND platform = 'Shopify'
-        AND country_source LIKE 'meta_retry:%' AND country_checked_at < now() - ${RETRY_AFTER}::interval
-      LIMIT ${Math.min(RETRY_LIMIT, LIMIT)}` : [];
-    for (const r of retry) attempts.set(r.domain, parseInt(r.country_source.split(":")[1], 10) || 1);
+        AND country_checked_at < now() - ${RETRY_AFTER}::interval
+        AND country_source = ANY(${GONE_SRC}) AND live_miss = 1
+        AND live_status IS DISTINCT FROM 'dead' AND live_status IS DISTINCT FROM 'migrated'
+      LIMIT ${half}` : [];
+    const silent = retryDue ? await sql`SELECT domain, country_source FROM imported_stores
+      WHERE published AND country IS NULL AND platform = 'Shopify'
+        AND country_checked_at < now() - ${RETRY_AFTER}::interval
+        AND country_source LIKE 'meta_retry:%'
+      LIMIT ${Math.min(RETRY_LIMIT, LIMIT) - confirm.length}` : [];
+    const retry = [...confirm, ...silent];
+    for (const r of retry) {
+      if (r.country_source.startsWith("meta_retry:")) attempts.set(r.domain, parseInt(r.country_source.split(":")[1], 10) || 1);
+    }
 
     let crux = [], active = [];
     const room = () => LIMIT - retry.length - crux.length - active.length;
@@ -157,7 +246,7 @@ async function main() {
       + `active ${active.length}, unchecked ${rest.length}), `
       + `concurrency ${CONC}, ${PROXIES.length ? `${PROXIES.length} proxies` : "DIRECT"}${DRY ? " [DRY RUN]" : ""}`);
 
-    let i = 0, done = 0, hit = 0, throttled = 0, streak = 0, stopped = false;
+    let i = 0, done = 0, hit = 0, throttled = 0, streak = 0, stopped = false, dead = 0;
     const misses = {}, tally = {};
     let hits = [], stamps = [];
     const t0 = Date.now();
@@ -173,7 +262,8 @@ async function main() {
           shop_city = COALESCE(t.shop_city, v.city),
           shop_province = COALESCE(t.shop_province, v.province),
           shop_currency = COALESCE(t.shop_currency, v.currency),
-          myshopify_domain = COALESCE(t.myshopify_domain, v.myshop)
+          myshopify_domain = COALESCE(t.myshopify_domain, v.myshop),
+          live_miss = CASE WHEN t.live_miss > 0 THEN 0 ELSE t.live_miss END   -- answered = healthy
         FROM (SELECT * FROM unnest(
           ${h.map((x) => x.domain)}::text[], ${h.map((x) => x.country)}::text[], ${h.map((x) => x.shop_id)}::bigint[],
           ${h.map((x) => x.shop_country)}::text[], ${h.map((x) => x.city)}::text[], ${h.map((x) => x.province)}::text[],
@@ -184,6 +274,7 @@ async function main() {
         UPDATE imported_stores t SET country_checked_at = now(), country_source = v.src
         FROM (SELECT * FROM unnest(${s.map((x) => x.domain)}::text[], ${s.map((x) => x.src)}::text[]) AS u(domain, src)) v
         WHERE t.domain = v.domain AND t.country IS NULL AND t.country_source IS DISTINCT FROM 'manual'`;
+      if (s.length) dead += await applyLiveness(s);
     }
 
     async function worker() {
@@ -234,7 +325,7 @@ async function main() {
     await flush();
 
     const secs = (Date.now() - t0) / 1000;
-    console.log(`\ndone in ${Math.round(secs)}s (${(done / secs).toFixed(1)}/s). placed ${hit}/${done}, throttled ${throttled}.`);
+    console.log(`\ndone in ${Math.round(secs)}s (${(done / secs).toFixed(1)}/s). placed ${hit}/${done}, throttled ${throttled}, marked dead ${dead}.`);
     console.log("top countries:", Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, n]) => `${k}:${n}`).join(" "));
     console.log("no answer:", Object.entries(misses).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}:${n}`).join(" ") || "none");
   } finally { closeAgents(); await sql.end(); }
