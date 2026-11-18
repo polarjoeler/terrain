@@ -10,20 +10,23 @@ set -u
 cd "$HOME/storepulse" || exit 1
 export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt"
+# Wall-clock cap per step (macOS has no `timeout`): a stuck step is killed and the lane moves on,
+# instead of one hang freezing every later step and every later run (woo-catalog-fp hung 3.6 days, 14→18 Nov).
+cap() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$secs" "$@"; }
 node --env-file=.env.local scripts/heartbeat.mjs catalog-enrich >/dev/null 2>&1 || true
 echo "===== catalog-enrich $(date '+%F %T') ====="
-node --env-file=.env.local scripts/catalog-enrich.mjs --limit 1500 --concurrency 4 || echo "!! catalog-enrich failed (continuing)"
+cap 10800 node --env-file=.env.local scripts/catalog-enrich.mjs --limit 1500 --concurrency 4 || echo "!! catalog-enrich failed (continuing)"
 # Catalogue fingerprints (ZA/KE/NG): backfill, then the monthly refresh. Polite by design — a store
 # that 429s is parked for a few days, never retried in-run (see --fp in catalog-enrich.mjs).
-node --env-file=.env.local scripts/catalog-enrich.mjs --fp --limit 500 || echo "!! catalog fingerprints failed (continuing)"
+cap 3600 node --env-file=.env.local scripts/catalog-enrich.mjs --fp --limit 500 || echo "!! catalog fingerprints failed (continuing)"
 # Woo fingerprints into the same table, via the public Store API — Woo is excluded from
 # catalog-enrich on purpose (products.json is Shopify-only). Self-hosted origins, so this goes
 # direct: it spends no Webshare bandwidth and no Shopify-edge budget. About 38% answer; a 404 is
 # permanent (old Woo or REST disabled) and parks the store for 120 days instead of re-probing it.
-node --env-file=.env.local scripts/woo-catalog-fp.mjs --limit 500 || echo "!! woo fingerprints failed (continuing)"
+cap 3600 node --env-file=.env.local scripts/woo-catalog-fp.mjs --limit 500 || echo "!! woo fingerprints failed (continuing)"
 # Weekly clone sweep over the fingerprints — DB-light (one scan), the scoring runs in memory here.
 MARK="$HOME/storepulse/logs/.clone-sweep-last"
 if [ ! -f "$MARK" ] || [ -n "$(find "$MARK" -mtime +6 2>/dev/null)" ]; then
-  node --env-file=.env.local scripts/clone-sweep.mjs && touch "$MARK" || echo "!! clone-sweep failed (continuing)"
+  cap 3600 node --env-file=.env.local scripts/clone-sweep.mjs && touch "$MARK" || echo "!! clone-sweep failed (continuing)"
 fi
 echo "===== catalog-enrich done $(date '+%F %T') ====="

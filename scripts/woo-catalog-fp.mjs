@@ -52,7 +52,11 @@ const REFUSE_ABOVE = flagNum("--refuse-above", 50000);
 const RETRY_DAYS = 3;
 const NO_API_DAYS = 120;
 
-const sql = postgres(process.env.DATABASE_URL, { max: 3, idle_timeout: 20, connect_timeout: 30 });
+// prepare:false — the Supabase pooler (transaction mode) does not keep prepared statements. Without it,
+// and without a statement timeout, one lost reply left this run waiting on the database for 3.6 days
+// (14→18 Nov), which froze the whole catalog-enrich lane behind it.
+const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 3, idle_timeout: 20, connect_timeout: 30,
+  connection: { statement_timeout: 60000, lock_timeout: 10000 } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
