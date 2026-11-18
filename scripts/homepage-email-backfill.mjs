@@ -38,16 +38,23 @@ async function main() {
   const done = new Set(fs.existsSync(DONE_FILE) ? fs.readFileSync(DONE_FILE, "utf8").split("\n").filter(Boolean) : []);
   const doneOut = DRY ? null : fs.createWriteStream(DONE_FILE, { flags: "a" });
   const pending = [];                       // {domain, email} waiting for the batched write
+  let doneBuf = [];                         // domains read since the last write — marked done only once it lands
   const st = { seen: 0, own: 0, free: 0, none: 0, closed: 0, net: 0, throttled: 0, written: 0 };
   const flush = async () => {
-    if (DRY || !pending.length) return;
+    if (DRY) return;
     const b = pending.splice(0);
+    const d = doneBuf; doneBuf = [];
+    if (!b.length) { if (d.length) doneOut.write(d.join("\n") + "\n"); return; }
     const r = await sql`
       UPDATE imported_stores s SET email = v.e
         FROM (SELECT unnest(${b.map((x) => x.domain)}::text[]) d, unnest(${b.map((x) => x.email)}::text[]) e) v
        WHERE s.domain = v.d AND coalesce(s.email, '') = ''`;
     st.written += r.count;
+    if (d.length) doneOut.write(d.join("\n") + "\n");
   };
+  // A stop (Ctrl-C, kill) writes what's been found before exiting, so nothing read is lost.
+  let stopping = false;
+  for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { if (!stopping) { stopping = true; console.log(`\n${sig}: writing pending results…`); } });
   try {
     const rows = (await sql`
       SELECT s.domain FROM imported_stores s LEFT JOIN store_priority p ON p.domain = s.domain
@@ -61,7 +68,7 @@ async function main() {
 
     let i = 0;
     const worker = async () => {
-      while (i < work.length) {
+      while (i < work.length && !stopping) {
         const { domain } = work[i++];
         let r = await fetchText(`https://${domain}/`, { proxy: pickProxy(pool), timeoutMs: 15000, maxBytes: 1_500_000 });
         if (!r) { await sleep(PAUSE_MS); r = await fetchText(`https://${domain}/`, { proxy: pickProxy(pool), timeoutMs: 15000, maxBytes: 1_500_000 }); }
@@ -79,8 +86,8 @@ async function main() {
             if (DRY && st.own + st.free <= 40) console.log(`  ✓ ${domain.padEnd(36)} ${best.email}  (${best.kind}, ${best.how})`);
           }
         }
-        doneOut?.write(domain + "\n");
-        if (pending.length >= 100) await flush();
+        doneBuf.push(domain);
+        if (pending.length >= 50 || doneBuf.length >= 200) await flush();
         if (st.seen % 500 === 0) console.log(`  ${st.seen}/${work.length}  own ${st.own} · freemail ${st.free} · none ${st.none} · closed ${st.closed} · unreachable ${st.net} · 429 ${st.throttled} · written ${st.written}`);
         await sleep(PAUSE_MS);
       }
