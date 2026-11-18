@@ -8,8 +8,9 @@
  * verified first (interrupt any time — the head is already done). Classifies:
  *   active   — /products.json serves a catalogue (live Shopify)
  *   migrated — reachable, and positively identified as a DIFFERENT platform than we recorded
- *   dead     — unreachable across 2 consecutive checks
- * Resumable: skips anything checked within --min-age-days.
+ *   dead     — unreachable across 2 consecutive checks, or a FROZEN (402) storefront on one
+ * Resumable: skips anything checked within --min-age-days — except a store carrying a banked 402
+ * from contact-enrich, which jumps the queue (see FROZEN-FIRST below).
  *
  * SHOPIFY-ONLY, and the queue enforces it. The liveness signal here IS /products.json, which only
  * Shopify serves — so a WooCommerce store cannot pass the `active` test no matter how healthy it
@@ -167,6 +168,19 @@ async function classify(domain) {
   // ambiguous "reachable but unknown platform" path (which we now keep active to avoid false churn).
   if (home.status === 404 || home.status === 410)
     return { reachable: false, shopify: false, platform: null };
+  // The SAME frozen signal as the products.json 402 above, on the request we actually get an
+  // answer from. This has to be checked HERE, before detectPlatform: a frozen store's 402 page is
+  // still served by Shopify's edge, complete with cdn.shopify.com assets and the x-shopid header,
+  // so it matches SHOPIFY_MARKERS and fell straight through to the `platform === "Shopify"` line
+  // below — which reads as healthy and RESETS live_miss to 0. The products.json 402 never caught
+  // it in practice either, because that endpoint is the one Shopify rate-limits hardest (429 on
+  // ~9 of 10 attempts), so the 402 arrived as a 429 and was skipped. Net effect measured on
+  // 2026-11-18: 4,072 published stores whose storefront answers 402 were still live_status
+  // 'active' — re-confirmed as healthy by the very lane meant to churn them, and served to
+  // customers as live leads. Self-correcting, as above: pay the bill and the next sweep sees a
+  // 200 → active.
+  if (home.status === 402)
+    return { reachable: false, shopify: false, platform: null, frozen: true };
   let html = "";
   try { html = await home.text(); } catch { html = ""; }
   const headerBlob = [...home.headers.entries()].map(([k, v]) => `${k}:${v}`).join(" ");
@@ -259,6 +273,39 @@ async function main() {
         ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
       console.log(`Verifying ${rows.length.toLocaleString()} stores (biggest first)…`);
+
+      // FROZEN-FIRST. contact-enrich records storefront_http on every crawl specifically so this
+      // lane can act on a 402 (see its note: "Deliberately NOT written to live_status — churn
+      // accounting has historic-vs-forward rules that belong to that lane, so this just banks the
+      // observation for it to act on"). Nothing ever read it back. Meanwhile a frozen store's last
+      // liveness check is usually recent — it was wrongly passed as 'active', see liveness() — so
+      // it sits INSIDE --min-age-days and the ordinary queue above never reaches it. The banked
+      // signal therefore aged out unused while the store carried on being sold as a live lead.
+      //
+      // Re-verified here, not trusted: the 402 can be three weeks old, and a spot-check of 10 found
+      // 2 trading again. Equally the observation is not discarded just because this lane last said
+      // 'active' — that verdict is the bug being fixed, and on the same 10 it was wrong 4 times out
+      // of 5. So anything carrying a 402 and not already written off gets re-asked, oldest-banked
+      // first, and whatever the probe says now wins.
+      //
+      // Capped at half the run's budget: the rate ceiling in verify-liveness.sh (~600 stores/day
+      // from one residential IP) is not negotiable, and the ordinary churn sweep still has to move.
+      const frozenCap = LIMIT > 0 ? Math.ceil(LIMIT / 2) : 0;
+      const frozenRows = await sql`
+        SELECT domain, live_miss, platform FROM imported_stores
+        WHERE published AND storefront_http = 402
+          AND (platform IS NULL OR lower(platform) = 'shopify')
+          AND activity_tier IS DISTINCT FROM 'not_a_store'
+          AND live_status IS DISTINCT FROM 'dead'
+          ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
+        ORDER BY storefront_checked_at ASC NULLS FIRST, ${sizeOrder}
+        ${frozenCap > 0 ? sql`LIMIT ${frozenCap}` : sql``}`;
+      if (frozenRows.length) {
+        const seen = new Set(frozenRows.map((r) => r.domain));
+        rows = [...frozenRows, ...rows.filter((r) => !seen.has(r.domain))];
+        if (LIMIT > 0) rows = rows.slice(0, LIMIT);
+        console.log(`  …${frozenRows.length.toLocaleString()} of them a banked 402 (frozen storefront), re-checked first`);
+      }
     }
 
     const tally = { active: 0, migrated: 0, dead: 0 };
