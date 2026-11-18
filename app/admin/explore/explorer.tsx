@@ -6,14 +6,14 @@ import { marketLabel } from "@/lib/markets";
 import { isOpenSource, platformLabel } from "@/lib/platforms";
 import { NOT_TRADING, emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import { scoreColor } from "@/lib/revenue";
-import { bandTone, REVENUE_BANDS, bandDisplay, floorBand } from "@/lib/fx";
+import { bandTone, REVENUE_BANDS, bandDisplay, floorBand, type RevenueBand } from "@/lib/fx";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
 import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
 
 const PAGE = 60;
 // "new" surfaces freshly-discovered stores first (the primary driver) — see lib/browse.ts ORDER.
-type SortKey = "new" | "score" | "sales" | "name";
+type SortKey = "new" | "score" | "sales" | "sales_asc" | "name" | "name_desc" | "traffic" | "catalog";
 
 // Recency = how recently WE first tracked the store (discoveredAt), so "new this
 // week/month/year" means newly-discovered leads. Windows are nested, so it's a
@@ -149,6 +149,22 @@ function Facet({ title, values, selected, onToggle, label, defaultOpen = true }:
   );
 }
 
+/** Clickable column header. `keys` are the sorts it cycles through: [desc, asc] for two-way columns
+ *  (Revenue high→low then low→high; Store A→Z then Z→A), or one key for one-way ones. */
+function SortTh({ label, keys, sort, onSort }: { label: string; keys: SortKey[]; sort: SortKey; onSort: (k: SortKey) => void }) {
+  const i = keys.indexOf(sort);
+  const next = keys[(i + 1) % keys.length];
+  const arrow = i < 0 ? "" : keys[0] === "name" ? (i === 0 ? " A→Z" : " Z→A") : i === 0 ? " ↓" : " ↑";
+  return (
+    <th className="px-4 py-3" aria-sort={i < 0 ? "none" : (keys[0] === "name") === (i === 0) ? "ascending" : "descending"}>
+      <button type="button" onClick={() => onSort(i < 0 ? keys[0] : next)}
+        className={`uppercase tracking-wide transition hover:text-cream ${i >= 0 ? "text-cyan" : ""}`} title={`Sort by ${label.toLowerCase()}`}>
+        {label}{arrow}
+      </button>
+    </th>
+  );
+}
+
 // Collapsible wrapper for the non-facet filter groups (Newly discovered, Launched) so every
 // filter section in the rail collapses, not just the facets.
 function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
@@ -247,6 +263,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   const [recency, setRecency] = useState<RecencyKey>(initial?.recency ?? "");
   const [launched, setLaunched] = useState<LaunchKey>(initial?.launched ?? "");
   const [sort, setSort] = useState<SortKey>((initial?.sort as SortKey) ?? "new");
+  const changeSort = (k: SortKey) => { setSort(k); setLimit(PAGE); };
   const [limit, setLimit] = useState(PAGE);
   const [selected, setSelected] = useState<string | null>(null); // domain open in the detail drawer
   const [picked, setPicked] = useState<Set<string>>(new Set());   // ticked rows for selective export
@@ -372,6 +389,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // How many rows THIS click would export: the ticked rows, or the whole filtered set.
   const pendingRows = picked.size > 0 ? picked.size : data.total;
   const exportBlocked = !!usage?.blocked; // a trial on a metered plan — the server refuses too
+  // Never invite a customer to dump the WHOLE catalogue: with no filter and nothing ticked there is
+  // nothing to export yet. They narrow the view (or tick rows) first, then export that.
+  const needsScope = picked.size === 0 && activeCount === 0;
+  // A large filtered export is a deliberate act, so ask once before it spends the allowance.
+  const confirmBig = () => picked.size > 0 || data.total <= 1000 ||
+    window.confirm(`Export all ${data.total.toLocaleString()} leads matching these filters?\n\nTip: tick rows to export just those.`);
   const overAllowance = usage?.remaining != null && pendingRows > usage.remaining;
   // Metered plans show what's left; unmetered ones show what's been used. Both read from the
   // plan, so adding a tier needs no change here.
@@ -395,6 +418,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   };
 
   const exportCsv = async () => {
+    if (needsScope || !confirmBig()) return;
     setExporting(true);
     setExportMsg("");
     try {
@@ -428,6 +452,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // account (so it lands live in their Drive, not a download). Sheet URL is remembered per browser.
   const [sheetBusy, setSheetBusy] = useState(false);
   const exportSheet = async () => {
+    if (needsScope || !confirmBig()) return;
     const SA = "shopify-radar@shopify-radar-503921.iam.gserviceaccount.com";
     const saved = (() => { try { return localStorage.getItem("terrainSheetUrl") || ""; } catch { return ""; } })();
     const sheet = window.prompt(`Paste a Google Sheet URL to export into.\n\nFirst share the sheet (Editor) with:\n${SA}`, saved);
@@ -566,7 +591,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
             City only once a country is chosen (city lists are meaningless across every market at once). */}
         {wooSelected && facets.activity.length > 0 && <Facet title="Woo activity" values={facets.activity} selected={activity} onToggle={toggle(setActivity)} label={(v) => ACTIVITY_LABEL[v] ?? v} defaultOpen={false} />}
         {openSourceSelected && facets.hosting.length > 1 && <Facet title="Hosting" values={facets.hosting} selected={hosting} onToggle={toggle(setHosting)} defaultOpen={false} />}
-        <Facet title="Revenue" values={facets.band} selected={band} onToggle={toggle(setBand)} defaultOpen={false} />
+        {/* Band keys are the canonical (ZAR-named) buckets, but every store is banded off its USD-normalised
+            revenue, so the filter already works across currencies — label it in USD, the one scale every
+            market shares. The row pill still shows the store's own currency beside the USD figure. */}
+        <Facet title="Revenue (USD / month)" values={facets.band} selected={band} onToggle={toggle(setBand)} defaultOpen={false}
+          label={(v) => (v === "New" ? "No estimate yet" : bandDisplay(v as RevenueBand, null).usd)} />
         <Facet title="Category" values={facets.category} selected={category} onToggle={toggle(setCategory)} defaultOpen={false} />
         <Facet title="Theme" values={facets.theme} selected={theme} onToggle={toggle(setTheme)} defaultOpen={false} />
         {facets.contactType.length > 0 && <Facet title="Contact quality" values={facets.contactType} selected={contactType} onToggle={toggle(setContactType)} label={(v) => CONTACT_LABEL[v] ?? v} defaultOpen={false} />}
@@ -621,11 +650,15 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
         <div className="flex flex-wrap items-center gap-3">
           <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(PAGE); }} placeholder="Search domain or store…"
             className="w-72 rounded-full border border-cream/15 bg-transparent px-4 py-2 text-sm text-cream outline-none placeholder:text-cream/35 focus:border-cream/50" />
-          <select value={sort} onChange={(e) => { setSort(e.target.value as SortKey); setLimit(PAGE); }} className="rounded-full border border-cream/15 bg-transparent px-3 py-2 text-sm text-cream outline-none">
+          <select value={sort} onChange={(e) => changeSort(e.target.value as SortKey)} className="rounded-full border border-cream/15 bg-transparent px-3 py-2 text-sm text-cream outline-none">
             <option value="new" className="text-ink">Sort: Newest first</option>
             <option value="score" className="text-ink">Sort: Lead Fit Score</option>
-            <option value="sales" className="text-ink">Sort: Revenue</option>
-            <option value="name" className="text-ink">Sort: Name</option>
+            <option value="sales" className="text-ink">Sort: Revenue (high → low)</option>
+            <option value="sales_asc" className="text-ink">Sort: Revenue (low → high)</option>
+            <option value="traffic" className="text-ink">Sort: Traffic (highest first)</option>
+            <option value="catalog" className="text-ink">Sort: Catalog (largest first)</option>
+            <option value="name" className="text-ink">Sort: Name (A → Z)</option>
+            <option value="name_desc" className="text-ink">Sort: Name (Z → A)</option>
           </select>
           <span className="text-sm text-cream/50">
             <b className="text-cream">{data.total.toLocaleString()}</b> of {data.universe.toLocaleString()} leads
@@ -659,10 +692,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                 </>
               )}
             </div>
-            <button onClick={exportCsv} disabled={exporting || overAllowance || exportBlocked} title={exportBlocked ? "Export unlocks on a paid plan" : undefined} className="rounded-full bg-mint px-4 py-2 text-sm font-medium text-ink transition hover:brightness-105 disabled:opacity-60">
-              {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : `Export all ${data.total.toLocaleString()} → CSV`}
+            <button onClick={exportCsv} disabled={exporting || overAllowance || exportBlocked || needsScope}
+              title={exportBlocked ? "Export unlocks on a paid plan" : needsScope ? "Filter the list or tick rows to export" : undefined}
+              className={`rounded-full px-4 py-2 text-sm font-medium transition disabled:opacity-50 ${picked.size > 0 ? "bg-mint text-ink hover:brightness-105" : "border border-cream/20 text-cream/80 hover:text-cream"}`}>
+              {exporting ? "Exporting…" : picked.size > 0 ? `Export ${picked.size} selected → CSV` : needsScope ? "Export → CSV" : `Export ${data.total.toLocaleString()} filtered → CSV`}
             </button>
-            <button onClick={exportSheet} disabled={sheetBusy || overAllowance || exportBlocked} title={exportBlocked ? "Export unlocks on a paid plan" : "Export the filtered set into a Google Sheet"} className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
+            <button onClick={exportSheet} disabled={sheetBusy || overAllowance || exportBlocked || needsScope} title={exportBlocked ? "Export unlocks on a paid plan" : needsScope ? "Filter the list or tick rows to export" : "Export the filtered set into a Google Sheet"} className="rounded-full border border-cream/20 px-4 py-2 text-sm font-medium text-cream/80 transition hover:text-cream disabled:opacity-60">
               {sheetBusy ? "Exporting…" : "→ Google Sheets"}
             </button>
           </div>
@@ -671,9 +706,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
         {/* Export allowance. Shown next to the buttons rather than buried in /account, because
             this is the moment the number matters. Over-allowance disables both surfaces and says
             what to do instead — a refusal after a 40k-row query wastes everyone's time. */}
-        {(usageLabel || exportMsg) && (
+        {(usageLabel || exportMsg || needsScope) && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             {usageLabel && <span className="text-cream/45">{usageLabel}</span>}
+            {needsScope && <span className="text-cream/40">Filter the list or tick rows to export.</span>}
             {overAllowance && usage?.remaining != null && (
               <span className="text-orange/90">
                 That&rsquo;s {pendingRows.toLocaleString()} rows and {usage.remaining.toLocaleString()} left — tick up to {usage.remaining.toLocaleString()} rows, or narrow the filters.
@@ -696,8 +732,13 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                       return n;
                     })} />
                 </th>
-                <th className="px-4 py-3">Store</th><th className="px-4 py-3">Platform</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
-                <th className="px-4 py-3">Revenue</th><th className="px-4 py-3">Traffic</th><th className="px-4 py-3">Catalog</th><th className="px-4 py-3">Fit</th><th className="px-4 py-3">Contacts</th>
+                <SortTh label="Store" keys={["name", "name_desc"]} sort={sort} onSort={changeSort} />
+                <th className="px-4 py-3">Platform</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Market</th>
+                <SortTh label="Revenue" keys={["sales", "sales_asc"]} sort={sort} onSort={changeSort} />
+                <SortTh label="Traffic" keys={["traffic"]} sort={sort} onSort={changeSort} />
+                <SortTh label="Catalog" keys={["catalog"]} sort={sort} onSort={changeSort} />
+                <SortTh label="Fit" keys={["score"]} sort={sort} onSort={changeSort} />
+                <th className="px-4 py-3">Contacts</th>
               </tr>
             </thead>
             <tbody>
