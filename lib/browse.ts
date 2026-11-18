@@ -17,6 +17,9 @@ import { usdSqlExpr, usdExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand 
 import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
 import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
+import { ROW_CAP } from "./browse-limits";
+
+export { ROW_CAP };
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
 // a latent bug on the Supabase transaction pooler (which rejects prepared statements). The shared
@@ -45,11 +48,6 @@ const REACHABLE_TYPES = ["named", "role_targeted"] as const;
  *  means not yet checked or DNS wouldn't answer, which must not be treated as undeliverable, hence
  *  IS NOT FALSE rather than = true. (scripts/contact-mx.mjs) */
 const DELIVERABLE = "contact_mx_ok IS NOT FALSE";
-
-/** Hard ceiling on rows returned by ONE browse request. The Explorer must page with `offset`
- *  past this, not ask for a bigger window: it is exported so the client cannot drift from it and
- *  sit there offering a "Load more" that the server will silently clamp away. */
-export const ROW_CAP = 1000;
 
 export type SortKey = "new" | "score" | "sales" | "sales_asc" | "name" | "name_desc" | "traffic" | "catalog" | "launched" | "discovered";
 

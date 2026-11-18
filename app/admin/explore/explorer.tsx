@@ -7,7 +7,9 @@ import { isOpenSource, platformLabel } from "@/lib/platforms";
 import { NOT_TRADING, emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import { scoreColor } from "@/lib/revenue";
 import { bandTone, REVENUE_BANDS, bandDisplay, floorBand, type RevenueBand } from "@/lib/fx";
-import { ROW_CAP } from "@/lib/browse";
+// Value import from a LEAF module, never from lib/browse.ts: this is a client component and
+// that module pulls in postgres, which fails the bundle (tsc cannot see it; the build can).
+import { ROW_CAP } from "@/lib/browse-limits";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
 import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
