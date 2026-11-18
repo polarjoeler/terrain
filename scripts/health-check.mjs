@@ -25,9 +25,13 @@ const add = (name, ok, detail) => checks.push({ name, ok, detail });
 const [t] = await sql`SELECT
   (SELECT max(payments_checked_at) FROM imported_stores) pay, (SELECT max(live_checked_at) FROM imported_stores) live,
   (SELECT max(catalog_checked_at) FROM imported_stores) cat, (SELECT max(created_at) FROM imported_stores) ins`;
-// cert-launch heartbeat (task='cert', written every run before it touches crt.sh) — so we can tell
-// "the job ran" apart from "the job produced data", which matters for the catalog/launch check below.
-const [hb] = await sql`SELECT max(last_run) cert FROM agent_heartbeat WHERE task = 'cert'`.catch(() => [{ cert: null }]);
+// Per-lane heartbeats, for the lanes whose health can't be read off a shared column:
+//   cert           — cert-launch, written every run before it touches crt.sh — so we can tell
+//                    "the job ran" apart from "the job produced data" (the catalog/launch check below).
+//   focus-liveness — the Tier-B ZA/KE/NG re-check lane, written by scripts/focus-liveness-cron.sh.
+const [hb] = await sql`SELECT max(last_run) FILTER (WHERE task = 'cert') cert,
+  max(last_run) FILTER (WHERE task = 'focus-liveness') focus_live
+  FROM agent_heartbeat WHERE task IN ('cert', 'focus-liveness')`.catch(() => [{ cert: null, focus_live: null }]);
 const rule = (name, ageMin, limitMin) => add(name, ageMin != null && ageMin <= limitMin,
   ageMin == null ? "never" : `last write ${ageMin < 60 ? ageMin + "m" : Math.round(ageMin / 60) + "h"} ago (limit ${Math.round(limitMin / 60)}h)`);
 rule("payments-probe", mins(t.pay), 150);      // hourly job → stale past ~2.5h
@@ -40,6 +44,12 @@ rule("payments-probe", mins(t.pay), 150);      // hourly job → stale past ~2.5
 const catAge = [t.cat, hb?.cert].map(mins).filter((m) => m != null);
 rule("catalog/launch", catAge.length ? Math.min(...catAge) : null, 60 * 26);
 add("liveness", mins(t.live) != null && mins(t.live) <= 60 * 30, mins(t.live) == null ? "never" : `last check ${Math.round(mins(t.live) / 60)}h ago`);
+// focus-liveness (Lucy, 6-hourly) — the Tier-B freshness engine that re-checks published ZA/KE/NG
+// stores by DNS, so churn and migration signal stay current. The "liveness" check above CANNOT see
+// it die: that watches max(live_checked_at) over the whole table, which verify-liveness, dns-liveness
+// and meta-identify also write — so this lane could stop entirely with the board still green. Keyed
+// on its own heartbeat instead. 6-hourly → stale past ~13h (one missed run plus margin).
+rule("focus-liveness", mins(hb?.focus_live), 60 * 13);
 // Discovery health = are NEW rows actually landing? Use created_at, a real insert timestamp.
 // NOT discovered_at — that's a DATE (day granularity), so max(discovered_at) always reads 0-24h
 // old regardless of whether anything is landing, and never signals a real stall (an earlier
