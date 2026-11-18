@@ -46,7 +46,7 @@ const REACHABLE_TYPES = ["named", "role_targeted"] as const;
  *  IS NOT FALSE rather than = true. (scripts/contact-mx.mjs) */
 const DELIVERABLE = "contact_mx_ok IS NOT FALSE";
 
-export type SortKey = "new" | "score" | "sales" | "name" | "launched" | "discovered";
+export type SortKey = "new" | "score" | "sales" | "sales_asc" | "name" | "name_desc" | "traffic" | "catalog" | "launched" | "discovered";
 
 export type BrowseFilters = {
   q?: string;
@@ -304,7 +304,16 @@ const ORDER: Record<SortKey, string> = {
   // imports, so the window didn't discriminate and it collapsed back to a revenue sort.
   new: `discovered_at DESC NULLS LAST, ${REV} DESC NULLS LAST, ${TIE}`,
   sales: `${REV} DESC NULLS LAST, ${TIE}`,
-  name: "COALESCE(name, domain) ASC, domain ASC",
+  sales_asc: `${REV} ASC NULLS LAST, domain ASC`,
+  // Name sorts ignore case and leading punctuation/whitespace, so "adidas" and "Adidas" sit together
+  // and placeholder names ("-", blank) fall back to the domain instead of piling up at the top of A–Z.
+  name: "COALESCE(NULLIF(lower(regexp_replace(btrim(name), '^[^[:alnum:]]+', '')), ''), lower(domain)) ASC, domain ASC",
+  name_desc: "COALESCE(NULLIF(lower(regexp_replace(btrim(name), '^[^[:alnum:]]+', '')), ''), lower(domain)) DESC, domain ASC",
+  // CrUX rank is a log10 bucket where SMALLER is bigger (1000 = top 1k), so biggest traffic = ASC.
+  // Unranked stores go last; revenue breaks ties inside a bucket.
+  traffic: `crux_rank ASC NULLS LAST, ${REV} DESC NULLS LAST, ${TIE}`,
+  // Largest catalogue first; revenue breaks ties.
+  catalog: `product_count DESC NULLS LAST, ${REV} DESC NULLS LAST, ${TIE}`,
   launched: `launched_on DESC NULLS LAST, ${TIE}`,
   discovered: `discovered_at DESC NULLS LAST, ${TIE}`,
   // the real lead-fit score (SQL), so non-Shopify ranks on merit not just revenue
@@ -387,7 +396,8 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   );
   const limit = Math.min(f.limit ?? 50, 1000);
   const offset = f.offset ?? 0;
-  const order = sql.unsafe(ORDER[f.sort ?? "new"]);
+  // Unknown keys (an old saved list, a hand-edited request) fall back to the default order.
+  const order = sql.unsafe(ORDER[f.sort as SortKey] ?? ORDER.new);
 
   // ONE scan for every aggregate. The first cut ran 16 sequential queries (total,
   // universe, 6 facets, 7 recency counts) at ~1s each — 15.8s for a page view.
