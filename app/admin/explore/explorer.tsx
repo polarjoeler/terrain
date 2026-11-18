@@ -192,6 +192,7 @@ export type ExploreInitial = {
   platform?: string[]; apps?: string[]; plugins?: string[]; tech?: string[]; hosting?: string[];
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
+  whatsapp?: boolean;                            // "reachable on WhatsApp" view
   grouped?: boolean; group?: string; groupLabel?: string;   // store groups: multi-store operators / one group
   emailProvider?: string[]; dnsTool?: string[];   // DNS scan (store_dns): mailbox provider, tools in SPF/DKIM/TXT
   notTrading?: string[]; hideNotTrading?: boolean;   // checkout probe: why there was nothing to buy
@@ -254,6 +255,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // "Reaches a person" — a named address or a decision-maker's role mailbox. The filter the
   // generic-mailbox complaint is really asking for.
   const [reachableOnly, setReachableOnly] = useState(initial?.reachable ?? false);
+  const [whatsappOnly, setWhatsappOnly] = useState(initial?.whatsapp ?? false);
   const [contactType, setContactType] = useState<Set<string>>(new Set(initial?.contactType));
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
@@ -305,6 +307,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     plus: plusOnly || undefined,
     hasEmail: emailOnly || undefined,
     reachableContact: reachableOnly || undefined,
+    hasWhatsapp: whatsappOnly || undefined,
     contactType: contactType.size ? [...contactType] : undefined,
     noPayment: noPaymentOnly || undefined,
     tier: tier || undefined,
@@ -319,7 +322,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     migratedDays: initial?.migratedDays,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, whatsappOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
 
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
@@ -378,10 +381,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     reachable: data.stats.reachable,
     willBounce: data.stats.willBounce,
     operators: data.stats.operators,
+    whatsapp: data.stats.whatsapp,
+    whatsappReachOnly: data.stats.whatsappOnly,
   };
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setEmailProvider(new Set()); setDnsTool(new Set()); setNotTrading(new Set()); setHideNotTrading(false); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + emailProvider.size + dnsTool.size + notTrading.size + (hideNotTrading ? 1 : 0) + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setEmailProvider(new Set()); setDnsTool(new Set()); setNotTrading(new Set()); setHideNotTrading(false); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setWhatsappOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + emailProvider.size + dnsTool.size + notTrading.size + (hideNotTrading ? 1 : 0) + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + (whatsappOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
@@ -477,7 +482,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
       theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
       activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), tech: arr(tech), hosting: arr(hosting),
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
-      reachable: reachableOnly || undefined, contactType: arr(contactType),
+      reachable: reachableOnly || undefined, whatsapp: whatsappOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
       grouped: groupedOnly || undefined, group: group?.id, groupLabel: group?.label,
       emailProvider: arr(emailProvider), dnsTool: arr(dnsTool), notTrading: arr(notTrading), hideNotTrading: hideNotTrading || undefined,
@@ -530,6 +535,13 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
           </button>
           <button onClick={() => setReachableOnly((p) => !p)} title="A named person's address, or a decision-maker's role mailbox — not the info@ queue" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${reachableOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${reachableOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> Reaches a person
+          </button>
+          {/* Sits next to "Reaches a person" because in our markets it is the same claim on a
+              different channel — not a weaker one. Tick both for stores reachable either way;
+              tick this with a Contact-quality facet of role_generic/form_only/none for the ones
+              where WhatsApp is the ONLY way in. */}
+          <button onClick={() => setWhatsappOnly((p) => !p)} title="A WhatsApp number published on the storefront — the channel an SA owner-operator actually answers" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${whatsappOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${whatsappOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> On WhatsApp
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet
@@ -633,6 +645,17 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                 {liveStats.email.toLocaleString()} with any email
                 {liveStats.willBounce > 0 && <> · <span className="text-orange/70">{liveStats.willBounce.toLocaleString()} will bounce</span></>}
               </div>
+              {/* The other channel, on the same tile, because it answers the same question the
+                  tile is there to answer: how many of these can I actually talk to. Null on an
+                  aggregate cached before this shipped (26h TTL), hence the guard. */}
+              {liveStats.whatsapp != null && liveStats.whatsapp > 0 && (
+                <div className="mt-0.5 text-[11px] text-cream/35">
+                  <span className="text-mint/80">{liveStats.whatsapp.toLocaleString()}</span> on WhatsApp
+                  {liveStats.whatsappReachOnly != null && liveStats.whatsappReachOnly > 0 && (
+                    <span title="No email that reaches a person — WhatsApp is the only way in"> · {liveStats.whatsappReachOnly.toLocaleString()} only there</span>
+                  )}
+                </div>
+              )}
             </div>
             <div className="rounded-3xl border border-cream/15 p-5">
               <div className="font-display text-4xl tabular-nums">{liveStats.shown.toLocaleString()}</div>
@@ -807,6 +830,10 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                           : l.contactEmailGuess
                             ? <span className="inline-flex items-center gap-1"><a href={`mailto:${l.contactEmailGuess}`} className="text-cyan/70 hover:underline">✉ {l.contactEmailGuess.length > 22 ? l.contactEmailGuess.slice(0, 22) + "…" : l.contactEmailGuess}</a><span className="rounded-full bg-orange/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-orange">pending</span></span>
                             : <span className="text-cream/25">no email</span>}
+                        {/* Was captured on every crawl and shown nowhere but the CSV. For a store
+                            with no email at all this is the whole contact, so it renders even when
+                            the email is missing — and as a wa.me link, which opens the chat. */}
+                        {l.whatsapp && <a href={`https://wa.me/${l.whatsapp.replace(/[^\d]/g, "")}`} target="_blank" rel="noopener noreferrer" title={`WhatsApp ${l.whatsapp}`} className="text-mint/80 hover:text-mint">WA</a>}
                         {l.instagram && <a href={`https://instagram.com/${l.instagram.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream">IG</a>}
                         {l.facebook && <span className="text-cream/40">FB</span>}
                         {l.tiktok && <span className="text-cream/40">TT</span>}
