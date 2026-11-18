@@ -294,8 +294,17 @@ async function main() {
         // spend a credit and, if it came back VALID, bolt a stranger's address onto the store.
         // A guess is only legitimate on the store's own domain or on the one its published
         // contact address already uses.
+        // Compare against the store's OWN domain and the domain of its CRAWLED contact address.
+        // Not against `dom`: when contact_email is null, `dom` is itself derived from the
+        // vendor-imported `email`, so a contaminated guess agreed with its own bad source and
+        // sailed through. edgars.co.za -> norman@stagheaddesigns.com passed this way.
+        // contact_email is read off the store's own pages, so it can vouch for a second domain
+        // (shop.kznsagallery.co.za legitimately mails as kznsagallery.co.za); the vendor field
+        // cannot vouch for anything.
         const gDom = g.split("@")[1];
-        const ok = gDom === dom || (existingDom && gDom === existingDom);
+        const ownDom = clean(r.domain);
+        const crawledDom = domainOf(r.contact_email);
+        const ok = gDom === ownDom || (crawledDom && gDom === crawledDom);
         if (!ok) {
           console.log(`  ~ ${r.domain}: stored guess ${g} is on an unrelated domain — skipped, not billed`);
           skipped++; continue;
