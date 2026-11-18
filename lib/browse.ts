@@ -18,6 +18,7 @@ import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
 import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
 import { ROW_CAP } from "./browse-limits";
+import { socialUrl } from "./social";
 
 export { ROW_CAP };
 
@@ -691,9 +692,13 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
       r.contact_mx_provider, r.contact_shared_count, r.contact_email_guess, r.contact_guess_status,
       r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),
       r.plugins, r.technologies,
-      r.instagram, r.instagram_followers == null ? null : Number(r.instagram_followers),
-      r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
-      r.tiktok, r.linkedin,
+      // Emit a usable profile URL where we can derive one, and the raw value otherwise — the
+      // column is ~70% full URLs and ~30% bare handles, and a CSV mixing the two is the same
+      // complaint as a mixed inbox. Falling back to the raw value rather than to blank means a
+      // Linktree or a shortener still ships; nothing is dropped, it is just not relabelled.
+      socialUrl(r.instagram as string, "instagram") ?? r.instagram, r.instagram_followers == null ? null : Number(r.instagram_followers),
+      socialUrl(r.facebook as string, "facebook") ?? r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
+      socialUrl(r.tiktok as string, "tiktok") ?? r.tiktok, socialUrl(r.linkedin as string, "linkedin") ?? r.linkedin,
       r.description, dayCell(r.first_product_at), dayCell(r.first_seen),
       r.migrated_from, dayCell(r.migrated_at),
       r.dns_email, list(r.dns_tools), list(r.dns_verified), r.nt_reason] as ExportCell[];

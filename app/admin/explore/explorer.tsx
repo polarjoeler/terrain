@@ -6,6 +6,7 @@ import { marketLabel } from "@/lib/markets";
 import { isOpenSource, platformLabel } from "@/lib/platforms";
 import { NOT_TRADING, emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import { scoreColor } from "@/lib/revenue";
+import { socialUrl } from "@/lib/social";
 import { bandTone, REVENUE_BANDS, bandDisplay, floorBand, type RevenueBand } from "@/lib/fx";
 // Value import from a LEAF module, never from lib/browse.ts: this is a client component and
 // that module pulls in postgres, which fails the bundle (tsc cannot see it; the build can).
@@ -875,9 +876,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                             with no email at all this is the whole contact, so it renders even when
                             the email is missing — and as a wa.me link, which opens the chat. */}
                         {l.whatsapp && <a href={`https://wa.me/${l.whatsapp.replace(/[^\d]/g, "")}`} target="_blank" rel="noopener noreferrer" title={`WhatsApp ${l.whatsapp}`} className="text-mint/80 hover:text-mint">WA</a>}
-                        {l.instagram && <a href={`https://instagram.com/${l.instagram.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream">IG</a>}
-                        {l.facebook && <span className="text-cream/40">FB</span>}
-                        {l.tiktok && <span className="text-cream/40">TT</span>}
+                {/* Same normalisation as the drawer (lib/social.ts): the stored value is a URL as
+                    often as a handle, and the old concatenation made a dead link of every URL.
+                    FB and TT were never linked at all — they are now, for free. */}
+                        {socialUrl(l.instagram, "instagram") && <a href={socialUrl(l.instagram, "instagram")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="Instagram">IG</a>}
+                        {socialUrl(l.facebook, "facebook") && <a href={socialUrl(l.facebook, "facebook")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="Facebook">FB</a>}
+                        {socialUrl(l.tiktok, "tiktok") && <a href={socialUrl(l.tiktok, "tiktok")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="TikTok">TT</a>}
                       </div>
                     </td>
                   </tr>
