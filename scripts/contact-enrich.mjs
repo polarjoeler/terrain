@@ -314,8 +314,16 @@ function socialsFrom(html) {
 }
 
 /** Visible text, scripts/styles stripped — what the name regexes and the local LLM read. */
+// Postgres text columns cannot hold 0x00, and a single one anywhere in a fetched page made the
+// ENTIRE row UPDATE throw — so the store lost its contact verdict AND its contact_checked_at
+// stamp, which put it back at the head of the queue to fail again the next night, for ever.
+// 116 domains were looping like that, one re-crawled 35 times, and one was hiding a real named
+// contact. Scrubbing here rather than at the write keeps every value DERIVED from the text clean
+// too, not just contact_text.
+const scrubText = (v) => (typeof v === "string" ? v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, " ") : v);
+
 function pageText(h) {
-  return h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+  return scrubText(h).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&")
     .replace(/&[a-z]{2,8};/gi, " ").replace(/\s+/g, " ").trim();
 }
@@ -873,7 +881,7 @@ async function main() {
       + `${NO_LLM || !LOCAL_LLM_URL ? "" : ` · local LLM ${LOCAL_LLM_MODEL}`}`);
 
     const tally = { named: 0, role_targeted: 0, role_generic: 0, form_only: 0, none: 0 };
-    let done = 0, unreachable = 0, named = 0, llmCalls = 0, rateLimitHits = 0, closed = 0;
+    let done = 0, unreachable = 0, named = 0, llmCalls = 0, rateLimitHits = 0, closed = 0, writeFailures = 0;
 
     let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, async () => {
@@ -953,12 +961,18 @@ async function main() {
               facebook          = COALESCE(facebook, ${r.socials.facebook ?? null}),
               tiktok            = COALESCE(tiktok, ${r.socials.tiktok ?? null}),
               contact_form_url  = COALESCE(${r.form ?? null}, contact_form_url),
-              contact_text      = COALESCE(${r.text || null}, contact_text),
+              contact_text      = COALESCE(${scrubText(r.text) || null}, contact_text),
               storefront_http   = ${r.storefrontHttp ?? null},
               storefront_checked_at = now(),
               contact_checked_at = now()
-            WHERE domain = ${store.domain}`.catch((e) => console.log(`  ! write ${store.domain}: ${e.message}`));
-          console.log(`✓ ${r.domain}  →  ${t}${r.best ? `  ${r.best.email}` : ""}${r.name ? `  (${r.name})` : ""}`);
+            WHERE domain = ${store.domain}`.then(() => {
+            console.log(`✓ ${r.domain}  →  ${t}${r.best ? `  ${r.best.email}` : ""}${r.name ? `  (${r.name})` : ""}`);
+          }, (e) => {
+            // The tick used to print unconditionally, outside the catch, so a run that saved
+            // nothing still looked clean and health-check never flagged it.
+            writeFailures++;
+            console.log(`  ! write ${store.domain}: ${e.message}`);
+          });
         }
         if (done % 25 === 0) console.log(`— ${done}/${rows.length}  named:${named}  unreachable:${unreachable}`);
       }
@@ -966,6 +980,9 @@ async function main() {
 
     const pct = (n) => (done ? `${Math.round((n / done) * 100)}%` : "0%");
     console.log(`\nDone. ${done} store(s), ${unreachable} unreachable, ${closed} closed storefronts (402/403/423), ${rateLimitHits} rate-limited (re-queued), ${llmCalls} local-LLM calls.`);
+    // A failed write leaves contact_checked_at unset, so the store returns to the head of the queue
+    // and burns the shared rate budget again next run. Say so loudly: this was silent for weeks.
+    if (writeFailures) console.log(`  !! ${writeFailures} write(s) FAILED — those stores kept no verdict and will be re-crawled. Investigate before the next run.`);
     if (rateLimitHits > done * 0.1) console.log("  ⚠ >10% rate-limited — raise --delay-ms, lower --concurrency, or check the proxy fleet.");
     console.log(`  named          ${String(tally.named).padStart(6)}  ${pct(tally.named)}   ← reaches a person`);
     console.log(`  role_targeted  ${String(tally.role_targeted).padStart(6)}  ${pct(tally.role_targeted)}   ← owner@/accounts@/press@`);
