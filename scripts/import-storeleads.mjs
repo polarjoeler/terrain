@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { canonicalApps } from "../lib/apps-canon.ts";
 import { normalizeCcy } from "../lib/fx.ts";
+import { applySchema } from "../lib/ensure-schema.ts";
 
 const SOURCE = "storeleads-2026-08";
 const BATCH = 150; // small batches keep each INSERT under Supabase's statement timeout
@@ -153,9 +154,14 @@ async function main() {
 
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 4 });
   try {
-    // Ensure the imported_stores rich columns exist (idempotent) before loading.
+    // Ensure the imported_stores rich columns exist before loading. GUARDED, not replayed:
+    // `ADD COLUMN IF NOT EXISTS` evaluates its IF NOT EXISTS while already HOLDING ACCESS
+    // EXCLUSIVE, so the whole of lib/schema.sql queues 143 no-op strong-lock requests on
+    // imported_stores and stalls every reader and writer behind them. applySchema reads the
+    // catalog first (no table lock) and runs only the statements that would change something.
     const ddl = readFileSync(new URL("../lib/schema.sql", import.meta.url), "utf8");
-    await sql.unsafe(ddl);
+    const { ran, skipped } = await applySchema(sql, ddl);
+    console.log(`  schema: ${ran} applied, ${skipped} already present`);
 
     // Resume: skip domains already imported under this source.
     const existing = new Set(

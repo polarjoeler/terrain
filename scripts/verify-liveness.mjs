@@ -22,6 +22,7 @@
 
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
+import { applySchema } from "../lib/ensure-schema.ts";
 
 const DEAD_AFTER = 2;
 const MIGRATE_AFTER = 2;   // consecutive reachable-but-not-Shopify checks before "migrated"
@@ -225,8 +226,19 @@ function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: Math.min(CONCURRENCY, 8) });
   try {
-    // Ensure the live_* columns exist (idempotent).
-    await sql.unsafe(readFileSync(new URL("../lib/schema.sql", import.meta.url), "utf8"));
+    // Ensure the live_* columns exist. GUARDED, not replayed: lib/schema.sql is 143 statements
+    // (90 ADD COLUMN, 19 CREATE TABLE, 34 CREATE INDEX) and `IF NOT EXISTS` is evaluated while
+    // already HOLDING ACCESS EXCLUSIVE, not before taking it — so applying the file raw queues 143
+    // no-op strong-lock requests on imported_stores, and a pending strong lock request blocks every
+    // lock requested after it. That stalls the enrichment scans and the web app behind a startup
+    // check that changes nothing (~83s per no-op ALTER under load, measured in #91/#92).
+    // applySchema reads the catalog first, which takes no lock on any of those tables, and runs
+    // only what is genuinely missing: 0 statements on an already-migrated database.
+    const schema = await applySchema(
+      sql,
+      readFileSync(new URL("../lib/schema.sql", import.meta.url), "utf8"),
+    );
+    if (schema.ran) console.log(`  schema: ${schema.ran} statement(s) applied, ${schema.skipped} already present`);
 
     const cutoff = new Date(Date.now() - MIN_AGE_DAYS * 864e5).toISOString();
     // --from-file <path>: re-check exactly this domain list (one per line), ignoring the value-rank

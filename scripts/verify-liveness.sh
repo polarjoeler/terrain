@@ -25,10 +25,16 @@ source "$HOME/storepulse/scripts/lib/markets.sh"
 node --env-file=.env.local scripts/heartbeat.mjs verify-liveness "starting" >/dev/null 2>&1 || true
 echo "===== verify-liveness $(date '+%F %T') ====="
 
+# verify-liveness.mjs imports lib/ensure-schema.ts for the guarded schema apply. Node strips the
+# types fine, but warns once per run that lib/ carries no "type": "module" — a 4-line block on
+# stderr that would otherwise land in verify-liveness.err.log every 12h and train us to ignore that
+# log. ONE warning is disabled by name, not all of them (contrast --no-warnings in build-priority.sh):
+# a real node warning out of this lane still has to be visible.
 # NOT wrapped in `|| echo`. Step 7 of radar-pipeline.sh was, which meant a failing liveness step
 # left the pipeline reporting success — the failure mode that hid this lane dying for three weeks.
 # A non-zero exit here is visible to launchctl and to the hourly health check.
-node --env-file=.env.local scripts/verify-liveness.mjs \
+node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+  --env-file=.env.local scripts/verify-liveness.mjs \
   --country "$MARKETS" --min-age-days 7 --limit 300 --concurrency 4
 rc=$?
 

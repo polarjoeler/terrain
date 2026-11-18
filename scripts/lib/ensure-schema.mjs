@@ -12,9 +12,14 @@
  *
  * Reading information_schema takes no lock on the table at all. Check first, ALTER only what is
  * genuinely missing — which, after the first run, is nothing. Real migrations still run.
+ *
+ * SCOPE. This module is for a script that knows its own columns as a literal map — the common case
+ * in the lanes. A script that applies lib/schema.sql as TEXT wants `applySchema` from
+ * lib/ensure-schema.ts instead: it guards CREATE TABLE and CREATE INDEX as well as ADD COLUMN, and
+ * owns the only statement splitter in the repo. An `.mjs` script imports it directly, the way
+ * scripts/build-priority.mjs imports lib/fx.ts. Do NOT grow a second splitter or a second guard
+ * here — two write paths that must agree are how the contact and LinkedIn lanes drifted apart.
  */
-
-const ADD_COLUMN = /^\s*ALTER\s+TABLE\s+([a-z_][a-z0-9_]*)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_]*)/i;
 
 async function presentColumns(sql, tables) {
   const rows = await sql`
@@ -41,23 +46,4 @@ export async function ensureColumns(sql, table, columns) {
     await sql.unsafe(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col} ${columns[col]}`);
   }
   return missing.length;
-}
-
-/**
- * Run a list of DDL statements, skipping the ADD COLUMN ones whose column already exists.
- * Anything that isn't an ADD COLUMN (SET/RESET, CREATE TABLE, CREATE INDEX) passes through
- * untouched and in order, so an existing DDL array can be handed over as-is.
- */
-export async function ensureSchema(sql, ddl) {
-  const parsed = ddl.map((q) => ({ q, m: ADD_COLUMN.exec(q) }));
-  const tables = [...new Set(parsed.filter((p) => p.m).map((p) => p.m[1].toLowerCase()))];
-  const have = tables.length ? await presentColumns(sql, tables) : new Map();
-  let ran = 0;
-  let skipped = 0;
-  for (const { q, m } of parsed) {
-    if (m && have.get(m[1].toLowerCase())?.has(m[2].toLowerCase())) { skipped++; continue; }
-    await sql.unsafe(q);
-    ran++;
-  }
-  return { ran, skipped };
 }
