@@ -5,6 +5,7 @@ import { db as sharedDb } from "./db";
 import { getStoreGroup, type StoreGroup } from "./store-groups";
 import { getStoreBrands, type StoreBrand } from "./brands";
 import { sideTables } from "./browse";
+import { bandSqlExpr } from "./fx";
 
 function db() {
   return sharedDb();
@@ -44,8 +45,14 @@ export type LeadDetail = {
   /** CrUX traffic-rank bucket, the CrUX month it is from (so the drawer can show how fresh the
    *  ranking is) and the move since the previous month we hold. */
   crux_rank: number | null; crux_rank_month: string | null; crux_trend: string | null;
-  /** Ballpark revenue band + its confidence (see scripts/revenue-ballpark.mjs). */
-  revenue_band: string | null; revenue_confidence: string | null;
+  /** The store's revenue band, DERIVED by bandSqlExpr() off revExpr() — the very expression the
+   *  Explorer pill, the band filter, the facets and the CSV already use, so the drawer cannot name a
+   *  different band than the row that was clicked. It deliberately does NOT read the `revenue_band`
+   *  COLUMN: that holds a free-text +/-2x string the ballpark script writes ("R485k-R1.9m"), which
+   *  straddles two or three canonical bands and so can never agree with the pill.
+   *  `revenue_ballpark_usd` says whether the MODEL priced this store at all, which is what the
+   *  drawer gates the ballpark card (and the raw-estimate fallback) on. */
+  revenue_band: string | null; revenue_confidence: string | null; revenue_ballpark_usd: string | null;
   /** Set by /api/lead: the viewer is an admin (may edit; sees vendor estimates). */
   canEdit?: boolean;
   /** Curated tags (store_tags) — shown + editable in the admin drawer. */
@@ -107,7 +114,8 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            instagram, facebook, tiktok, instagram_followers, facebook_followers,
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
            source, live_status, migrated_from, migrated_at,
-           crux_rank, crux_rank_month, crux_trend, revenue_band, revenue_confidence,
+           crux_rank, crux_rank_month, crux_trend, revenue_confidence, revenue_ballpark_usd,
+           ${sql.unsafe(bandSqlExpr())} AS revenue_band,
            COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags,
            ${side.dns ? sql`(SELECT to_jsonb(x) FROM (SELECT email_provider, tools, verified, checked_at, gone
               FROM store_dns sd WHERE sd.domain = imported_stores.domain) x)` : sql`NULL::jsonb`} AS dns_raw,

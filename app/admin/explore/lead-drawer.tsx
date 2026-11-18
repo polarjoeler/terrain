@@ -6,7 +6,7 @@ import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
 import { isOpenSource } from "@/lib/platforms";
 import { NOT_TRADING, dnsStackTools, emailProviderLabel } from "@/lib/store-signals";
-import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, toUsd, type RevenueBand } from "@/lib/fx";
+import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, floorBand, toUsd, type RevenueBand } from "@/lib/fx";
 import { updateStore, type StorePatch } from "./store-edit-action";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
@@ -216,7 +216,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
     // A manual revenue drops the modeled price (see store-edit-action), so the read-only "Ballpark
     // revenue" row below has to go with it rather than keep showing the model's range.
     const revChanged = (patch.estimated_monthly_sales ?? null) !== (data.estimated_monthly_sales ?? null);
-    setData({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null } : {}), name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
+    setData({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null, revenue_ballpark_usd: null } : {}), name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
     setEditing(false);
   }
 
@@ -235,14 +235,24 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
     handle ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">{handle}{followers ? ` · ${followers.toLocaleString()}` : ""}</a> : null;
 
   const conf = (c: string | null) => c === "good" ? "text-mint" : c === "medium" ? "text-orange-soft" : "text-cream/40";
+  // The Explorer floors the band it DISPLAYS for the curated cohorts (explorer.tsx -> floorBand), so a
+  // top-100 store can list a band above the one its figure derives. The drawer is the stewardship
+  // view and shows the real band, then names the listed one — otherwise clicking a row that reads
+  // "R10m-R25m" opens a drawer reading "R1m-R2.5m" with nothing to explain the jump.
+  const cohort = data?.tags?.includes("top-100") ? "top100" as const : data?.tags?.includes("top-500") ? "top500" as const : null;
+  const listedBand = data?.revenue_band && cohort ? floorBand(data.revenue_band as RevenueBand, cohort) : null;
+  const floored = listedBand && listedBand !== data?.revenue_band ? listedBand : null;
   const trend = (t: string | null) => t === "up" ? "text-mint" : t === "down" ? "text-orange" : "text-cyan";
   const stats = data ? ([
-    data.revenue_band && { label: "Ballpark revenue", accent: "mint", value: String(data.revenue_band),
-      sub: data.revenue_confidence ? <span className={conf(data.revenue_confidence)}>{data.revenue_confidence} confidence</span> : undefined },
+    data.revenue_ballpark_usd != null && data.revenue_band && { label: "Ballpark revenue", accent: "mint", value: String(data.revenue_band),
+      sub: (data.revenue_confidence || floored) ? <>
+        {data.revenue_confidence && <span className={conf(data.revenue_confidence)}>{data.revenue_confidence} confidence</span>}
+        {floored && <span className="text-cream/40">{data.revenue_confidence ? " · " : ""}listed as {floored}</span>}
+      </> : undefined },
     // The imported vendor sales estimate often contradicts the traffic-based ballpark (Keedo:
     // R6k–R23k vs R195k), so customers get the ballpark; the estimate is an admin cross-check, or the
     // fallback when there's no ballpark at all.
-    data.estimated_monthly_sales != null && (data.canEdit || !data.revenue_band) && { label: "Monthly sales", accent: "cyan", value: money(data.estimated_monthly_sales, data.currency)!,
+    data.estimated_monthly_sales != null && (data.canEdit || data.revenue_ballpark_usd == null) && { label: "Monthly sales", accent: "cyan", value: money(data.estimated_monthly_sales, data.currency)!,
       sub: data.est_revenue_usd != null ? `≈ ${money(data.est_revenue_usd, "$")}` : "estimate" },
     data.crux_rank != null && { label: "Traffic", accent: "lilac", value: rankLabel(Number(data.crux_rank)),
       sub: <>{data.crux_trend && data.crux_trend !== "flat" && <span className={`mr-1.5 ${trend(data.crux_trend)}`}>{data.crux_trend === "up" ? "▲" : data.crux_trend === "down" ? "▼" : "●"} {data.crux_trend}</span>}{data.crux_rank_month ? `Chrome UX · ${monthLabel(String(data.crux_rank_month))}` : "Chrome UX"}</> },
