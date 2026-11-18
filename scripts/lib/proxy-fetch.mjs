@@ -134,12 +134,22 @@ export function fetchText(url, opts = {}) {
           if (n <= maxBytes) chunks.push(c);
           else res.destroy();            // pathological page — keep what we have
         });
-        const done = () => resolve({
-          status: res.statusCode ?? 0,
-          url,
-          contentType: String(res.headers["content-type"] ?? ""),
-          text: Buffer.concat(chunks).toString("utf8"),
-        });
+        const done = () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          return resolve({
+            status: res.statusCode ?? 0,
+            url,
+            contentType: String(res.headers["content-type"] ?? ""),
+            // A NUL is never meaningful in a text body — it means binary or UTF-16 served as
+            // text/html, or a truncated template. Postgres rejects \u0000 in BOTH text and jsonb,
+            // and the error aborts the whole statement, so one stray byte in banked page text costs
+            // every other column the lane just earned: 362 such write failures across the contact
+            // lane's logs by 2026-11-18, ~20/day, each one a store that stayed un-enriched. Stripped
+            // here, at the single place every lane decodes a body, rather than in each writer.
+            // Conditional because .replaceAll always allocates, and this runs on every fetch.
+            text: body.includes("\u0000") ? body.replaceAll("\u0000", "") : body,
+          });
+        };
         res.on("end", done);
         res.on("close", done);
         res.on("error", done);
