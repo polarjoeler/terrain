@@ -29,9 +29,12 @@ const [t] = await sql`SELECT
 //   cert           — cert-launch, written every run before it touches crt.sh — so we can tell
 //                    "the job ran" apart from "the job produced data" (the catalog/launch check below).
 //   focus-liveness — the Tier-B ZA/KE/NG re-check lane, written by scripts/focus-liveness-cron.sh.
+//   verify-liveness — the HTTP-grade lane, written by scripts/verify-liveness.sh.
 const [hb] = await sql`SELECT max(last_run) FILTER (WHERE task = 'cert') cert,
-  max(last_run) FILTER (WHERE task = 'focus-liveness') focus_live
-  FROM agent_heartbeat WHERE task IN ('cert', 'focus-liveness')`.catch(() => [{ cert: null, focus_live: null }]);
+  max(last_run) FILTER (WHERE task = 'focus-liveness') focus_live,
+  max(last_run) FILTER (WHERE task = 'verify-liveness') verify_live
+  FROM agent_heartbeat WHERE task IN ('cert', 'focus-liveness', 'verify-liveness')`
+  .catch(() => [{ cert: null, focus_live: null, verify_live: null }]);
 const rule = (name, ageMin, limitMin) => add(name, ageMin != null && ageMin <= limitMin,
   ageMin == null ? "never" : `last write ${ageMin < 60 ? ageMin + "m" : Math.round(ageMin / 60) + "h"} ago (limit ${Math.round(limitMin / 60)}h)`);
 rule("payments-probe", mins(t.pay), 150);      // hourly job → stale past ~2.5h
@@ -50,6 +53,11 @@ add("liveness", mins(t.live) != null && mins(t.live) <= 60 * 30, mins(t.live) ==
 // and meta-identify also write — so this lane could stop entirely with the board still green. Keyed
 // on its own heartbeat instead. 6-hourly → stale past ~13h (one missed run plus margin).
 rule("focus-liveness", mins(hb?.focus_live), 60 * 13);
+// verify-liveness (Rex, 12-hourly) is the other half, and the "liveness" check above cannot see it
+// die either — for the same reason, from the other side: focus-liveness alone keeps
+// max(live_checked_at) fresh. It is the only lane that finds frozen 402s and confirmed migrations,
+// and the only churn_log writer, so its silence is the expensive one. 12-hourly → stale past 26h.
+rule("verify-liveness", mins(hb?.verify_live), 60 * 26);
 // Discovery health = are NEW rows actually landing? Use created_at, a real insert timestamp.
 // NOT discovered_at — that's a DATE (day granularity), so max(discovered_at) always reads 0-24h
 // old regardless of whether anything is landing, and never signals a real stall (an earlier
