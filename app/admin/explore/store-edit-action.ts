@@ -18,11 +18,28 @@ export type StorePatch = {
   contact_name?: string | null;
   contact_email?: string | null;
   contact_role?: string | null;
+  // Reach channels + descriptive fields. Lanes fill these only when empty (COALESCE-if-null), and the
+  // contact lane leaves every channel alone once contact_source='manual', so a hand edit sticks.
+  contact_phone?: string | null;
+  whatsapp?: string | null;
+  contact_form_url?: string | null;
+  linkedin?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
+  category?: string | null;
+  city?: string | null;
+  plus?: boolean;
   tags?: string[];
 };
 
-const SCALARS = ["country", "platform", "published", "name", "estimated_monthly_sales", "contact_name", "contact_email", "contact_role"] as const;
-const CONTACT_FIELDS = ["contact_name", "contact_email", "contact_role"] as const;
+const SCALARS = ["country", "platform", "published", "plus", "name", "category", "city", "estimated_monthly_sales",
+  "contact_name", "contact_email", "contact_role", "contact_phone", "whatsapp", "contact_form_url",
+  "linkedin", "instagram", "facebook", "tiktok"] as const;
+const BOOLEANS = new Set<string>(["published", "plus"]);
+// Any of these edited → contact_source='manual', which scripts/contact-enrich.mjs treats as "a human
+// owns this contact record" and stops overwriting.
+const CONTACT_FIELDS = ["contact_name", "contact_email", "contact_role", "contact_phone", "whatsapp", "contact_form_url", "linkedin"] as const;
 
 let tablesReady = false;
 async function ensureTables(sql: ReturnType<typeof db>) {
@@ -43,7 +60,7 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   await ensureTables(sql);
 
   const [cur] = await sql<Record<string, unknown>[]>`
-    SELECT country, platform, published, name, estimated_monthly_sales, contact_name, contact_email, contact_role
+    SELECT ${sql(SCALARS as unknown as string[])}
     FROM imported_stores WHERE domain = ${d} LIMIT 1`;
   if (!cur) return { error: "not_found" };
 
@@ -53,13 +70,17 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
 
   for (const f of SCALARS) {
     if (!(f in patch)) continue;
-    if (f === "published") {
-      const nv = Boolean(patch.published);
-      if (Boolean(cur.published) === nv) continue;
+    if (BOOLEANS.has(f)) {
+      const nv = Boolean((patch as Record<string, unknown>)[f]);
+      if (Boolean(cur[f]) === nv) continue;
       set[f] = nv;
-      audits.push({ field: f, old: String(Boolean(cur.published)), new: String(nv) });
+      audits.push({ field: f, old: String(Boolean(cur[f])), new: String(nv) });
     } else {
-      const nv = norm((patch as Record<string, unknown>)[f]);
+      let nv = norm((patch as Record<string, unknown>)[f]);
+      // Store numbers the way the lanes do (digits only, leading + kept) so wa.me links and the
+      // WhatsApp/phone facets keep working on a hand-typed "+27 82 123 4567".
+      if (nv && (f === "whatsapp" || f === "contact_phone")) nv = nv.replace(/(?!^\+)[^\d]/g, "") || null;
+      if (nv && f === "country") nv = nv.toUpperCase();
       const ov = norm(cur[f]);
       if (ov === nv) continue;
       set[f] = nv;

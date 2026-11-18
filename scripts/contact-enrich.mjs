@@ -766,8 +766,9 @@ async function main() {
       return;
     }
     if (REVALIDATE) {
+      // A name an admin typed (contact_source='manual') is not the validator's to judge.
       const rows = await sql`SELECT domain, contact_name, contact_name_source, contact_email, email
-        FROM imported_stores WHERE contact_name IS NOT NULL`;
+        FROM imported_stores WHERE contact_name IS NOT NULL AND contact_source IS DISTINCT FROM 'manual'`;
       let kept = 0, dropped = 0;
       const bySource = new Map();
       for (const r of rows) {
@@ -937,22 +938,27 @@ async function main() {
         if (DRY) {
           console.log(`● ${r.domain}  ${t.padEnd(13)} ${r.best?.email ?? "-"}  name=${r.name ?? "-"}${r.nameSource ? `(${r.nameSource})` : ""}  wa=${r.wa ?? "-"}  [${r.fetches}f]`);
         } else {
+          // contact_source='manual' = an admin set this store's contact in the lead drawer
+          // (app/admin/explore/store-edit-action.ts). The crawl still refreshes the ranked `contacts`
+          // list and its bookkeeping, but every field the admin owns keeps the human value — even
+          // under --overwrite, which exists to undo EXTRACTOR bugs, not hand corrections.
+          const own = (crawled, col) => sql`CASE WHEN contact_source = 'manual' THEN ${sql(col)} ELSE ${crawled} END`;
           await sql`
             UPDATE imported_stores SET
               contacts          = ${r.contacts.length ? sql.json(r.contacts) : null},
-              contact_type      = ${t},
-              contact_email     = ${r.best?.email ?? null},
-              contact_source    = ${r.best?.source ?? null},
-              contact_name      = ${OVERWRITE ? sql`${r.name ?? null}` : sql`COALESCE(${r.name ?? null}, contact_name)`},
-              contact_name_source = ${OVERWRITE ? sql`${r.nameSource ?? null}` : sql`COALESCE(${r.nameSource ?? null}, contact_name_source)`},
-              contact_role      = ${OVERWRITE ? sql`${r.role ?? null}` : sql`COALESCE(${r.role ?? null}, contact_role)`},
-              contact_phone     = COALESCE(${r.phone ?? null}, contact_phone),
-              whatsapp          = COALESCE(${r.wa ?? null}, whatsapp),
-              linkedin          = COALESCE(${r.socials.linkedin ?? null}, linkedin),
+              contact_type      = ${own(sql`${t}`, "contact_type")},
+              contact_email     = ${own(sql`${r.best?.email ?? null}`, "contact_email")},
+              contact_source    = ${own(sql`${r.best?.source ?? null}`, "contact_source")},
+              contact_name      = ${own(OVERWRITE ? sql`${r.name ?? null}` : sql`COALESCE(${r.name ?? null}, contact_name)`, "contact_name")},
+              contact_name_source = ${own(OVERWRITE ? sql`${r.nameSource ?? null}` : sql`COALESCE(${r.nameSource ?? null}, contact_name_source)`, "contact_name_source")},
+              contact_role      = ${own(OVERWRITE ? sql`${r.role ?? null}` : sql`COALESCE(${r.role ?? null}, contact_role)`, "contact_role")},
+              contact_phone     = ${own(sql`COALESCE(${r.phone ?? null}, contact_phone)`, "contact_phone")},
+              whatsapp          = ${own(sql`COALESCE(${r.wa ?? null}, whatsapp)`, "whatsapp")},
+              linkedin          = ${own(sql`COALESCE(${r.socials.linkedin ?? null}, linkedin)`, "linkedin")},
               instagram         = COALESCE(instagram, ${r.socials.instagram ?? null}),
               facebook          = COALESCE(facebook, ${r.socials.facebook ?? null}),
               tiktok            = COALESCE(tiktok, ${r.socials.tiktok ?? null}),
-              contact_form_url  = COALESCE(${r.form ?? null}, contact_form_url),
+              contact_form_url  = ${own(sql`COALESCE(${r.form ?? null}, contact_form_url)`, "contact_form_url")},
               contact_text      = COALESCE(${r.text || null}, contact_text),
               storefront_http   = ${r.storefrontHttp ?? null},
               storefront_checked_at = now(),

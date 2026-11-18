@@ -112,8 +112,9 @@ async function main() {
         await sql`UPDATE imported_stores SET
                     logistics_apps = ${r.logistics ?? null},
                     theme = COALESCE(${cleanTheme ?? null}, theme),
-                    contact_email = COALESCE(${r.email ?? null}, contact_email),
-                    contact_phone = COALESCE(${r.phone ?? null}, contact_phone),
+                    -- an admin-owned contact (lead drawer edit) keeps its hand-entered values
+                    contact_email = CASE WHEN contact_source = 'manual' THEN contact_email ELSE COALESCE(${r.email ?? null}, contact_email) END,
+                    contact_phone = CASE WHEN contact_source = 'manual' THEN contact_phone ELSE COALESCE(${r.phone ?? null}, contact_phone) END,
                     logistics_checked_at = now()
                   WHERE domain = ${domain}`;
         if (r.logistics) found++;
