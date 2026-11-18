@@ -87,7 +87,9 @@ async function main() {
     if (DRY) return;
     const res = await sql`UPDATE imported_stores s SET launched_at = t.day, launched_source = 'shop_id'
       FROM (${target}) t
-      WHERE s.domain = t.domain AND t.day IS NOT NULL AND s.launched_at IS DISTINCT FROM t.day`;
+      WHERE s.domain = t.domain AND t.day IS NOT NULL
+        -- also relabel a 'cert' placeholder that happens to carry the same day (188 rows on the first run)
+        AND (s.launched_at IS DISTINCT FROM t.day OR s.launched_source IS DISTINCT FROM 'shop_id')`;
     console.log(`stamped ${res.count.toLocaleString()} rows.`);
   } finally { await sql.end(); }
 }
