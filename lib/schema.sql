@@ -105,6 +105,15 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS migrated_from TEXT;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS migrated_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_checked_at TIMESTAMPTZ;
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL DEFAULT 0;
+-- verify-liveness's OWN clock, and the reason it needs one. live_checked_at is written by EVERY
+-- liveness lane, including the DNS-only ones (focus-liveness, dns-liveness, meta-identify), whose
+-- check is far weaker: DNS resolution proves a domain answers, not that a storefront is selling.
+-- With one shared clock a DNS pass marked ~18,700 focus stores "checked" and hid them from
+-- verify-liveness's --min-age-days gate — the only lane that detects frozen (402) stores and
+-- confirmed migrations. Written by verify-liveness alone, so its queue is gated on its own work.
+-- Deliberately NOT indexed: the predicate (IS NULL OR < cutoff) matches most of the table, so the
+-- planner would ignore the index while every liveness write still paid to maintain it.
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS verified_checked_at TIMESTAMPTZ;
 -- First time a liveness check CONFIRMED this store live. A death only counts as
 -- real (forward) churn if this is set before it — otherwise the store was dead at
 -- first contact (e.g. a bulk-imported old site) and its death is HISTORIC, not churn.

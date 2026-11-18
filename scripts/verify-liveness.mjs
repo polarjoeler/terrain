@@ -9,8 +9,17 @@
  *   active   — /products.json serves a catalogue (live Shopify)
  *   migrated — reachable, and positively identified as a DIFFERENT platform than we recorded
  *   dead     — unreachable across 2 consecutive checks, or a FROZEN (402) storefront on one
- * Resumable: skips anything checked within --min-age-days — except a store carrying a banked 402
- * from contact-enrich, which jumps the queue (see FROZEN-FIRST below).
+ * Resumable: skips anything THIS LANE checked within --min-age-days — except a store carrying a
+ * banked 402 from contact-enrich, which jumps the queue (see FROZEN-FIRST below).
+ *
+ * THIS LANE's clock is verified_checked_at, not live_checked_at. 13 scripts write
+ * live_checked_at, most of them asking a far weaker question — a DNS answer proves a domain
+ * resolves, not that a storefront sells — so 18,349 published focus-market stores were reading as
+ * "checked within 7 days" and hiding from the queue below, which is the only one that sees frozen
+ * 402s and confirmed migrations. Measured 2026-11-18: NONE of this lane's top 600 stores by
+ * store_priority was due, on a 7-day gate, because other lanes refresh the shared clock on them
+ * every ~3 days. FROZEN-FIRST below is the same bug met from the other side, for the 402 subset.
+ * Both columns are still stamped on every check here.
  *
  * SHOPIFY-ONLY, and the queue enforces it. The liveness signal here IS /products.json, which only
  * Shopify serves — so a WooCommerce store cannot pass the `active` test no matter how healthy it
@@ -23,6 +32,7 @@
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { applySchema } from "../lib/ensure-schema.ts";
+import { logChurn } from "./lib/churn.mjs";
 
 const DEAD_AFTER = 2;
 const MIGRATE_AFTER = 2;   // consecutive reachable-but-not-Shopify checks before "migrated"
@@ -269,7 +279,7 @@ async function main() {
     } else {
       rows = await sql`
         SELECT domain, live_miss, platform FROM imported_stores
-        WHERE published AND (live_checked_at IS NULL OR live_checked_at < ${cutoff})
+        WHERE published AND (verified_checked_at IS NULL OR verified_checked_at < ${cutoff})
           -- Shopify (or not yet classified) only: see the SHOPIFY-ONLY note in the header. Without
           -- this the queue holds ~58,000 non-Shopify stores in the sold markets — 46,339 of them
           -- WooCommerce, the half Partner is sold on — every one of which this probe would read as
@@ -349,6 +359,9 @@ async function main() {
             live_platform = ${res.platform},
             live_miss = ${miss},
             live_checked_at = now(),
+            -- ...and our own clock, which only this lane writes, so the queue above can tell
+            -- "nobody has HTTP-verified this store" from "a DNS lane touched it yesterday".
+            verified_checked_at = now(),
             -- Stamp the first time we CONFIRM this store live (never overwrite it).
             -- This is the anchor that separates real churn from historic die-off.
             first_verified_live_at = CASE WHEN ${status} = 'active'
@@ -360,24 +373,11 @@ async function main() {
           WHERE domain = ${domain}`;
         // Snapshot into the churn log the moment a store is confirmed gone — including a MOVE, which
         // is still churn for the platform it left even though the store lives on. `status` here is
-        // the classifier's verdict, not the live_status we just wrote.
-        //
-        // preserving what it was using. First churn wins (ON CONFLICT DO NOTHING).
-        // `historic` = we never verified it live before it died (dead at first
-        // contact, e.g. a bulk-imported old site) → excluded from period churn.
+        // the classifier's verdict, not the live_status we just wrote (a move writes 'active').
+        // The INSERT itself lives in scripts/lib/churn.mjs, shared with focus-liveness, which also
+        // confirms deaths (by DNS); the domain PK means whichever lane gets there first logs it once.
         if (status === "dead" || status === "migrated") {
-          await sql`
-            INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
-              discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus, historic, died_at)
-            SELECT domain, name, country, ${status}, ${res.platform}, first_seen,
-              discovered_at, category, theme, city, estimated_monthly_sales, payments,
-              shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL),
-              -- Real death date estimate = last time we confirmed it live. NULL when we never
-              -- did (undatable die-off) → excluded from period churn on the market's clock.
-              last_alive_at
-            FROM imported_stores WHERE domain = ${domain}
-            ON CONFLICT (domain) DO NOTHING`;
+          await logChurn(sql, domain, status, res.platform);
         }
         return true;
       } catch (e) {

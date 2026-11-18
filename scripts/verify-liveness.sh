@@ -1,5 +1,8 @@
 #!/bin/bash
-# Liveness verification — and the ONLY thing that writes churn_log.
+# Liveness verification — the HTTP-grade lane, and the one that detects frozen 402s and confirmed
+# migrations. It writes churn_log through scripts/lib/churn.mjs, which focus-liveness (DNS-only,
+# on Lucy) now shares: churn_log's domain PK + ON CONFLICT DO NOTHING means whichever lane
+# confirms a death first logs it once, and the other cannot double-count it.
 #
 # WHY THIS EXISTS AS ITS OWN JOB. verify-liveness.mjs used to be step 7/7 of radar-pipeline.sh.
 # That pipeline is not loaded on Rex (no com.tembo.radar-pipeline in launchctl, and no plist for it

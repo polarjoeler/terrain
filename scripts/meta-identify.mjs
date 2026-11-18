@@ -36,8 +36,9 @@
  * live_miss+1, 'dead' once it reaches DEAD_AFTER (2) consecutive misses. The second observation
  * comes from the retry tier, which re-fetches gone rows at live_miss=1 a day later. Reachable but
  * not Shopify (html_at_meta / dns_off_shopify) is NOT churned — same guard as verify-liveness.
- * Every flip gets a churn_log row in verify-liveness's shape (historic = never verified live, so
- * it stays out of period churn). --backfill-liveness applies this to misses stamped before it
+ * Every flip gets a churn_log row through scripts/lib/churn.mjs, the one writer shared with
+ * verify-liveness and focus-liveness (historic = never verified live, so it stays out of period
+ * churn). live_miss is shared too, so the three lanes' misses confirm each other. --backfill-liveness applies this to misses stamped before it
  * existed, with no fetching. Undo: live_status back to NULL/active where country_source LIKE
  * 'meta_miss:%' AND live_status='dead', plus the matching churn_log rows.
  *
@@ -48,6 +49,7 @@
 import postgres from "postgres";
 import { Resolver } from "node:dns/promises";
 import { loadProxies, pickProxy, fetchText, closeAgents } from "./lib/proxy-fetch.mjs";
+import { logChurn } from "./lib/churn.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "12000"), 10);
@@ -167,16 +169,10 @@ async function main() {
           RETURNING domain, live_status`;
         flipped.push(...r.filter((x) => x.live_status === "dead").map((x) => x.domain));
       }
-      // Same snapshot verify-liveness writes. historic = never verified live → out of period churn.
-      if (flipped.length) await sql`
-        INSERT INTO churn_log (domain, name, country, status, migrated_to, first_seen,
-          discovered_at, category, theme, city, estimated_monthly_sales, payments,
-          shipping_providers, free_shipping, plus, historic, died_at)
-        SELECT domain, name, country, 'dead', NULL, first_seen,
-          discovered_at, category, theme, city, estimated_monthly_sales, payments,
-          shipping_providers, free_shipping, plus, (first_verified_live_at IS NULL), last_alive_at
-        FROM imported_stores WHERE domain = ANY(${flipped})
-        ON CONFLICT (domain) DO NOTHING`;
+      // Same snapshot verify-liveness writes, and now literally the same statement:
+      // scripts/lib/churn.mjs, shared by this lane, verify-liveness and focus-liveness. Still one
+      // bulk INSERT for the whole flush. historic = never verified live → out of period churn.
+      await logChurn(sql, flipped, "dead");
       return flipped.length;
     }
 
