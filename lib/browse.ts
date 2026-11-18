@@ -46,6 +46,11 @@ const REACHABLE_TYPES = ["named", "role_targeted"] as const;
  *  IS NOT FALSE rather than = true. (scripts/contact-mx.mjs) */
 const DELIVERABLE = "contact_mx_ok IS NOT FALSE";
 
+/** Hard ceiling on rows returned by ONE browse request. The Explorer must page with `offset`
+ *  past this, not ask for a bigger window: it is exported so the client cannot drift from it and
+ *  sit there offering a "Load more" that the server will silently clamp away. */
+export const ROW_CAP = 1000;
+
 export type SortKey = "new" | "score" | "sales" | "sales_asc" | "name" | "name_desc" | "traffic" | "catalog" | "launched" | "discovered";
 
 export type BrowseFilters = {
@@ -408,7 +413,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   const launchSel = sql.unsafe(
     `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
   );
-  const limit = Math.min(f.limit ?? 50, 1000);
+  const limit = Math.min(f.limit ?? 50, ROW_CAP);
   const offset = f.offset ?? 0;
   // Unknown keys (an old saved list, a hand-edited request) fall back to the default order.
   const order = sql.unsafe(ORDER[f.sort as SortKey] ?? ORDER.new);
