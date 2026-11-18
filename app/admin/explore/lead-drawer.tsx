@@ -140,6 +140,83 @@ const ACCENT: Record<string, { text: string; bar: string }> = {
   mint: { text: "text-mint", bar: "bg-mint" }, cyan: { text: "text-cyan", bar: "bg-cyan" },
   lilac: { text: "text-lilac", bar: "bg-lilac" }, orange: { text: "text-orange", bar: "bg-orange" },
 };
+/** The edit form's text inputs, grouped the way someone fills them in rather than the order the
+ *  columns happen to sit in. Tuple is [form key, label, placeholder]. */
+const TEXT_FIELDS = {
+  identity: [
+    ["name", "Name", "Tekkie Town"],
+    ["country", "Country", "ZA \u00b7 2-letter ISO"],
+    ["city", "City", "Cape Town"],
+    ["category", "Category", "Apparel"],
+  ],
+  commercial: [
+    ["platform", "Platform", "Shopify / WooCommerce / \u2026"],
+    ["currency", "Currency", "ZAR \u00b7 3-letter ISO 4217"],
+    ["revenue", "Monthly sales", "figure in the store's own currency"],
+  ],
+  contact: [
+    ["contactName", "Contact name", "Luca Bronkowski"],
+    ["contactRole", "Contact role", "Founder"],
+    ["contactEmail", "Contact email", "luca@tekkietown.co.za"],
+    ["contactPhone", "Phone", "+27 21 555 0100"],
+    ["contactForm", "Contact form", "https://\u2026/pages/contact"],
+  ],
+  channels: [
+    ["whatsapp", "WhatsApp", "+27821234567"],
+    ["linkedin", "LinkedIn", "company handle or full URL"],
+    ["instagram", "Instagram", "handle, no @"],
+    ["facebook", "Facebook", "page handle"],
+    ["tiktok", "TikTok", "handle, no @"],
+    ["tagsText", "Tags", "comma-separated"],
+  ],
+} as const;
+
+/** Section rule inside the edit card — the form is long enough now that unlabelled rows read as
+ *  one undifferentiated list. */
+function EditGroup({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline gap-2 pt-2 first:pt-0">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan/70">{title}</span>
+      {hint && <span className="text-[10px] text-cream/30">{hint}</span>}
+      <span className="h-px flex-1 bg-cream/10" />
+    </div>
+  );
+}
+
+/** One labelled text input bound to a form key. */
+function EditText<T extends Record<string, unknown>>(
+  { k, label, ph, form, setForm }:
+  { k: string; label: string; ph?: string; form: T; setForm: React.Dispatch<React.SetStateAction<T>> },
+) {
+  return (
+    <label className="flex items-center gap-3">
+      <span className="w-28 shrink-0 text-xs text-cream/45">{label}</span>
+      <input value={String(form[k] ?? "")} placeholder={ph}
+        onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+        className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition placeholder:text-cream/20 focus:border-cyan/60" />
+    </label>
+  );
+}
+
+/** The live_status / activity_tier values an admin may set, mirroring store-edit-action.ts.
+ *  off_24 and `inactive` are lane bookkeeping, not human verdicts, so they are not offered — a
+ *  store already carrying one shows blank in the picker and keeps it unless something is chosen. */
+const LIVE_STATUS_OPTS = ["", "active", "dead", "migrated"];
+const LIVE_STATUS_LABEL: Record<string, string> = {
+  "": "— leave / never checked",
+  active: "Active — trading",
+  dead: "Dead — gone (hidden from every customer)",
+  migrated: "Migrated — moved platform (hidden too)",
+};
+const ACTIVITY_TIER_OPTS = ["", "selling", "active", "dormant", "not_a_store"];
+const ACTIVITY_TIER_LABEL: Record<string, string> = {
+  "": "— leave unset",
+  selling: "Selling",
+  active: "Active",
+  dormant: "Dormant",
+  not_a_store: "Not a store (hidden from the lead list)",
+};
+
 /** Headline figure tile — the Overview StatChip look, for values that are already formatted. */
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: React.ReactNode; accent: keyof typeof ACCENT }) {
   const a = ACCENT[accent];
@@ -189,26 +266,46 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  // Text fields, keyed by the imported_stores column they write (see StorePatch). Every one of them
-  // must be in getLeadDetail's SELECT, or the form opens blank and saving wipes the stored value.
-  type TextKey = "name" | "country" | "platform" | "category" | "city" | "contact_name" | "contact_role" | "contact_email"
-    | "contact_phone" | "whatsapp" | "contact_form_url" | "linkedin" | "instagram" | "facebook" | "tiktok";
-  const TEXT_KEYS: TextKey[] = ["name", "country", "platform", "category", "city", "contact_name", "contact_role", "contact_email",
-    "contact_phone", "whatsapp", "contact_form_url", "linkedin", "instagram", "facebook", "tiktok"];
-  const FORM_GROUPS: { title: string; fields: [TextKey | "revenue" | "tagsText", string, string?][] }[] = [
-    { title: "Store", fields: [["name", "Name"], ["country", "Country (ISO2)", "ZA"], ["city", "City"], ["platform", "Platform", "Shopify"], ["category", "Category"], ["revenue", "Monthly sales (est.)", "in the store's currency"], ["tagsText", "Tags", "comma-separated"]] },
-    { title: "Contact", fields: [["contact_name", "Name"], ["contact_role", "Role"], ["contact_email", "Email"], ["contact_phone", "Phone", "+27…"], ["whatsapp", "WhatsApp", "+27…"], ["contact_form_url", "Contact form URL"]] },
-    { title: "Social", fields: [["linkedin", "LinkedIn", "URL"], ["instagram", "Instagram", "handle or URL"], ["facebook", "Facebook", "handle or URL"], ["tiktok", "TikTok", "handle or URL"]] },
-  ];
-  type Form = Record<TextKey, string> & { published: boolean; plus: boolean; revenue: string; tagsText: string };
-  const blankForm = (): Form => ({ ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, ""])) as Record<TextKey, string>), published: false, plus: false, revenue: "", tagsText: "" });
-  const [form, setForm] = useState<Form>(blankForm);
+  type EditForm = {
+    name: string; country: string; city: string; category: string; description: string;
+    platform: string; currency: string; revenue: string; plus: boolean;
+    published: boolean; liveStatus: string; activityTier: string;
+    contactName: string; contactRole: string; contactEmail: string; contactPhone: string; contactForm: string;
+    // "" = unknown, "yes"/"no" = the two known answers. A string, not a boolean, so the picker can
+    // carry the third state the column actually has.
+    physicalStore: string; storeAddress: string; shopPhone: string;
+    whatsapp: string; linkedin: string; instagram: string; facebook: string; tiktok: string;
+    tagsText: string;
+  };
+  const EMPTY_FORM: EditForm = {
+    name: "", country: "", city: "", category: "", description: "",
+    platform: "", currency: "", revenue: "", plus: false,
+    published: false, liveStatus: "", activityTier: "",
+    contactName: "", contactRole: "", contactEmail: "", contactPhone: "", contactForm: "",
+    physicalStore: "", storeAddress: "", shopPhone: "",
+    whatsapp: "", linkedin: "", instagram: "", facebook: "", tiktok: "",
+    tagsText: "",
+  };
+  const [form, setForm] = useState<EditForm>(EMPTY_FORM);
 
   function beginEdit() {
     if (!data) return;
     setForm({
-      ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, (data[k] as string | null) ?? ""])) as Record<TextKey, string>),
-      published: Boolean(data.published), plus: Boolean(data.plus), revenue: data.estimated_monthly_sales ?? "",
+      name: data.name ?? "", country: data.country ?? "", city: data.city ?? "",
+      category: data.category ?? "", description: data.description ?? "",
+      platform: data.platform ?? "", currency: data.currency ?? "",
+      revenue: data.estimated_monthly_sales ?? "", plus: Boolean(data.plus),
+      published: Boolean(data.published),
+      // A lane-internal status (off_24, inactive) is shown as blank rather than offered back as a
+      // choice — the picker only carries verdicts a human should be setting.
+      liveStatus: LIVE_STATUS_OPTS.includes(data.live_status ?? "") ? (data.live_status ?? "") : "",
+      activityTier: ACTIVITY_TIER_OPTS.includes(data.activity_tier ?? "") ? (data.activity_tier ?? "") : "",
+      contactName: data.contact_name ?? "", contactRole: data.contact_role ?? "", contactEmail: data.contact_email ?? "",
+      contactPhone: data.contact_phone ?? "", contactForm: data.contact_form_url ?? "",
+      physicalStore: data.physical_store == null ? "" : data.physical_store ? "yes" : "no",
+      storeAddress: data.store_address ?? "", shopPhone: data.phone ?? "",
+      whatsapp: data.whatsapp ?? "", linkedin: data.linkedin ?? "",
+      instagram: data.instagram ?? "", facebook: data.facebook ?? "", tiktok: data.tiktok ?? "",
       tagsText: (data.tags ?? []).join(", "),
     });
     setSaveErr(null); setEditing(true);
@@ -217,18 +314,48 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
     if (!data) return;
     setSaving(true); setSaveErr(null);
     const tags = form.tagsText.split(",").map((t) => t.trim()).filter(Boolean);
-    const text = Object.fromEntries(TEXT_KEYS.map((k) => [k, form[k].trim() || null])) as Record<TextKey, string | null>;
-    const patch: StorePatch = { ...text, published: form.published, plus: form.plus, estimated_monthly_sales: form.revenue || null, tags };
+    const patch: StorePatch = {
+      name: form.name || null, country: form.country || null, city: form.city || null,
+      category: form.category || null, description: form.description || null,
+      platform: form.platform || null, currency: form.currency || null, plus: form.plus,
+      published: form.published, estimated_monthly_sales: form.revenue || null, tags,
+      live_status: form.liveStatus || null, activity_tier: form.activityTier || null,
+      contact_name: form.contactName || null, contact_email: form.contactEmail || null,
+      contact_role: form.contactRole || null, contact_phone: form.contactPhone || null,
+      contact_form_url: form.contactForm || null,
+      physical_store: form.physicalStore === "" ? null : form.physicalStore === "yes",
+      store_address: form.storeAddress || null, phone: form.shopPhone || null,
+      whatsapp: form.whatsapp || null, linkedin: form.linkedin || null,
+      instagram: form.instagram || null, facebook: form.facebook || null, tiktok: form.tiktok || null,
+    };
     const res = await updateStore(data.domain, patch);
     setSaving(false);
     if ("error" in res) { setSaveErr(res.error); return; }
     // A manual revenue drops the modeled price (see store-edit-action), so the read-only "Ballpark
     // revenue" row below has to go with it rather than keep showing the model's range.
     const revChanged = (patch.estimated_monthly_sales ?? null) !== (data.estimated_monthly_sales ?? null);
-    // Re-read rather than patch locally: the server normalises (country upper-case, phone digits) and
-    // stamps contact_source, and the drawer should show exactly what customers will now see.
+    // Re-read rather than patch locally: the server normalises (country upper-case, phone digits)
+    // and stamps contact_source, so this shows exactly what customers will now see. The local mirror
+    // is only the fallback when that re-read fails — it has to cover every field the form sends, or
+    // a read-only row keeps showing the pre-save value.
     const fresh = await fetch(`/api/lead?domain=${encodeURIComponent(data.domain)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    setData(fresh && !fresh.error ? (fresh as LeadDetail) : ({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null, revenue_ballpark_usd: null } : {}), ...text, published: form.published, plus: form.plus, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags } as LeadDetail));
+    setData(fresh && !fresh.error ? (fresh as LeadDetail) : ({
+      ...data,
+      ...(revChanged ? { revenue_band: null, revenue_confidence: null, revenue_ballpark_usd: null } : {}),
+      name: patch.name ?? null, country: patch.country ?? null, city: patch.city ?? null,
+      category: patch.category ?? null, description: patch.description ?? null,
+      platform: patch.platform ?? null, currency: patch.currency ?? null, plus: form.plus,
+      published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null,
+      live_status: patch.live_status ?? null, activity_tier: patch.activity_tier ?? null,
+      contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null,
+      contact_role: patch.contact_role ?? null, contact_phone: patch.contact_phone ?? null,
+      contact_form_url: patch.contact_form_url ?? null,
+      physical_store: patch.physical_store ?? null, store_address: patch.store_address ?? null,
+      phone: patch.phone ?? null,
+      whatsapp: patch.whatsapp ?? null, linkedin: patch.linkedin ?? null,
+      instagram: patch.instagram ?? null, facebook: patch.facebook ?? null, tiktok: patch.tiktok ?? null,
+      tags,
+    } as LeadDetail));
     setEditing(false);
   }
 
@@ -344,17 +471,19 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
             <div className="rounded-2xl border border-cyan/25 bg-gradient-to-b from-cyan/[0.06] to-transparent p-4">
               <h3 className="mb-3 font-display text-base text-cream">Edit store <span className="ml-1 font-mono text-[11px] text-cyan/80">admin</span></h3>
               <div className="space-y-2.5 text-sm">
-                {FORM_GROUPS.map((g) => (
-                  <fieldset key={g.title} className="space-y-2.5">
-                    <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-cyan/70">{g.title}</legend>
-                    {g.fields.map(([k, label, hint]) => (
-                      <label key={k} className="flex items-center gap-3">
-                        <span className="w-28 shrink-0 text-xs text-cream/45">{label}</span>
-                        <input value={form[k]} placeholder={hint} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
-                          className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition placeholder:text-cream/25 focus:border-cyan/60" />
-                      </label>
-                    ))}
-                  </fieldset>
+                <EditGroup title="Identity" />
+                {TEXT_FIELDS.identity.map(([k, label, ph]) => (
+                  <EditText key={k} k={k} label={label} ph={ph} form={form} setForm={setForm} />
+                ))}
+                <label className="flex items-start gap-3">
+                  <span className="w-28 shrink-0 pt-1.5 text-xs text-cream/45">Description</span>
+                  <textarea value={form.description} rows={2} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    className="min-w-0 flex-1 resize-y rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60" />
+                </label>
+
+                <EditGroup title="Commercial" />
+                {TEXT_FIELDS.commercial.map(([k, label, ph]) => (
+                  <EditText key={k} k={k} label={label} ph={ph} form={form} setForm={setForm} />
                 ))}
                 {/* Pick a band instead of inventing a precise figure. Storing the band's MIDPOINT in the
                     store's currency is what makes this work with no new column: revenueBand() and
@@ -390,11 +519,69 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                   <input type="checkbox" checked={form.plus} onChange={(e) => setForm((f) => ({ ...f, plus: e.target.checked }))} className="h-4 w-4 accent-cyan" />
                   <span className="text-xs text-cream/50">{form.plus ? "shows the PLUS badge" : "not Plus"}</span>
                 </label>
+
+                <EditGroup title="Lifecycle" hint="What makes this row a lead at all" />
                 <label className="flex items-center gap-3">
                   <span className="w-28 shrink-0 text-xs text-cream/45">Published</span>
                   <input type="checkbox" checked={form.published} onChange={(e) => setForm((f) => ({ ...f, published: e.target.checked }))} className="h-4 w-4 accent-cyan" />
                   <span className="text-xs text-cream/50">{form.published ? "visible in customer dashboard" : "banked / hidden"}</span>
                 </label>
+                <label className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs text-cream/45">Live status</span>
+                  <select value={form.liveStatus} onChange={(e) => setForm((f) => ({ ...f, liveStatus: e.target.value }))}
+                    className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60">
+                    {LIVE_STATUS_OPTS.map((v) => <option key={v} value={v} className="bg-ink-deep">{LIVE_STATUS_LABEL[v]}</option>)}
+                  </select>
+                </label>
+                <label className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs text-cream/45">Activity</span>
+                  <select value={form.activityTier} onChange={(e) => setForm((f) => ({ ...f, activityTier: e.target.value }))}
+                    className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60">
+                    {ACTIVITY_TIER_OPTS.map((v) => <option key={v} value={v} className="bg-ink-deep">{ACTIVITY_TIER_LABEL[v]}</option>)}
+                  </select>
+                </label>
+                {/* The one edit worth spelling out before it is made: dead/migrated removes the
+                    store from every customer view AND files a churn row, which is what Insights
+                    counts. Reversible — set it back to Active and the churn row is withdrawn. */}
+                {(form.liveStatus === "dead" || form.liveStatus === "migrated") && data.live_status !== form.liveStatus && (
+                  <p className="rounded-lg border border-orange/30 bg-orange/[0.07] px-2.5 py-1.5 text-[11px] leading-snug text-orange/90">
+                    Marks the store {form.liveStatus}: it leaves every customer&apos;s lead list and is logged as churn
+                    {data.live_status === "active" ? ", dated to when we last confirmed it selling" : ""}. The liveness
+                    lane will not re-open it — a hand-set verdict is final until you change it back here.
+                  </p>
+                )}
+
+                <EditGroup title="Contact" />
+                {TEXT_FIELDS.contact.map(([k, label, ph]) => (
+                  <EditText key={k} k={k} label={label} ph={ph} form={form} setForm={setForm} />
+                ))}
+
+                <EditGroup title="Retail presence" hint="Card-present: the split a PSP buys for" />
+                <label className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs text-cream/45">Retail store</span>
+                  <select value={form.physicalStore} onChange={(e) => setForm((f) => ({ ...f, physicalStore: e.target.value }))}
+                    className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60">
+                    <option value="" className="bg-ink-deep">— not assessed</option>
+                    <option value="yes" className="bg-ink-deep">Yes — has a shop you can walk into</option>
+                    <option value="no" className="bg-ink-deep">No — online only</option>
+                  </select>
+                </label>
+                <label className="flex items-start gap-3">
+                  <span className="w-28 shrink-0 pt-1.5 text-xs text-cream/45">Shop address</span>
+                  <textarea value={form.storeAddress} rows={2} placeholder="Shop 12, Cavendish Square, Claremont, Cape Town"
+                    onChange={(e) => setForm((f) => ({ ...f, storeAddress: e.target.value }))}
+                    className="min-w-0 flex-1 resize-y rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition placeholder:text-cream/20 focus:border-cyan/60" />
+                </label>
+                <EditText k="shopPhone" label="Shop phone" ph="+27 21 555 0100" form={form} setForm={setForm} />
+                <p className="text-[11px] leading-snug text-cream/35">
+                  &ldquo;Not assessed&rdquo; and &ldquo;No&rdquo; are different answers and both are kept. Saving any value here also
+                  stops the text-mining model revisiting the store, so your answer stands.
+                </p>
+
+                <EditGroup title="Channels & tags" />
+                {TEXT_FIELDS.channels.map(([k, label, ph]) => (
+                  <EditText key={k} k={k} label={label} ph={ph} form={form} setForm={setForm} />
+                ))}
               </div>
               {saveErr && <p className="mt-2 text-xs text-orange">Couldn&apos;t save: {saveErr}</p>}
               <div className="mt-3 flex gap-2">
@@ -506,6 +693,15 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 // WhatsApp early: in SA it gets answered when email doesn't.
                 ["WhatsApp", data.whatsapp ? <a href={waLink(data.whatsapp)} target="_blank" rel="noopener noreferrer" className="font-mono text-[13px] text-mint hover:underline">{data.whatsapp}</a> : null],
                 ["Phone", data.contact_phone ? <span className="font-mono text-[13px]">{data.contact_phone}</span> : null],
+                // Retail presence sits in Contact rather than a card of its own: for a shop you
+                // can walk into, the address and the shop line ARE ways of reaching the merchant.
+                ["Retail store", data.physical_store == null
+                  ? null
+                  : data.physical_store
+                    ? <span className="text-mint">yes — card-present</span>
+                    : <span className="text-cream/50">online only</span>],
+                ["Shop address", data.store_address ? <span className="text-[13px] leading-snug">{data.store_address}</span> : null],
+                ["Shop phone", data.phone && data.phone !== data.contact_phone ? <span className="font-mono text-[13px]">{data.phone}</span> : null],
                 ["Contact form", data.contact_form_url ? <a href={data.contact_form_url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">open</a> : null],
                 // Stored either as a full URL (company or person page) or as a bare company handle.
                 // Through the same normaliser as the rest, so company/, in/ and a bare handle all
