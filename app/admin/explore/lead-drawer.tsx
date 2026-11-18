@@ -188,16 +188,27 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
-  const [form, setForm] = useState<{ name: string; country: string; platform: string; published: boolean; revenue: string; tagsText: string; contactName: string; contactRole: string; contactEmail: string }>(
-    { name: "", country: "", platform: "", published: false, revenue: "", tagsText: "", contactName: "", contactRole: "", contactEmail: "" });
+  // Text fields, keyed by the imported_stores column they write (see StorePatch). Every one of them
+  // must be in getLeadDetail's SELECT, or the form opens blank and saving wipes the stored value.
+  type TextKey = "name" | "country" | "platform" | "category" | "city" | "contact_name" | "contact_role" | "contact_email"
+    | "contact_phone" | "whatsapp" | "contact_form_url" | "linkedin" | "instagram" | "facebook" | "tiktok";
+  const TEXT_KEYS: TextKey[] = ["name", "country", "platform", "category", "city", "contact_name", "contact_role", "contact_email",
+    "contact_phone", "whatsapp", "contact_form_url", "linkedin", "instagram", "facebook", "tiktok"];
+  const FORM_GROUPS: { title: string; fields: [TextKey | "revenue" | "tagsText", string, string?][] }[] = [
+    { title: "Store", fields: [["name", "Name"], ["country", "Country (ISO2)", "ZA"], ["city", "City"], ["platform", "Platform", "Shopify"], ["category", "Category"], ["revenue", "Monthly sales (est.)", "in the store's currency"], ["tagsText", "Tags", "comma-separated"]] },
+    { title: "Contact", fields: [["contact_name", "Name"], ["contact_role", "Role"], ["contact_email", "Email"], ["contact_phone", "Phone", "+27…"], ["whatsapp", "WhatsApp", "+27…"], ["contact_form_url", "Contact form URL"]] },
+    { title: "Social", fields: [["linkedin", "LinkedIn", "URL"], ["instagram", "Instagram", "handle or URL"], ["facebook", "Facebook", "handle or URL"], ["tiktok", "TikTok", "handle or URL"]] },
+  ];
+  type Form = Record<TextKey, string> & { published: boolean; plus: boolean; revenue: string; tagsText: string };
+  const blankForm = (): Form => ({ ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, ""])) as Record<TextKey, string>), published: false, plus: false, revenue: "", tagsText: "" });
+  const [form, setForm] = useState<Form>(blankForm);
 
   function beginEdit() {
     if (!data) return;
     setForm({
-      name: data.name ?? "", country: data.country ?? "", platform: data.platform ?? "",
-      published: Boolean(data.published), revenue: data.estimated_monthly_sales ?? "",
+      ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, (data[k] as string | null) ?? ""])) as Record<TextKey, string>),
+      published: Boolean(data.published), plus: Boolean(data.plus), revenue: data.estimated_monthly_sales ?? "",
       tagsText: (data.tags ?? []).join(", "),
-      contactName: data.contact_name ?? "", contactRole: data.contact_role ?? "", contactEmail: data.contact_email ?? "",
     });
     setSaveErr(null); setEditing(true);
   }
@@ -205,18 +216,18 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
     if (!data) return;
     setSaving(true); setSaveErr(null);
     const tags = form.tagsText.split(",").map((t) => t.trim()).filter(Boolean);
-    const patch: StorePatch = {
-      name: form.name || null, country: form.country || null, platform: form.platform || null,
-      published: form.published, estimated_monthly_sales: form.revenue || null, tags,
-      contact_name: form.contactName || null, contact_email: form.contactEmail || null, contact_role: form.contactRole || null,
-    };
+    const text = Object.fromEntries(TEXT_KEYS.map((k) => [k, form[k].trim() || null])) as Record<TextKey, string | null>;
+    const patch: StorePatch = { ...text, published: form.published, plus: form.plus, estimated_monthly_sales: form.revenue || null, tags };
     const res = await updateStore(data.domain, patch);
     setSaving(false);
     if ("error" in res) { setSaveErr(res.error); return; }
     // A manual revenue drops the modeled price (see store-edit-action), so the read-only "Ballpark
     // revenue" row below has to go with it rather than keep showing the model's range.
     const revChanged = (patch.estimated_monthly_sales ?? null) !== (data.estimated_monthly_sales ?? null);
-    setData({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null, revenue_ballpark_usd: null } : {}), name: patch.name ?? null, country: patch.country ?? null, platform: patch.platform ?? null, published: form.published, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags, contact_name: patch.contact_name ?? null, contact_email: patch.contact_email ?? null, contact_role: patch.contact_role ?? null } as LeadDetail);
+    // Re-read rather than patch locally: the server normalises (country upper-case, phone digits) and
+    // stamps contact_source, and the drawer should show exactly what customers will now see.
+    const fresh = await fetch(`/api/lead?domain=${encodeURIComponent(data.domain)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    setData(fresh && !fresh.error ? (fresh as LeadDetail) : ({ ...data, ...(revChanged ? { revenue_band: null, revenue_confidence: null, revenue_ballpark_usd: null } : {}), ...text, published: form.published, plus: form.plus, estimated_monthly_sales: patch.estimated_monthly_sales ?? null, tags } as LeadDetail));
     setEditing(false);
   }
 
@@ -324,12 +335,17 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
             <div className="rounded-2xl border border-cyan/25 bg-gradient-to-b from-cyan/[0.06] to-transparent p-4">
               <h3 className="mb-3 font-display text-base text-cream">Edit store <span className="ml-1 font-mono text-[11px] text-cyan/80">admin</span></h3>
               <div className="space-y-2.5 text-sm">
-                {([["name", "Name"], ["country", "Country (ISO2)"], ["platform", "Platform"], ["revenue", "Monthly sales (est.)"], ["contactName", "Contact name"], ["contactRole", "Contact role"], ["contactEmail", "Contact email"], ["tagsText", "Tags (comma-sep)"]] as const).map(([k, label]) => (
-                  <label key={k} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-xs text-cream/45">{label}</span>
-                    <input value={String((form as Record<string, unknown>)[k] ?? "")} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
-                      className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition focus:border-cyan/60" />
-                  </label>
+                {FORM_GROUPS.map((g) => (
+                  <fieldset key={g.title} className="space-y-2.5">
+                    <legend className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-cyan/70">{g.title}</legend>
+                    {g.fields.map(([k, label, hint]) => (
+                      <label key={k} className="flex items-center gap-3">
+                        <span className="w-28 shrink-0 text-xs text-cream/45">{label}</span>
+                        <input value={form[k]} placeholder={hint} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+                          className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition placeholder:text-cream/25 focus:border-cyan/60" />
+                      </label>
+                    ))}
+                  </fieldset>
                 ))}
                 {/* Pick a band instead of inventing a precise figure. Storing the band's MIDPOINT in the
                     store's currency is what makes this work with no new column: revenueBand() and
@@ -361,6 +377,11 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                       }; bands as ${formBand}.`}
                 </p>
                 <label className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs text-cream/45">Shopify Plus</span>
+                  <input type="checkbox" checked={form.plus} onChange={(e) => setForm((f) => ({ ...f, plus: e.target.checked }))} className="h-4 w-4 accent-cyan" />
+                  <span className="text-xs text-cream/50">{form.plus ? "shows the PLUS badge" : "not Plus"}</span>
+                </label>
+                <label className="flex items-center gap-3">
                   <span className="w-28 shrink-0 text-xs text-cream/45">Published</span>
                   <input type="checkbox" checked={form.published} onChange={(e) => setForm((f) => ({ ...f, published: e.target.checked }))} className="h-4 w-4 accent-cyan" />
                   <span className="text-xs text-cream/50">{form.published ? "visible in customer dashboard" : "banked / hidden"}</span>
@@ -371,7 +392,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 <button onClick={save} disabled={saving} className="rounded-full bg-cyan px-4 py-1.5 text-sm font-semibold text-ink-deep transition hover:bg-cyan/90 disabled:opacity-50">{saving ? "Saving…" : "Save changes"}</button>
                 <button onClick={() => setEditing(false)} disabled={saving} className="rounded-full border border-cream/15 px-4 py-1.5 text-sm text-cream/60 transition hover:text-cream">Cancel</button>
               </div>
-              <p className="mt-2 text-[11px] text-cream/35">Shared data — this changes what every customer sees. Saved as a manual override (survives re-enrichment) and logged.</p>
+              <p className="mt-2 text-[11px] text-cream/35">Shared data — this changes what every customer sees. Saved as a manual override (survives re-enrichment) and logged. Payments, apps, theme, catalog size and liveness are re-observed by the crawlers, so they aren&rsquo;t editable here.</p>
             </div>
           )}
 
