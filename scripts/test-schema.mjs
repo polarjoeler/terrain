@@ -17,6 +17,11 @@ function check(label, ok, detail = "") {
   if (!ok) failures++;
 }
 
+// Applied RAW here, deliberately — do not route this through lib/ensure-schema.ts. The lock-queue
+// problem that guard exists for is a property of a busy production table; PGlite is a throwaway
+// in-memory engine with no other sessions and nothing to block. And the point of this file is to
+// exercise the DDL itself: the second db.exec(ddl) below asserts that lib/schema.sql is idempotent
+// on a populated database, which a guard that skips the statements would quietly stop testing.
 const ddl = readFileSync(new URL("../lib/schema.sql", import.meta.url), "utf8");
 const tableNames = async () => {
   const r = await db.query(
