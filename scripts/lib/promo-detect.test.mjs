@@ -49,6 +49,20 @@ test("BF links: same-site only", () => {
   assert.deepEqual(bfLinksFromHtml(html, "https://www.shop.co.za/"), ["https://www.shop.co.za/collections/black-friday-2026"]);
 });
 
+test("stale-year and blog BF links are dropped", () => {
+  const html = '<a href="/collections/black-friday-2024">a</a><a href="/blogs/news/bfcm-2026-guide">b</a><a href="/collections/black-friday-2026">c</a>';
+  assert.deepEqual(bfLinksFromHtml(html, "https://s.co.za/"), ["https://s.co.za/collections/black-friday-2026"]);
+});
+
+test("double-encoded entities decode", () => {
+  assert.equal(htmlToText("<p>Up to 50% off &amp;bull; Black Friday &times;</p>"), "Up to 50% off · Black Friday ×");
+});
+
+test("blog teasers aren't offers", () => {
+  assert.deepEqual(detectOffers("Home · ARTICLE · NOV 16, 2026 15 crafting supplies to grab this BFCM 2026! · Shop"), []);
+  assert.deepEqual(detectOffers("Blog · 0 Comments · Black November 2026 · November 3, 2026"), []);
+});
+
 test("sitemaps", () => {
   const idx = "<sitemapindex><sitemap><loc>https://s.co.za/sitemap_products_1.xml?from=1</loc></sitemap><sitemap><loc>https://s.co.za/sitemap_collections_1.xml?from=1&amp;to=9</loc></sitemap></sitemapindex>";
   assert.deepEqual(collectionSitemaps(idx), ["https://s.co.za/sitemap_collections_1.xml?from=1&to=9"]);

@@ -22,8 +22,16 @@ const CODE_RE = /\b(?:code|coupon|promo)\s*[:\-]?\s*["“'‘]?([A-Z][A-Z0-9]{3,
 // Handles / paths that are a BF landing page: /collections/black-friday, /product-category/bf-sale/…
 export const BF_LINK_RE = /black-?friday|cyber-?monday|black-?november|\bbfcm\b|bf-?sale|bf-?20\d\d|black-?week/i;
 
-const ENTITIES = { amp: "&", nbsp: " ", quot: '"', apos: "'", lt: "<", gt: ">", rsquo: "'", lsquo: "'", ndash: "-", mdash: "-", hellip: "…" };
+const ENTITIES = { amp: "&", nbsp: " ", quot: '"', apos: "'", lt: "<", gt: ">", rsquo: "'", lsquo: "'", ndash: "-", mdash: "-", hellip: "…", bull: "·", times: "×", middot: "·", rdquo: '"', ldquo: '"' };
+// A BF page from an earlier year (/collections/black-friday-2024, bf2020) is a leftover, not a deal.
+const STALE_YEAR_RE = /20(?:1\d|2[0-5])(?!\d)/;
+const BLOG_PATH_RE = /\/(?:blogs?|news|articles?)\//i;
+export const isLiveBfPath = (path) => BF_LINK_RE.test(path) && !STALE_YEAR_RE.test(path) && !BLOG_PATH_RE.test(path);
 export function decodeEntities(s) {
+  // Twice: themes often double-encode ("&amp;bull;").
+  return decodeOnce(decodeOnce(s));
+}
+function decodeOnce(s) {
   return s
     .replace(/&#(\d+);/g, (_, n) => { const c = Number(n); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : " "; })
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => { const c = parseInt(h, 16); return c > 0 && c < 0x110000 ? String.fromCodePoint(c) : " "; })
@@ -41,7 +49,7 @@ export function htmlToText(html) {
   )
     .replace(/\s+/g, " ")
     .replace(/(?:\s·\s?){2,}/g, " · ")
-    .trim();
+    .replace(/^[·\s]+|[·\s]+$/g, "");
 }
 
 export const findKlaviyoCid = (html) =>
@@ -56,7 +64,7 @@ export function bfLinksFromHtml(html, pageUrl) {
     let u;
     try { u = new URL(decodeEntities(m[1]), base); } catch { continue; }
     if (u.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) continue;
-    if (!BF_LINK_RE.test(u.pathname)) continue;
+    if (!isLiveBfPath(u.pathname)) continue;
     out.set(u.pathname, `${u.origin}${u.pathname}`);
   }
   return [...out.values()].slice(0, 5);
@@ -69,7 +77,7 @@ export function bfLinksFromSitemap(xml) {
     const loc = decodeEntities(m[1]).trim();
     let path;
     try { path = new URL(loc).pathname; } catch { continue; }
-    if (/\/collections\//.test(path) && BF_LINK_RE.test(path)) out.push(loc);
+    if (/\/collections\//.test(path) && isLiveBfPath(path)) out.push(loc);
   }
   return out.slice(0, 5);
 }
@@ -140,7 +148,11 @@ export function detectOffers(text, { maxOffers = 4 } = {}) {
   });
   const offers = [];
   const seen = new Set();
+  // Blog teasers ("ARTICLE · NOV 16 … this BFCM", "0 Comments · Black November 2026") describe a
+  // sale; they aren't the banner of one.
+  const BLOG_SEG_RE = /^(?:article|blog|read more|\d+ comments?)$|^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2}, 20\d\d/i;
   for (const { start, end } of runs) {
+    if ([segs[start - 1], segs[start], segs[end + 1]].some((s) => s && BLOG_SEG_RE.test(s.split(/\s+/).slice(0, 3).join(" ")))) continue;
     const core = segs.slice(start, end + 1).slice(0, 4);
     // Short neighbours ride along ("Black Friday · Up to 50% · Selected styles"); long ones are
     // product cards or nav dumps.
