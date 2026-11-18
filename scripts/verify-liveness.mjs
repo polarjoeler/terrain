@@ -32,6 +32,7 @@
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { applySchema } from "../lib/ensure-schema.ts";
+import { samePlatformFamily } from "../lib/platform-canon.ts";
 import { logChurn } from "./lib/churn.mjs";
 
 const DEAD_AFTER = 2;
@@ -228,7 +229,16 @@ function nextStatus(old, miss, { reachable, shopify, dnsDead, frozen, platform }
   // A migration needs a BEFORE as well as an after. With no recorded platform we never knew the
   // store was Shopify, so identifying one now is a CLASSIFICATION, not a move — live_platform is
   // still written (the data improves) but the store stays active rather than churning.
-  const moved = !!platform && !!knownPlatform && platform.toLowerCase() !== knownPlatform.toLowerCase();
+  // AND the two labels must name different STACKS, not just different strings. WooCommerce,
+  // SureCart and WP eCommerce are WordPress plugins: this probe tests Woo's homepage markers
+  // before WordPress's, so a Woo store that defers its assets — or is showing an
+  // under-construction page — reads as "WordPress" and looked like a move. That fiction was 199
+  // of the 745 platform changes Insights counted (2026-11-18). samePlatformFamily is shared with
+  // the readers in lib/insights.ts so the definition cannot drift. This is the FOURTH incarnation
+  // of this same false positive; keep the guard here, at the source.
+  const moved = !!platform && !!knownPlatform
+    && platform.toLowerCase() !== knownPlatform.toLowerCase()
+    && !samePlatformFamily(platform, knownPlatform);
   if (moved) return { status: miss + 1 >= MIGRATE_AFTER ? "migrated" : (old || "active"), miss: miss + 1 };
   return { status: "active", miss: 0 };
 }

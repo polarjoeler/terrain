@@ -80,3 +80,45 @@ export function canonicalPlatform(raw: string | null | undefined): string | null
   if (!v) return null;
   return CANON[v.toLowerCase()] ?? v;
 }
+
+/** PLATFORM FAMILIES — platforms that are the same underlying stack.
+ *
+ *  WooCommerce, SureCart and WP eCommerce are WordPress PLUGINS, not platforms a store can
+ *  "migrate to" from WordPress. Swapping between them, or losing the plugin's homepage markers
+ *  while keeping WordPress's, is a plugin change on one stack — not a replatform.
+ *
+ *  This matters because migrations are detected by comparing a recorded `platform` against a
+ *  freshly probed `live_platform`, and the probe reads homepage markers only. `verify-liveness`
+ *  tests WooCommerce's markers ("woocommerce", "wc-ajax") BEFORE WordPress's ("wp-content"), so a
+ *  Woo store whose homepage defers its assets — or is showing an under-construction/maintenance
+ *  page — falls through to "WordPress" and read as a migration. Measured 2026-11-18 across the
+ *  visible markets, that fiction was 199 of the 745 platform changes Insights was counting:
+ *  woocommerce→wordpress 182, woocommerce→surecart 11, surecart→wordpress 4, and 2 via
+ *  WP eCommerce — about a third of the headline "wordpress gained" figure.
+ *
+ *  Genuine cross-stack moves are untouched: shopify→wordpress (228) and shopify→woocommerce (202)
+ *  are real departures from Shopify, magento→wordpress (8) is a real replatform, and
+ *  woocommerce→shopify (9) is a real arrival.
+ *
+ *  Deciding WHICH WordPress-family plugin a store ended on is a different question, answered by a
+ *  request to Woo's public Store API — see scripts/resolve-wp-destination.mjs. */
+export const WORDPRESS_FAMILY = [
+  "wordpress", "woocommerce", "surecart", "wp ecommerce", "wp-ecommerce", "wpecommerce",
+];
+
+/** The stack a platform belongs to, for deciding whether a change of label is a real move.
+ *  Everything outside a known family is its own family, so an unrecognised platform is never
+ *  silently merged into another. */
+export function platformFamily(raw: string | null | undefined): string | null {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (!v) return null;
+  return WORDPRESS_FAMILY.includes(v) ? "wordpress" : v;
+}
+
+/** True when two platform labels name the same underlying stack, so moving between them is not a
+ *  migration. Two nulls are NOT the same family: with nothing recorded we never knew where the
+ *  store was, and that is a classification question, not a move. */
+export function samePlatformFamily(a: string | null | undefined, b: string | null | undefined): boolean {
+  const fa = platformFamily(a), fb = platformFamily(b);
+  return fa !== null && fb !== null && fa === fb;
+}
