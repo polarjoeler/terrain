@@ -73,6 +73,13 @@ export type BrowseFilters = {
   reachableContact?: boolean;
   /** Drop addresses whose domain publishes no MX — the bounce list. */
   deliverable?: boolean;
+  /** Has a WhatsApp number we read off the storefront. In our markets this is not a lesser
+   *  channel than email — it is the one an SA SMB owner actually answers, and 4,848 of the
+   *  5,893 published ZA stores that have one are NOT reachable by email at all (contact_type
+   *  outside REACHABLE_TYPES). Kept separate from the email filters rather than folded into
+   *  reachableContact: it reaches a person, but on a different channel with different rules
+   *  (one-to-one, no bulk send), so a list built on it must be a deliberate choice. */
+  hasWhatsapp?: boolean;
   tier?: "top100" | "top500";
   /** Store groups (scripts/build-store-groups.mjs): `grouped` = stores whose operator runs other
    *  stores too; `group` = every store in one group (the drawer's "show all"). */
@@ -136,6 +143,12 @@ export type BrowseStats = {
   /** Distinct operators behind the filtered set (a store group counts once): "500 stores, N
    *  conversations". Undefined on aggregates cached before it shipped. */
   operators?: number;
+  /** Reachable on WhatsApp. Optional for the same reason as operators above: a browse_cache
+   *  blob written before this shipped has no key for it, and the TTL is 26h. */
+  whatsapp?: number;
+  /** ...of which these have NO email that reaches a person — the segment where WhatsApp is the
+   *  only way in, and the one worth a tile of its own. */
+  whatsappOnly?: number;
 };
 
 export type BrowseResult = {
@@ -274,6 +287,7 @@ function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   if (f.contactType?.length) conds.push(sql`contact_type = ANY(${f.contactType})`);
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
+  if (f.hasWhatsapp) conds.push(sql`whatsapp IS NOT NULL AND whatsapp <> ''`);
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
   if (f.grouped) conds.push(sql.unsafe(`domain IN ${GROUPED_SET}`));
   if (f.group) conds.push(sql`domain IN (SELECT domain FROM store_group_members WHERE group_id = ${f.group})`);
@@ -441,6 +455,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
+             (whatsapp IS NOT NULL AND whatsapp <> '') AS has_whatsapp,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at,
              COALESCE(g_id, domain) AS operator,
@@ -455,6 +470,11 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            (SELECT (count(*) FILTER (WHERE has_email))::int FROM f)  AS c_email,
            (SELECT (count(*) FILTER (WHERE reachable))::int FROM f)   AS c_reachable,
            (SELECT (count(*) FILTER (WHERE will_bounce))::int FROM f) AS c_bounce,
+           (SELECT (count(*) FILTER (WHERE has_whatsapp))::int FROM f) AS c_whatsapp,
+           -- IS NOT TRUE, not NOT reachable: the reachable flag is NULL whenever contact_type is
+           -- NULL (NULL = ANY(...) is NULL), and NOT NULL is NULL, which FILTER drops — so an
+           -- uncrawled store with a WhatsApp number would vanish from its own segment.
+           (SELECT (count(*) FILTER (WHERE has_whatsapp AND reachable IS NOT TRUE))::int FROM f) AS c_wa_only,
            (SELECT count(DISTINCT operator)::int FROM f)              AS c_operators,
            ${sql.unsafe(facetSub("contact_type"))}  AS f_contact,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
@@ -484,7 +504,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
     A = {
       total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0) },
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), whatsapp: Number(agg.c_whatsapp ?? 0), whatsappOnly: Number(agg.c_wa_only ?? 0) },
       facets: {
         country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
         band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
