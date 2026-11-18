@@ -26,7 +26,7 @@ cap 3600 node --env-file=.env.local scripts/catalog-enrich.mjs --fp --limit 500 
 cap 3600 node --env-file=.env.local scripts/woo-catalog-fp.mjs --limit 500 || echo "!! woo fingerprints failed (continuing)"
 # Weekly clone sweep over the fingerprints — DB-light (one scan), the scoring runs in memory here.
 MARK="$HOME/storepulse/logs/.clone-sweep-last"
-if [ ! -f "$MARK" ] || [ -n "$(find "$MARK" -mtime +6 2>/dev/null)" ]; then
+if [ ! -f "$MARK" ] || [ -n "$(find "$MARK" -mmin +1380 2>/dev/null)" ]; then
   cap 3600 node --env-file=.env.local scripts/clone-sweep.mjs && touch "$MARK" || echo "!! clone-sweep failed (continuing)"
 fi
 echo "===== catalog-enrich done $(date '+%F %T') ====="
