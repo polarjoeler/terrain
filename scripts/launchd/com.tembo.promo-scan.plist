@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tembo.promo-scan</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/joel/storepulse/scripts/promo-scan.sh</string>
+	</array>
+	<!-- Rex runs on PST: 06:00 / 15:00 PST = 16:00 / 01:00 SAST. -->
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+		<dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/Users/joel/storepulse/logs/promo-scan.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/joel/storepulse/logs/promo-scan.out.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/joel/storepulse</string>
+</dict>
+</plist>

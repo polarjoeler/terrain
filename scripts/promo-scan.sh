@@ -1,0 +1,23 @@
+#!/bin/bash
+# promo-scan — Black Friday 2026 deals lane (DESIGN-black-friday-2026.md). Reads the live promo offers
+# of the top ~1,500 ZA stores into store_promos for tembocommerce.africa/za/black-friday.
+# Driven by ~/Library/LaunchAgents/com.tembo.promo-scan.plist (06:00 and 15:00 Rex time; each run skips
+# stores scanned in the last 18h, so the second run only picks up what the first missed — switch to
+# --stale-hours 8 for the 26–30 Nov twice-daily window). Unload after 1 Dec.
+# Shopify homepages are DIRECT on the home IP: contact-enrich must be paused while this runs daily.
+set -u
+cd "$HOME/storepulse" || exit 1
+export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+LOCK="/tmp/tembo-promo-scan.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then echo "promo-scan: previous run still going — skipping"; exit 0; fi
+trap 'rmdir "$LOCK"' EXIT
+node --env-file=.env.local scripts/heartbeat.mjs promo-scan >/dev/null 2>&1 || true
+echo "===== promo-scan $(date '+%F %T') ====="
+STALE="${PROMO_STALE_HOURS:-18}"
+# 4h wall-clock cap (macOS has no `timeout`).
+STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
+LOCAL_LLM_URL="${LOCAL_LLM_URL:-http://localhost:11434/v1}" \
+  perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 14400 \
+  node --no-warnings --env-file=.env.local scripts/promo-scan.mjs --top 1500 --concurrency 2 --pause-ms 1200 --stale-hours "$STALE" --llm \
+  || echo "!! promo-scan failed or capped"
+echo "===== promo-scan done $(date '+%F %T') ====="
