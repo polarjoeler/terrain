@@ -9,6 +9,8 @@ export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 node --env-file=.env.local scripts/heartbeat.mjs build-rollups "rebuilding" >/dev/null 2>&1 || true
 echo "===== build-rollups $(date '+%F %T') ====="
+# Date new Shopify shops from their shop ID first, so this hour's rollup counts them as launched.
+node --no-warnings --env-file=.env.local scripts/shop-id-dating.mjs 2>&1 | tail -2 || echo "!! shop-id-dating failed"
 node --no-warnings --env-file=.env.local scripts/build-rollups.mjs || echo "!! build-rollups failed"
 node --env-file=.env.local scripts/heartbeat.mjs build-rollups "idle — done" >/dev/null 2>&1 || true
 echo "===== build-rollups done $(date '+%T') ====="
