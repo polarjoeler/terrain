@@ -17,7 +17,11 @@
  *       naira is selling in Nigeria. country_source becomes 'storefront' (manual is never touched),
  *    4. a name and description that don't say betting / news / loans / hosting / SMS / airline / school…
  *       (the non-retail classes that carry ₦ prices and a "checkout" too),
- *    5. a real name (confirm-other-cms's extractName/badName).
+ *    5. a real name that belongs to THIS store (pickName): every candidate — schema.org Organization/Store
+ *       name, og:site_name, each segment of the <title> — is tried in that order and the first one that
+ *       shares a word with the domain wins. Titles lead with SEO taglines ("Shop Trendy Women's Fashion |
+ *       SHEIN South Africa") and og:site_name is sometimes a slogan ("Two reading ducks." on
+ *       atticbooks.co.ke), so "first readable string" named stores after their tagline.
  *
  *  A Bagisto storefront (/vendor/webkul/ assets) is relabelled Bagisto on the way through.
  *  Every attempt stamps cms_confirm_at, so failures wait 7 days (unreachable) / 30 days (live, not
@@ -27,7 +31,41 @@
  *    node --env-file=.env.local scripts/confirm-custom.mjs [--limit 1500] [--concurrency 4]
  */
 import postgres from "postgres";
-import { ECOM, decodeHtml, extractName, badName } from "./confirm-other-cms.mjs";
+import { ECOM, decodeHtml, badName } from "./confirm-other-cms.mjs";
+
+const decodeEnt = (s) => s.replace(/&amp;/g, "&").replace(/&#0?39;|&apos;|&#x27;/gi, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d));
+const compact = (s) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+// Labels of the host that can carry the brand: drop www/market prefixes and the public suffix.
+const GENERIC_LABEL = new Set(["www", "shop", "store", "online", "m", "za", "ng", "ke", "gh", "eg", "ma", "tz", "ug", "co", "com", "net", "org", "africa"]);
+export function domainStems(domain) {
+  const labels = domain.toLowerCase().replace(/^www\./, "").split(".");
+  const body = labels.length > 2 && /^(co|com|net|org|ac|or)$/.test(labels.at(-2)) ? labels.slice(0, -2) : labels.slice(0, -1);
+  return body.map((l) => l.replace(/[^a-z0-9]/g, "")).filter((l) => l.length >= 3 && !GENERIC_LABEL.has(l));
+}
+// A candidate belongs to the store when one of its words (3+ chars) sits inside a domain label, or a
+// domain label sits inside the candidate run together ("Jooust Online Market" ↔ jooustonlinemarket).
+export function matchesDomain(name, domain) {
+  const stems = domainStems(domain);
+  const words = name.split(/[^\p{L}\p{N}]+/u).map(compact).filter((w) => w.length >= 3 && !GENERIC_LABEL.has(w));
+  const whole = compact(name);
+  return stems.some((st) => words.some((w) => st.includes(w)) || (st.length >= 4 && whole.includes(st)));
+}
+const cleanCandidate = (s) => decodeEnt(s).replace(/\s+/g, " ").replace(/^(welcome to|home\s*[-|:]|official (site|store) of)\s*/i, "").replace(/[.!]+$/, "").trim();
+/** The store's name, or null. Candidates in trust order; the first that matches the domain wins. */
+export function pickName(html, domain) {
+  const cands = [];
+  for (const m of html.matchAll(/"@type"\s*:\s*"(?:Organization|Store|OnlineStore|LocalBusiness|Pharmacy)"[^}]{0,400}?"name"\s*:\s*"([^"]{2,80})"/g)) cands.push(m[1]);
+  const og = html.match(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']{2,120})["']/i)?.[1];
+  const title = html.match(/<title[^>]*>([^<]{2,200})<\/title>/i)?.[1];
+  for (const src of [og, title]) {
+    if (!src) continue;
+    const full = cleanCandidate(src);
+    cands.push(...full.split(/\s+[|｜–—·:]\s+|\s+-\s+|\s*[|｜]\s*/), full);   // segments first: "Brand | tagline" → "Brand"
+  }
+  const ok = cands.map(cleanCandidate).filter((c) => c.length >= 2 && c.length <= 40 && !badName(c, domain));
+  return ok.find((c) => matchesDomain(c, domain)) ?? null;
+}
 
 const DRY = process.argv.includes("--dry");
 const VERBOSE = process.argv.includes("--verbose");
@@ -129,9 +167,8 @@ export function judge(html, domain, country) {
   if (!ECOM.test(html)) return { ok: false, why: "no_commerce_action" };
   const prices = localPrices(html, country);
   if (prices < 2) return { ok: false, why: "no_local_prices" };
-  let name = extractName(html);
-  if (name && name.length > 24) name = name.split(/\s+-\s+/)[0].trim();   // "Brand - tagline" (extractName splits only | – — ·)
-  if (!name || badName(name, domain)) return { ok: false, why: "no_name" };
+  const name = pickName(html, domain);
+  if (!name) return { ok: false, why: "no_name" };
   return { ok: true, name, platform: BAGISTO.test(html) ? "Bagisto" : null };
 }
 
@@ -165,7 +202,7 @@ async function main() {
         if (DRY) {
           if ((verdict.ok && shown < 40) || VERBOSE) { shown++; console.log(`${verdict.ok ? "✓ PUBLISH" : "  skip   "}  ${r.domain} [${r.country}]  ${verdict.ok ? `"${verdict.name}"${verdict.platform ? ` → ${verdict.platform}` : ""}` : `${verdict.why}${verdict.term ? ` (${verdict.term})` : ""}`}`); }
         } else if (verdict.ok) {
-          const name = r.name && !badName(r.name, r.domain) ? r.name : verdict.name;
+          const name = r.name && !badName(r.name, r.domain) && matchesDomain(r.name, r.domain) ? r.name : verdict.name;
           await sql`UPDATE imported_stores SET
               published = true, name = ${name},
               platform = ${verdict.platform ?? sql`platform`},
