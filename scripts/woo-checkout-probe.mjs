@@ -172,11 +172,28 @@ async function main() {
     // discovered_at DESC uses idx_imported_discovered (index scan, no sort), so it stays fast.
     // store_work_woo is a partial index on exactly this selection, so the pick no longer reads the
     // whole store table (58GB/day on 2026-11-10). Falls back to the old query before the migration.
-    const rows = (await workReady(sql)) ? await sql`
-      SELECT domain, discovered_at FROM store_work
-      WHERE platform = 'woocommerce' AND live AND woo_at IS NULL AND (NOT has_pay OR pay_woo_plugin)
-      ORDER BY discovered_at DESC NULLS LAST
-      LIMIT ${LIMIT}` : await sql`
+    // Africa first, as its own pass. crux-sweep.mjs (2026-11-19) banks ~1.9M WooCommerce sites from
+    // every market over a few days; newest-first alone would bury the African ones it inserted first,
+    // and a boolean sort key would bring back the full sort described above. The country filter
+    // rides the same partial index; the global pass then fills whatever the run has left.
+    const AFRICA = "DZ AO BJ BW BF BI CV CM CF TD KM CG CD CI DJ EG GQ ER SZ ET GA GM GH GN GW KE LS LR LY MG MW ML MR MU MA MZ NA NE NG RW ST SN SC SL SO ZA SS SD TZ TG TN UG ZM ZW".split(" ");
+    const pickWork = async () => {
+      const first = await sql`
+        SELECT domain, discovered_at FROM store_work
+        WHERE platform = 'woocommerce' AND live AND woo_at IS NULL AND (NOT has_pay OR pay_woo_plugin)
+          AND country = ANY(${AFRICA})
+        ORDER BY discovered_at DESC NULLS LAST
+        LIMIT ${LIMIT}`;
+      if (first.length >= LIMIT) return first;
+      const rest = await sql`
+        SELECT domain, discovered_at FROM store_work
+        WHERE platform = 'woocommerce' AND live AND woo_at IS NULL AND (NOT has_pay OR pay_woo_plugin)
+          AND (country IS NULL OR country <> ALL(${AFRICA}))
+        ORDER BY discovered_at DESC NULLS LAST
+        LIMIT ${LIMIT - first.length}`;
+      return [...first, ...rest];
+    };
+    const rows = (await workReady(sql)) ? await pickWork() : await sql`
       SELECT domain, discovered_at FROM imported_stores
       WHERE lower(platform) = 'woocommerce' AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND woo_checkout_at IS NULL

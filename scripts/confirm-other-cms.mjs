@@ -57,7 +57,8 @@ export const STORE_CMS = [...new Set([...SELF_HOSTED, ...HOSTED])];
 // country and its platform tags are vendor guesses (2026-11-13: balenciaga.com "JP", cartier.com "MA",
 // builtwith.com "Salesforce Commerce Cloud"); publishing them would put global brands into African
 // dashboards. They stay banked until crux-country.mjs re-derives their country.
-const UNTRUSTED_SOURCES = ["crux-ranked"];
+// crux-sweep.mjs (every CrUX market at once, 2026-11-19) labels the same way, so the same rule holds.
+const UNTRUSTED_SOURCES = ["crux-ranked", "crux-sweep"];
 // …unless BOTH labels now carry evidence: the country (crux-country.mjs or a store-level lane) AND the
 // platform, via the DNS fingerprint (detect-builders/CT set hosting_provider = platform). ingest-ranked's
 // own homepage platform guesses are not evidence (11-13: lavanguardia.com "VTEX", train-times.net
