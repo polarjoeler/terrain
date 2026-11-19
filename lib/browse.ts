@@ -17,6 +17,9 @@ import { usdSqlExpr, usdExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand 
 import { scoreExpr } from "./score.ts";
 import { db as sharedDb } from "./db";
 import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
+import { ROW_CAP } from "./browse-limits";
+
+export { ROW_CAP };
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
 // a latent bug on the Supabase transaction pooler (which rejects prepared statements). The shared
@@ -408,7 +411,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
   const launchSel = sql.unsafe(
     `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
   );
-  const limit = Math.min(f.limit ?? 50, 1000);
+  const limit = Math.min(f.limit ?? 50, ROW_CAP);
   const offset = f.offset ?? 0;
   // Unknown keys (an old saved list, a hand-edited request) fall back to the default order.
   const order = sql.unsafe(ORDER[f.sort as SortKey] ?? ORDER.new);
