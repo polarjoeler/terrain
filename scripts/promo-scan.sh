@@ -20,4 +20,10 @@ LOCAL_LLM_URL="${LOCAL_LLM_URL:-http://localhost:11434/v1}" \
   perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 14400 \
   node --no-warnings --env-file=.env.local scripts/promo-scan.mjs --top 1500 --concurrency 2 --pause-ms 1200 --stale-hours "$STALE" --llm \
   || echo "!! promo-scan failed or capped"
+# Sale products behind each deal (Woo Store API + the top 300 Shopify BF collection pages). Runs after
+# the scan, under the same lock, so the two never share the Shopify budget at once: ~900 Shopify
+# homepages + ≤300 collection pages a day stays inside the ~1,200/day clean rate.
+perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 7200 \
+  node --no-warnings --env-file=.env.local scripts/promo-products.mjs --shopify-top 300 --stale-hours "$STALE" \
+  || echo "!! promo-products failed or capped"
 echo "===== promo-scan done $(date '+%F %T') ====="
