@@ -80,7 +80,7 @@ export function hiddenPlatformDbValues(): string[] {
 // Platforms whose stores are self-hosted (open source), so a hosting provider means something. On
 // Shopify, Wix and the other SaaS builders the host is the vendor itself, so hosting is never shown
 // for them. scripts/dns-tech.mjs keeps the same list (a .mjs script can't import this file).
-export const OPEN_SOURCE_PLATFORMS = ["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart", "shopware"];
+export const OPEN_SOURCE_PLATFORMS = ["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart", "shopware", "bagisto"];
 
 export const isOpenSource = (platform: string | null | undefined) =>
   OPEN_SOURCE_PLATFORMS.includes(String(platform ?? "").toLowerCase());

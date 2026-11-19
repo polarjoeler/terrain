@@ -43,6 +43,7 @@ const CANON: Record<string, string> = {
   futureshop: "futureshop",
   w2: "w2",
   vtex: "VTEX",
+  bagisto: "Bagisto",
   norce: "Norce",
   saleor: "Saleor",
   swell: "Swell",
