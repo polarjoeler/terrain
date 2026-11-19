@@ -77,23 +77,36 @@ async function build() {
   }
   if (!files.length) throw new Error(`no cc.csv.gz country lists in ${dir}`);
   // 13.5M sites: a Map to an index plus typed arrays, not an object per site.
+  //
+  // Where a site is "from" can't be read off the raw rank: CrUX ranks are buckets (1k, 5k, 10k, 50k…)
+  // and a small country's whole list is a few thousand sites, so pluto.tv sits in São Tomé's top
+  // 1,000 but only America's top 5,000. Each rank is read relative to its list's size instead, and a
+  // country is kept only when the site places at least twice as high there as in any other list.
   const idx = new Map();
   const origins = [];
   const CAP = 16_000_000;
-  const best = new Int32Array(CAP).fill(0x7fffffff), bestCc = new Uint16Array(CAP), ties = new Uint8Array(CAP);
+  const rel1 = new Float32Array(CAP).fill(2), rel2 = new Float32Array(CAP).fill(2);
+  const bestRank = new Int32Array(CAP), bestCc = new Uint16Array(CAP);
   const ccs = files.map(([cc]) => cc);
-  for (const [k, [cc, file]] of files.entries()) {
+  for (const [k, [, file]] of files.entries()) {
+    const rows = [];
     const rl = readline.createInterface({ input: fs.createReadStream(file).pipe(createGunzip()), crlfDelay: Infinity });
     for await (const line of rl) {
       const c = line.lastIndexOf(",");
       const rank = Number(line.slice(c + 1));
-      if (!rank) continue;                                   // header
-      const p = parseOrigin(line.slice(0, c));
+      if (rank) rows.push([line.slice(0, c), rank]);       // skips the header
+    }
+    const size = rows.length;
+    for (const [o, rank] of rows) {
+      const p = parseOrigin(o);
       if (!p) continue;
       let i = idx.get(p.domain);
       if (i === undefined) { i = origins.length; idx.set(p.domain, i); origins.push(p.origin); }
-      if (rank < best[i]) { best[i] = rank; bestCc[i] = k; ties[i] = 1; origins[i] = p.origin; }
-      else if (rank === best[i] && bestCc[i] !== k) ties[i] = Math.min(255, ties[i] + 1);
+      const rel = Math.min(1, rank / size);
+      if (rel < rel1[i]) {
+        if (bestCc[i] !== k || rel1[i] === 2) rel2[i] = rel1[i];
+        rel1[i] = rel; bestCc[i] = k; bestRank[i] = rank; origins[i] = p.origin;
+      } else if (rel < rel2[i] && bestCc[i] !== k) rel2[i] = rel;
     }
     if ((k + 1) % 40 === 0) console.log(`  ${k + 1}/${files.length} lists · ${idx.size.toLocaleString()} sites`);
   }
@@ -115,11 +128,14 @@ async function build() {
   for (const [domain, i] of idx) {
     if (nonStoreDomain(domain)) { blocked++; continue; }
     const tld = ccOf(domain);
-    const [cc, src] = tld ? [tld, "cctld"] : ties[i] === 1 ? [ccs[bestCc[i]], "crux-home"] : ["", "crux-global"];
-    outRows.push([domain, origins[i], best[i], cc, src]);
+    const [cc, src] = tld ? [tld, "cctld"] : rel1[i] * 2 <= rel2[i] ? [ccs[bestCc[i]], "crux-home"] : ["", "crux-global"];
+    outRows.push([domain, origins[i], bestRank[i], cc, src]);
   }
   outRows.sort((a, b) => (AFRICA.has(b[3]) - AFRICA.has(a[3])) || a[2] - b[2]);
-  fs.writeFileSync(out, outRows.map((r) => r.join("\t")).join("\n") + "\n");
+  // Streamed: millions of rows run past V8's maximum string length as one join.
+  const ws = fs.createWriteStream(out);
+  for (let k = 0; k < outRows.length; k += 50000) ws.write(outRows.slice(k, k + 50000).map((r) => r.join("\t")).join("\n") + "\n");
+  await new Promise((res, rej) => ws.end((e) => (e ? rej(e) : res())));
   const africa = outRows.filter((r) => AFRICA.has(r[3])).length;
   console.log(`✓ ${outRows.length.toLocaleString()} candidates → ${out}  (already held ${held.toLocaleString()} · blocklisted ${blocked.toLocaleString()} · Africa ${africa.toLocaleString()} first)`);
 }
@@ -133,10 +149,17 @@ async function sweep() {
   const MAX_BYTES = Number(arg("--max-bytes", 131072));
   const table = loadHostedPlatforms();
 
-  const done = new Set();
+  // A site counts as done once it has a verdict. "unreachable" only counts the second time: Lucy's
+  // Rain line drops out now and then (one 3,000-site test lost half its fetches, the next lost 6%),
+  // so a single miss is retried on the next pass instead of being written off.
+  const done = new Set(), missedOnce = new Set();
   if (fs.existsSync(RESULTS)) {
     const rl = readline.createInterface({ input: fs.createReadStream(RESULTS), crlfDelay: Infinity });
-    for await (const line of rl) { const m = /"d":"([^"]+)"/.exec(line); if (m) done.add(m[1]); }
+    for await (const line of rl) {
+      const m = /"d":"([^"]+)","v":"([a-z_]+)"/.exec(line);
+      if (!m) continue;
+      if (m[2] !== "unreachable" || missedOnce.has(m[1])) done.add(m[1]); else missedOnce.add(m[1]);
+    }
   }
   const sql = DRY ? null : postgres(process.env.DATABASE_URL, { prepare: false, max: 2, idle_timeout: 30, connect_timeout: 30,
     connection: { statement_timeout: 60000, lock_timeout: 10000 } });
@@ -190,10 +213,23 @@ async function sweep() {
     if (DRY && pending.length <= 60) console.log(`  ✓ ${c.domain.padEnd(38)} ${platform.padEnd(14)} ${how}  ${c.cc || "-"} (${c.csrc}) rank ${c.rank}`);
   };
 
+  // When most recent fetches fail, it's our line, not the web: stop for a minute instead of
+  // burning through candidates that would all read as unreachable.
+  const recent = [];
+  let pauseUntil = 0, pauses = 0;
+  const noteFetch = (failed) => {
+    recent.push(failed ? 1 : 0);
+    if (recent.length > 300) recent.shift();
+    if (recent.length >= 200 && recent.reduce((a, b) => a + b, 0) / recent.length > 0.5 && Date.now() > pauseUntil) {
+      pauseUntil = Date.now() + 60_000; pauses++; recent.length = 0;
+      console.log(`  ! over half of recent fetches failed: pausing 60s (pause ${pauses})`);
+    }
+  };
   const worker = async (w) => {
     const dns = new Resolver({ timeout: 3000, tries: 2 });
     dns.setServers(w % 2 ? ["1.1.1.1", "8.8.8.8"] : ["8.8.8.8", "1.1.1.1"]);
     for (let c = await take(); c; c = await take()) {
+      while (Date.now() < pauseUntil) await new Promise((r) => setTimeout(r, 2000));
       const host = new URL(c.origin).hostname;
       const [ips, cnames] = await Promise.all([
         dns.resolve4(host).catch((e) => (e.code === "ENOTFOUND" || e.code === "ENODATA" ? [] : null)),
@@ -207,6 +243,7 @@ async function sweep() {
         st.dnsStore++; keep(c, hosted.name, "dns", "", hosted.name); record(c, "store", { p: hosted.name, how: "dns" });
       } else {
         const r = await fetchText(c.origin + "/", { timeoutMs: 12000, maxBytes: MAX_BYTES, redirects: 3 });
+        noteFetch(!r);
         if (!r) { st.net++; record(c, "unreachable"); }
         else if (r.status === 429) { st.throttled++; }      // not recorded: next run retries it
         else if (r.status >= 400) { st.closed++; record(c, "closed", { s: r.status }); }
