@@ -6,6 +6,7 @@
 # ≤2 fetches per platform edge at a time and ≤1,500 rows per platform per run. Site builders are NOT
 # here — they need builder-promote's stricter catalogue check. Failed rows wait 7 days (unreachable)
 # or 30 days (live, no cart) before a retry once cms_confirm_at exists (confirm-other-cms --migrate).
+# Then confirm-custom does the same for platform='custom' stores in the visible markets.
 #   Driven by ~/Library/LaunchAgents/com.tembo.confirm-cms.plist (every ~6h).
 set -u
 cd "$HOME/storepulse" || exit 1
@@ -14,5 +15,8 @@ export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 node --env-file=.env.local scripts/heartbeat.mjs confirm-cms "starting" >/dev/null 2>&1 || true
 echo "===== confirm-cms $(date '+%F %T') ====="
 node --env-file=.env.local scripts/confirm-other-cms.mjs --limit 8000 --concurrency 8 --per-platform 1500 || echo "!! confirm-other-cms failed"
+# Bespoke/headless builds (platform=custom) in the visible markets: stricter bar — own-host page, cart
+# action, prices in the market's currency, not betting/news/fintech/… (see confirm-custom.mjs).
+node --env-file=.env.local scripts/confirm-custom.mjs --limit 1500 --concurrency 4 || echo "!! confirm-custom failed"
 node --env-file=.env.local scripts/heartbeat.mjs confirm-cms "idle — done" >/dev/null 2>&1 || true
 echo "===== confirm-cms done $(date '+%T') ====="
