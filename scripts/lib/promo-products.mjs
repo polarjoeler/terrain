@@ -113,7 +113,9 @@ export function shopifyProducts(html, origin, { max = 8 } = {}) {
     let regular = b.regular && price && b.regular > price ? b.regular : null;
     let pct = pctOf(price, regular);
     if (!pct && b.badge && b.badge >= 5 && b.badge <= 90) pct = b.badge;
-    if (pct !== null && (pct < 5 || pct > 90)) { pct = null; regular = null; }
+    // Above 80% off is almost always a mis-read was-price (two prices from different elements); keep
+    // the product, drop the claim. Seen 11-19: an HP Envy "R2,750 was R27,500", a couch "R8,800 was R85,799".
+    if (pct !== null && (pct < 5 || pct > 80)) { pct = null; regular = null; }
     const image = a.image ? shopifyImage(String(a.image), origin) || String(a.image).replace(/^\/\//, "https://") : b.image;
     const title = tidyTitle(a.title || b.title || h.replace(/-/g, " "));
     if (!image || !price) continue;
@@ -136,7 +138,7 @@ export function wooProducts(json, { max = 8 } = {}) {
     const pct = pctOf(price, regular);
     out.push({
       handle: String(p.slug || p.id), title: decodeEntities(String(p.name || "")).replace(/<[^>]+>/g, "").trim(),
-      url: p.permalink, image, price, regular: pct ? regular : null, pct: pct && pct >= 5 && pct <= 90 ? pct : null,
+      url: p.permalink, image, price, regular: pct && pct >= 5 && pct <= 80 ? regular : null, pct: pct && pct >= 5 && pct <= 80 ? pct : null,
       currency: pr.currency_code || "ZAR",
     });
   }
