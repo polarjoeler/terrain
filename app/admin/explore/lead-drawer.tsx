@@ -5,6 +5,7 @@ import { marketLabel, marketFlag } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
 import { isOpenSource } from "@/lib/platforms";
+import { socialUrl, socialLabel } from "@/lib/social";
 import { NOT_TRADING, dnsStackTools, emailProviderLabel } from "@/lib/store-signals";
 import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, floorBand, toUsd, type RevenueBand } from "@/lib/fx";
 import { updateStore, type StorePatch } from "./store-edit-action";
@@ -242,8 +243,16 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
       : toUsd(typedLocal, data?.currency ?? null, data?.country ?? null),
   );
   const money = (v: string | null, ccy?: string | null) => (v != null ? `${ccy ? ccy + " " : ""}${Math.round(Number(v)).toLocaleString()}` : null);
-  const social = (handle: string | null, url: string, followers: number | null) =>
-    handle ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">{handle}{followers ? ` · ${followers.toLocaleString()}` : ""}</a> : null;
+  /** Renders whichever shape the column holds. ~70% of stored Instagram and Facebook values are
+   *  full URLs, so the old `https://instagram.com/${handle}` concatenation produced
+   *  `https://instagram.com/https://www.instagram.com/wayupsports` — a dead link labelled with the
+   *  whole URL. lib/social.ts does the unwrapping; a value that names no profile (a post
+   *  permalink, a Linktree) renders as nothing rather than as a broken link. */
+  const social = (value: string | null, network: "instagram" | "facebook" | "tiktok", followers: number | null) => {
+    const href = socialUrl(value, network);
+    if (!href) return null;
+    return <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">{socialLabel(value, network)}{followers ? ` · ${followers.toLocaleString()}` : ""}</a>;
+  };
 
   const conf = (c: string | null) => c === "good" ? "text-mint" : c === "medium" ? "text-orange-soft" : "text-cream/40";
   // The Explorer floors the band it DISPLAYS for the curated cohorts (explorer.tsx -> floorBand), so a
@@ -499,15 +508,17 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 ["Phone", data.contact_phone ? <span className="font-mono text-[13px]">{data.contact_phone}</span> : null],
                 ["Contact form", data.contact_form_url ? <a href={data.contact_form_url} target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">open</a> : null],
                 // Stored either as a full URL (company or person page) or as a bare company handle.
-                ["LinkedIn", data.linkedin ? (
-                  <a href={/^https?:\/\//.test(data.linkedin) ? data.linkedin : `https://www.linkedin.com/company/${data.linkedin}`}
+                // Through the same normaliser as the rest, so company/, in/ and a bare handle all
+                // resolve the same way and a trailing slash or ?trk= cannot reach the label.
+                ["LinkedIn", socialUrl(data.linkedin, "linkedin") ? (
+                  <a href={socialUrl(data.linkedin, "linkedin")!}
                     target="_blank" rel="noopener noreferrer" className="text-cyan hover:underline">
-                    {data.linkedin.replace(/^https?:\/\/(www\.)?linkedin\.com\//, "").replace(/\/$/, "")}
+                    {socialLabel(data.linkedin, "linkedin")}
                   </a>
                 ) : null],
-                ["Instagram", social(data.instagram, `https://instagram.com/${data.instagram}`, data.instagram_followers)],
-                ["Facebook", social(data.facebook, `https://facebook.com/${data.facebook}`, data.facebook_followers)],
-                ["TikTok", social(data.tiktok, `https://tiktok.com/@${data.tiktok}`, null)],
+                ["Instagram", social(data.instagram, "instagram", data.instagram_followers)],
+                ["Facebook", social(data.facebook, "facebook", data.facebook_followers)],
+                ["TikTok", social(data.tiktok, "tiktok", null)],
               ]} />
 
               <Card title="Payments & shipping" fields={[
