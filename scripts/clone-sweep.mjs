@@ -19,16 +19,38 @@
  *     from the other one, 'stockist' when it's a sliver of a bigger, multi-source catalogue.
  *  Images/SKUs present in more than HUB stores (theme demo photos, supplier stock shots) never
  *  generate candidates.
+ *   - Theme demo catalogues: a WordPress theme's one-click demo import ships ~12-40 sample
+ *     products, and brochure sites (accounting firms, golf clubs, churches) leave them live. Each
+ *     pack sits on ~20 sites, under HUB, so the pair scores 100. Measured 11-19: ~1,020 of 1,576
+ *     stored matches were this shape. When the smaller catalogue is small and nearly every product
+ *     the pair shares is also on DEMO_FAN+ other sites, the pair is boilerplate, not a copy: it is
+ *     skipped (unless one domain looks like the other's brand name), any stored row for it is deleted, and the sites are listed in logs/demo-catalogues.tsv
+ *     (a demo catalogue is also a sign the site doesn't really sell).
  *
  *   node --env-file=.env.local scripts/clone-sweep.mjs [--dry-run]
  */
+import fs from "node:fs";
 import postgres from "postgres";
 import { scorePair, siteOf as site } from "./lib/catalog-fp.mjs";
+import { lookalikeSignal } from "../lib/radar/clone-score.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const HUB = 25;          // a hash in more stores than this is boilerplate, not evidence
 const MIN_SHARED = 3;    // shared images + SKUs before a pair is scored at all
 const MIN_SCORE = 25;    // PARTIAL and up are kept
+const DEMO_MAX_N = 50;   // demo packs are small; a clone of a real brand's catalogue usually isn't
+const DEMO_FAN = 5;      // a product on this many sites (pair included) is shared boilerplate
+const DEMO_SHARE = 0.8;  // share of the pair's common products that must be boilerplate
+
+// Sorted int-array intersection, returning the shared values.
+function common(a, b) {
+  const out = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push(a[i]); i++; j++; } else if (a[i] < b[j]) i++; else j++;
+  }
+  return out;
+}
 
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, idle_timeout: 20 });
@@ -68,8 +90,38 @@ async function main() {
     const IMG = index("img"), SKU = index("sku");
     console.log(`Index: ${IMG.m.size.toLocaleString()} images (${IMG.hubs} boilerplate dropped), ${SKU.m.size.toLocaleString()} SKUs (${SKU.hubs} dropped)`);
 
+    // How many sites carry each handle/title that appears on a small catalogue. Only small
+    // catalogues' items are counted, so this stays a few hundred thousand keys, not millions.
+    const fan = { handle: new Map(), title: new Map() };
+    for (const kind of ["handle", "title"]) {
+      const f = fan[kind];
+      for (const s of S) if (s.n <= DEMO_MAX_N) for (const h of s[kind]) f.set(h, 0);
+      for (const s of S) for (const h of s[kind]) if (f.has(h)) f.set(h, f.get(h) + 1);
+    }
+    // Boilerplate share of what a pair has in common (handles, else titles when a side has none).
+    const demoShare = (a, b) => {
+      const kind = a.handle.length && b.handle.length ? "handle" : "title";
+      const shared = common(a[kind], b[kind]);
+      if (!shared.length) return 0;
+      let boiler = 0;
+      for (const h of shared) if ((fan[kind].get(h) ?? 0) >= DEMO_FAN) boiler++;
+      return boiler / shared.length;
+    };
+    // Site-level: a small catalogue made almost entirely of boilerplate is a demo import.
+    const demoSites = [];
+    for (const s of S) {
+      if (s.n > DEMO_MAX_N) continue;
+      const kind = s.handle.length ? "handle" : "title";
+      if (s[kind].length < 3) continue;
+      let boiler = 0;
+      for (const h of s[kind]) if ((fan[kind].get(h) ?? 0) >= DEMO_FAN) boiler++;
+      if (boiler / s[kind].length >= DEMO_SHARE) demoSites.push({ domain: s.domain, n: s.n, share: boiler / s[kind].length });
+    }
+    console.log(`Demo catalogues: ${demoSites.length.toLocaleString()} small sites are ≥${DEMO_SHARE * 100}% shared boilerplate`);
+
     const matches = [];
     let scored = 0, sameOp = 0, mirrors = 0;
+    const demoPairs = [];
     const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
     for (let i = 0; i < S.length; i++) {
       const a = S[i];
@@ -83,6 +135,10 @@ async function main() {
         const b = S[j];
         if (site(a.domain) === site(b.domain) || (a.group && a.group === b.group)) { sameOp++; continue; }
         if (a.born && b.born && day(a.born) === day(b.born)) { mirrors++; continue; }
+        // Exempt look-alike domains: a small brand copied by several clones also looks "shared",
+        // and burnt.co.za ← burntstudiospro.co.za is exactly the case Radar exists for.
+        if (Math.min(a.n, b.n) <= DEMO_MAX_N && demoShare(a, b) >= DEMO_SHARE
+            && !lookalikeSignal(a.domain, b.domain) && !lookalikeSignal(b.domain, a.domain)) { demoPairs.push([a.domain, b.domain]); continue; }
         scored++;
         // Original = the older catalogue (earliest product), else the bigger one.
         const aFirst = a.born && b.born ? a.born <= b.born : a.n >= b.n;
@@ -98,7 +154,12 @@ async function main() {
     }
     matches.sort((x, y) => y.score - x.score);
     const by = (f) => matches.reduce((o, m) => ((o[f(m)] = (o[f(m)] ?? 0) + 1), o), {});
-    console.log(`Scored ${scored.toLocaleString()} pairs (${sameOp.toLocaleString()} same-operator, ${mirrors.toLocaleString()} mirror sites skipped) → ${matches.length} matches`, by((m) => `${m.kind}/${m.verdict}`));
+    console.log(`Scored ${scored.toLocaleString()} pairs (${sameOp.toLocaleString()} same-operator, ${mirrors.toLocaleString()} mirror sites, ${demoPairs.length.toLocaleString()} demo-catalogue pairs skipped) → ${matches.length} matches`, by((m) => `${m.kind}/${m.verdict}`));
+    try {
+      fs.mkdirSync("logs", { recursive: true });
+      fs.writeFileSync("logs/demo-catalogues.tsv", "domain\tn_products\tboilerplate_share\n" +
+        demoSites.sort((x, y) => y.share - x.share).map((d) => `${d.domain}\t${d.n}\t${d.share.toFixed(2)}`).join("\n") + "\n");
+    } catch (e) { console.warn(`could not write logs/demo-catalogues.tsv: ${e.message}`); }
     for (const m of matches.filter((m) => m.kind === "clone").slice(0, 15))
       console.log(`  ${String(m.score).padStart(3)} ${m.verdict.padEnd(7)} ${m.suspect} ← ${m.original} · ${Math.round(m.copied_share * 100)}% of its catalogue · ${m.reasons.slice(0, 2).join(", ")}`);
     if (DRY) return;
@@ -126,7 +187,16 @@ async function main() {
     // re-found, so they'd linger; drop them. Gutted clones on different sites stay on record.
     const stale = (await sql`SELECT original, suspect FROM catalog_matches`).filter((r) => site(r.original) === site(r.suspect));
     for (const r of stale) await sql`DELETE FROM catalog_matches WHERE original = ${r.original} AND suspect = ${r.suspect}`;
-    console.log(`✓ Upserted ${matches.length} matches${stale.length ? `, dropped ${stale.length} same-site pairs` : ""} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    // Pairs stored before the demo-catalogue rule existed are now positively known to be
+    // boilerplate, so they go too (unlike a gutted clone, which simply isn't re-found).
+    let demoDropped = 0;
+    for (let i = 0; i < demoPairs.length; i += 500) {
+      const chunk = demoPairs.slice(i, i + 500);
+      const r = await sql`DELETE FROM catalog_matches m USING jsonb_to_recordset(${sql.json(chunk.map(([a, b]) => ({ a, b })))}) AS p(a text, b text)
+        WHERE (m.original = p.a AND m.suspect = p.b) OR (m.original = p.b AND m.suspect = p.a)`;
+      demoDropped += r.count;
+    }
+    console.log(`✓ Upserted ${matches.length} matches${stale.length ? `, dropped ${stale.length} same-site pairs` : ""}${demoDropped ? `, dropped ${demoDropped} demo-catalogue pairs` : ""} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   } finally {
     await sql.end();
   }

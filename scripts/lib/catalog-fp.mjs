@@ -193,7 +193,16 @@ export function scorePair(orig, sus) {
   const k = { img: inter(orig.img, sus.img), sku: inter(orig.sku, sus.sku), handle: inter(orig.handle, sus.handle), title: inter(orig.title, sus.title) };
   const ratio = (kind) => { const m = Math.min(orig[kind].length, sus[kind].length); return m ? k[kind] / m : 0; };
   const pm = priceMirror(orig, sus);
-  const score = Math.min(100, Math.round((W.img * ratio("img") + W.sku * ratio("sku") + W.handle * ratio("handle") + W.title * ratio("title")) * (1 + 0.15 * pm)));
+  // A side with no SKUs at all can't share one: Shopify product sitemaps carry none, and Woo leaves
+  // them empty wholesale. Scoring that as "0% SKU overlap" capped every such pair at 74, so a Woo
+  // clone of a sitemap-fingerprinted Shopify store could never reach COPY. Drop the SKU weight
+  // from the denominator instead. Images, handles and titles still have to carry the score.
+  // Only when handles or titles do match: image-only overlap (a few shared stock photos) keeps
+  // its old, lower score rather than being inflated past the PARTIAL floor.
+  const skuKnown = (orig.sku.length > 0 && sus.sku.length > 0) || (k.handle + k.title === 0);
+  const wsum = W.img + W.handle + W.title + (skuKnown ? W.sku : 0);
+  const raw = W.img * ratio("img") + W.handle * ratio("handle") + W.title * ratio("title") + (skuKnown ? W.sku * ratio("sku") : 0);
+  const score = Math.min(100, Math.round((100 * raw / wsum) * (1 + 0.15 * pm)));
   const copied = Math.max(
     sus.img.length ? k.img / sus.img.length : 0,
     sus.handle.length ? k.handle / sus.handle.length : 0,
