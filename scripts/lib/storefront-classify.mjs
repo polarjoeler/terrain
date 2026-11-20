@@ -25,7 +25,7 @@ export const PLATFORMS = [
   { name: "SAP Hybris",     kind: "native", sig: ["yacceleratorstorefront", "/_ui/responsive", "hybris"] },
   { name: "VTEX",           kind: "native", sig: ["vtexassets.com", "vteximg.com", "vtex.render-server", "vtexcommercestable"] },
   { name: "Spree",          kind: "native", sig: ["data-spree", "/spree/", "spree_"] },
-  { name: "X-Cart",         kind: "native", sig: ["x-cart", "xcart"] },
+  { name: "X-Cart",         kind: "native", sig: ["xliteconfig", "xcart_web_dir", "powered by x-cart"] },  // bare "xcart" matched clinics and wine estates (11-20)
   { name: "GoDaddy",        kind: "mixed",  sig: ["img1.wsimg.com", "websites.godaddy", "/ds/web/"] },
   // More platforms the custom-bucket reclassify surfaced — Shoplazza (cross-border dropshipping, big
   // in Africa) + nopCommerce, and the African creator-commerce tools Selar & Bumpa.

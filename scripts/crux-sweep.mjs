@@ -174,12 +174,22 @@ async function sweep() {
     if (DRY) return;
     if (b.length) {
       const col = (k) => b.map((x) => x[k]);
-      const r = await sql`
+      // A dropped line also drops the DB connection: wait it out instead of losing the run.
+      const insert = () => sql`
         INSERT INTO imported_stores (domain, country, country_source, platform, hosting_provider, published, source, crux_rank, crux_rank_month, payments, discovered_at)
         SELECT d, nullif(c, ''), cs, p, nullif(h, ''), false, 'crux-sweep', r, ${MONTH}, nullif(pay, ''), now()
           FROM unnest(${col("domain")}::text[], ${col("cc")}::text[], ${col("csrc")}::text[], ${col("platform")}::text[],
                       ${col("host")}::text[], ${col("rank")}::int[], ${col("pay")}::text[]) AS t(d, c, cs, p, h, r, pay)
         ON CONFLICT (domain) DO NOTHING`;
+      let r;
+      for (let attempt = 1; ; attempt++) {
+        try { r = await insert(); break; }
+        catch (e) {
+          if (attempt >= 20) throw e;
+          console.log(`  ! insert failed (${e.code || e.message}); retry ${attempt}/20 in 30s`);
+          await new Promise((res) => setTimeout(res, 30_000));
+        }
+      }
       st.written += r.count;
     }
     if (l.length) resOut.write(l.join("\n") + "\n");
@@ -213,23 +223,29 @@ async function sweep() {
     if (DRY && pending.length <= 60) console.log(`  ✓ ${c.domain.padEnd(38)} ${platform.padEnd(14)} ${how}  ${c.cc || "-"} (${c.csrc}) rank ${c.rank}`);
   };
 
-  // When most recent fetches fail, it's our line, not the web: stop for a minute instead of
-  // burning through candidates that would all read as unreachable.
+  // A healthy sample of the web fails ~10-20% of fetches. Far more than that means our line is
+  // choking (11-19: 48 parallel fetches took Lucy's Rain line from 6% to 73% failures, and 78% of
+  // those "unreachable" sites loaded fine at low load). So the parallelism adapts: halve it and
+  // rest 30s when >35% of the last 200 fetches fail, add one worker back per clean window (<20%).
   const recent = [];
-  let pauseUntil = 0, pauses = 0;
+  let active = Math.min(CONC, 8), pauseUntil = 0, backoffs = 0, exhausted = false;
   const noteFetch = (failed) => {
     recent.push(failed ? 1 : 0);
-    if (recent.length > 300) recent.shift();
-    if (recent.length >= 200 && recent.reduce((a, b) => a + b, 0) / recent.length > 0.5 && Date.now() > pauseUntil) {
-      pauseUntil = Date.now() + 60_000; pauses++; recent.length = 0;
-      console.log(`  ! over half of recent fetches failed: pausing 60s (pause ${pauses})`);
-    }
+    if (recent.length < 200) return;
+    const rate = recent.reduce((a, b) => a + b, 0) / recent.length;
+    recent.length = 0;
+    if (rate > 0.35) {
+      active = Math.max(2, Math.floor(active / 2)); pauseUntil = Date.now() + 30_000; backoffs++;
+      console.log(`  ! ${(rate * 100).toFixed(0)}% of last 200 fetches failed: down to ${active} workers, resting 30s (backoff ${backoffs})`);
+    } else if (rate < 0.2 && active < CONC) active++;
   };
   const worker = async (w) => {
     const dns = new Resolver({ timeout: 3000, tries: 2 });
     dns.setServers(w % 2 ? ["1.1.1.1", "8.8.8.8"] : ["8.8.8.8", "1.1.1.1"]);
-    for (let c = await take(); c; c = await take()) {
-      while (Date.now() < pauseUntil) await new Promise((r) => setTimeout(r, 2000));
+    for (;;) {
+      while (!exhausted && !stopping && (Date.now() < pauseUntil || w >= active)) await new Promise((r) => setTimeout(r, 2000));
+      const c = await take();
+      if (!c) { exhausted = true; break; }
       const host = new URL(c.origin).hostname;
       const [ips, cnames] = await Promise.all([
         dns.resolve4(host).catch((e) => (e.code === "ENOTFOUND" || e.code === "ENODATA" ? [] : null)),
@@ -261,7 +277,7 @@ async function sweep() {
       if (pending.length >= 100 || lines.length >= 1000) await flush();
       if (st.seen % 2000 === 0) {
         const s = (Date.now() - t0) / 1000;
-        console.log(`  ${st.seen.toLocaleString()} · ${(st.seen / s).toFixed(1)}/s · stores: dns ${st.dnsStore} · http ${st.store} · custom ${st.custom} | not_store ${st.notStore} · dead ${st.dead} · closed ${st.closed} · unreachable ${st.net} · 429 ${st.throttled} · written ${st.written} · ${(st.bytes / 1e9).toFixed(2)}GB`);
+        console.log(`  ${st.seen.toLocaleString()} · ${(st.seen / s).toFixed(1)}/s · stores: dns ${st.dnsStore} · http ${st.store} · custom ${st.custom} | not_store ${st.notStore} · dead ${st.dead} · closed ${st.closed} · unreachable ${st.net} · 429 ${st.throttled} · written ${st.written} · ${active} workers · ${(st.bytes / 1e9).toFixed(2)}GB`);
       }
     }
   };
