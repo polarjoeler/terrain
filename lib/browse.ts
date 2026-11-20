@@ -342,6 +342,8 @@ const ORDER: Record<SortKey, string> = {
 let _universe: { at: number; n: number } | null = null;
 async function universeCount(): Promise<number> {
   if (_universe && Date.now() - _universe.at < 5 * 60_000) return _universe.n;
+  const fromRollup = await rollupAgg({}, false);
+  if (fromRollup) { _universe = { at: Date.now(), n: fromRollup.total }; return fromRollup.total; }
   const sql = db();
   const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int n FROM imported_stores WHERE ${buildWhere({})}`;
   _universe = { at: Date.now(), n };
@@ -399,6 +401,261 @@ async function dbAggSet(sql: ReturnType<typeof db>, key: string, v: AggParsed): 
   } catch { /* table missing or DB busy — caching is best-effort */ }
 }
 
+/* ── Summary table (browse_rollup) ────────────────────────────────────────────────────────────────
+ * The live aggregate above scans every visible store: 44s for Africa's 150k rows on 2026-11-20, 74s for
+ * the US alone, and it TIMES OUT (120s) by five large markets — so the dashboard could never go global
+ * on it, and Africa is drifting toward the same ceiling. The fix is to count once, in the background:
+ * buildBrowseRollup() writes every count and facet value per (country, platform) into browse_rollup,
+ * and rollupAgg() answers a request by SUMMING the partitions it covers. Partitions are disjoint, so
+ * the sum is exact for every view built from country + platform filters alone (the default view, each
+ * market, each CMS, market × CMS, the plan-scoped variants of those). Any other filter falls through to
+ * the caches and live scan as before. One exception to exactness: `operators` (distinct operators) is
+ * summed across partitions, so an operator group spanning two platforms or countries counts once per
+ * partition — a small over-count on mixed views, exact on a single country × platform.
+ * Builds are versioned (browse_rollup_build); readers use the newest finished build that covers the
+ * countries asked for and is under ROLLUP_MAX_AGE old, so a failed or slow build never serves partial
+ * numbers — the reader just falls back. */
+const ROLLUP_MAX_AGE = "6 hours";
+const SINGLE_FACETS: [string, string][] = [
+  ["f_contact", "contact_type"], ["f_country", "country"], ["f_platform", "platform"], ["f_band", "band"],
+  ["f_category", "category"], ["f_city", "city"], ["f_theme", "theme"], ["f_activity", "activity_tier"],
+  ["f_hosting", "hosting_provider"], ["f_email_provider", "dns_email"], ["f_not_trading", "nt_reason"],
+];
+const MULTI_FACETS: [string, string][] = [
+  ["f_payment", "payments"], ["f_shipping", "shipping_providers"], ["f_plugins", "plugins"], ["f_tech", "technologies"],
+];
+const STATS: [string, string][] = [
+  ["total", "count(*)"], ["c_plus", "count(*) FILTER (WHERE plus)"], ["c_email", "count(*) FILTER (WHERE has_email)"],
+  ["c_reachable", "count(*) FILTER (WHERE reachable)"], ["c_bounce", "count(*) FILTER (WHERE will_bounce)"],
+  ["c_whatsapp", "count(*) FILTER (WHERE has_whatsapp)"],
+  ["c_wa_only", "count(*) FILTER (WHERE has_whatsapp AND reachable IS NOT TRUE)"],
+  ["c_operators", "count(DISTINCT operator)"],
+];
+const RECENCY: [string, string, number][] = [
+  ["r_launched", "launched_on", 7], ["r_launched", "launched_on", 30], ["r_launched", "launched_on", 90], ["r_launched", "launched_on", 365],
+  ["r_discovered", "discovered_at", 7], ["r_discovered", "discovered_at", 30], ["r_discovered", "discovered_at", 365],
+];
+
+/** Create the summary tables. Separate from the build so a schema change is always a deliberate step. */
+export async function migrateBrowseRollup(): Promise<void> {
+  const sql = db();
+  await sql`CREATE TABLE IF NOT EXISTS browse_rollup_build (
+    build_id bigint PRIMARY KEY, scope text[] NOT NULL, status text NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz, rows int, partitions int, note text)`;
+  await sql`CREATE TABLE IF NOT EXISTS browse_rollup (
+    build_id bigint NOT NULL, country text NOT NULL, platform text NOT NULL, facet text NOT NULL, value text NOT NULL, n bigint NOT NULL,
+    PRIMARY KEY (build_id, country, platform, facet, value))`;
+}
+
+/** Count one country (optionally one hash bucket of it) into the build. Returns rows written. */
+async function rollupPartition(build: number, country: string, bucket: number, buckets: number, side: SideTables, preview = false): Promise<number | { facet: string; value: string; n: string }[]> {
+  const sql = db();
+  const parts: string[] = [];
+  for (const [k, expr] of STATS) parts.push(`SELECT pkey, '_stat'::text AS facet, '${k}'::text AS value, ${expr} AS n FROM f GROUP BY 1`);
+  for (const [k, col, days] of RECENCY) parts.push(`SELECT pkey, '${k}'::text, '${days}'::text, count(*) FILTER (WHERE ${col} >= CURRENT_DATE - ${days}) FROM f GROUP BY 1`);
+  for (const [k, col] of SINGLE_FACETS) parts.push(`SELECT pkey, '${k}'::text, ${col}::text, count(*) FROM f WHERE ${col} IS NOT NULL AND btrim(${col}::text) <> '' GROUP BY 1, 3`);
+  for (const [k, col] of MULTI_FACETS) parts.push(`SELECT pkey, '${k}'::text, btrim(tok), count(*) FROM f, unnest(string_to_array(COALESCE(f.${col}, ''), ';')) AS tok WHERE btrim(tok) <> '' GROUP BY 1, 3`);
+  parts.push(`SELECT pkey, 'f_apps'::text, lower(m[1]), count(*) FROM f, regexp_matches(COALESCE(f.apps, ''), 'apps\\.shopify\\.com/([a-z0-9][a-z0-9-]*)', 'g') AS m
+    WHERE m[1] NOT IN ('partners','collections','browse','categories','stores') GROUP BY 1, 3`);
+  parts.push(`SELECT pkey, 'f_dns_tool'::text, tok, count(*) FROM f, unnest(f.dns_tools) AS tok WHERE tok <> ALL(${textArray(EMAIL_TOOLS)}) GROUP BY 1, 3`);
+  // Buckets hash the OPERATOR, not the domain, so an operator's sites stay in one bucket and its
+  // distinct count is exact within a partition.
+  const bucketCond = buckets > 1 ? sql`AND mod(abs(hashtext(COALESCE(g_id, domain))), ${buckets}) = ${bucket}` : sql``;
+  const cte = sql`
+    WITH f AS MATERIALIZED (
+      SELECT COALESCE(platform, '') AS pkey, ${aggColumns(side)}
+      FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
+        ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
+      WHERE published AND country = ${country}
+        AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
+        AND activity_tier IS DISTINCT FROM 'not_a_store'
+        ${bucketCond}
+    ), agg AS (${sql.unsafe(parts.join("\n UNION ALL "))})`;
+  // Read-only preview (checkRollupCountry): the same counts, summed over platforms, nothing written.
+  if (preview) return await sql<{ facet: string; value: string; n: string }[]>`${cte}
+    SELECT facet, value, sum(n)::bigint AS n FROM agg WHERE n > 0 GROUP BY 1, 2`;
+  const r = await sql`${cte}
+    INSERT INTO browse_rollup (build_id, country, platform, facet, value, n)
+    SELECT ${build}, ${country}, pkey, facet, value, n FROM agg WHERE n > 0
+    ON CONFLICT (build_id, country, platform, facet, value) DO UPDATE SET n = browse_rollup.n + EXCLUDED.n`;
+  return r.count;
+}
+
+/** Rebuild the summary table. `countries` defaults to the customer-visible markets; pass more to
+ *  precompute (the reader still serves only VISIBLE_MARKETS). Large countries are split into hash
+ *  buckets of ~bucketRows stores so no single statement nears the pooler's 120s ceiling. */
+export async function buildBrowseRollup(opts: { countries?: string[]; bucketRows?: number; log?: (m: string) => void } = {}) {
+  const sql = db();
+  const log = opts.log ?? (() => {});
+  const side = await sideTables();
+  const bucketRows = opts.bucketRows ?? 120_000;
+  const scope = opts.countries?.length ? opts.countries : [...VISIBLE_MARKETS];
+  const sizes = await sql<{ country: string; n: number }[]>`
+    SELECT country, count(*)::int n FROM imported_stores
+    WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store' AND country = ANY(${scope})
+    GROUP BY 1 ORDER BY 2 DESC`;
+  const build = Date.now();
+  await sql`INSERT INTO browse_rollup_build (build_id, scope, status) VALUES (${build}, ${scope}, 'building')`;
+  const t0 = Date.now();
+  let rows = 0, partitions = 0;
+  try {
+    for (const { country, n } of sizes) {
+      const buckets = Math.max(1, Math.ceil(n / bucketRows));
+      for (let b = 0; b < buckets; b++) {
+        const t = Date.now();
+        rows += (await rollupPartition(build, country, b, buckets, side)) as number;
+        partitions++;
+        log(`${country}${buckets > 1 ? ` ${b + 1}/${buckets}` : ""} · ${n.toLocaleString()} stores · ${((Date.now() - t) / 1000).toFixed(1)}s`);
+      }
+    }
+  } catch (e) {
+    await sql`UPDATE browse_rollup_build SET status = 'failed', finished_at = now(), note = ${String((e as Error).message).slice(0, 500)} WHERE build_id = ${build}`;
+    await sql`DELETE FROM browse_rollup WHERE build_id = ${build}`;
+    throw e;
+  }
+  await sql`UPDATE browse_rollup_build SET status = 'done', finished_at = now(), rows = ${rows}, partitions = ${partitions} WHERE build_id = ${build}`;
+  // Keep the two newest finished builds (a reader mid-request may still be on the previous one).
+  await sql`DELETE FROM browse_rollup WHERE build_id NOT IN (
+    SELECT build_id FROM browse_rollup_build WHERE status = 'done' ORDER BY build_id DESC LIMIT 2)
+    AND build_id NOT IN (SELECT build_id FROM browse_rollup_build WHERE status = 'building')`;
+  await sql`DELETE FROM browse_rollup_build WHERE build_id < ${build} - 7 * 864e5`;
+  return { build, rows, partitions, seconds: Math.round((Date.now() - t0) / 1000) };
+}
+
+/** Read-only self-test: compute one country's summary counts WITHOUT writing them and compare with
+ *  direct counts over the same rows. Returns the mismatches (empty = the build would be exact). */
+export async function checkRollupCountry(country: string): Promise<{ checked: number; mismatches: string[] }> {
+  const sql = db();
+  const side = await sideTables();
+  const rows = (await rollupPartition(0, country, 0, 1, side, true)) as { facet: string; value: string; n: string }[];
+  const got = new Map(rows.map((r) => [`${r.facet}|${r.value}`, Number(r.n)]));
+  const where = buildWhere({ country: [country] }, side);
+  const [d] = await sql<Record<string, number>[]>`
+    SELECT count(*)::int total,
+      count(*) FILTER (WHERE plus)::int c_plus,
+      count(*) FILTER (WHERE ${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '')::int c_email,
+      count(*) FILTER (WHERE whatsapp IS NOT NULL AND whatsapp <> '')::int c_whatsapp,
+      count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 30)::int disc30
+    FROM imported_stores WHERE ${where}`;
+  const plats = await sql<{ v: string; n: number }[]>`
+    SELECT platform v, count(*)::int n FROM imported_stores WHERE ${where} AND platform IS NOT NULL AND btrim(platform) <> '' GROUP BY 1`;
+  const pays = await sql<{ v: string; n: number }[]>`
+    SELECT btrim(tok) v, count(*)::int n FROM imported_stores, unnest(string_to_array(COALESCE(payments, ''), ';')) tok
+    WHERE ${where} AND btrim(tok) <> '' GROUP BY 1`;
+  const want: [string, number][] = [
+    ["_stat|total", d.total], ["_stat|c_plus", d.c_plus], ["_stat|c_email", d.c_email], ["_stat|c_whatsapp", d.c_whatsapp],
+    ["r_discovered|30", d.disc30],
+    ...plats.map((p) => [`f_platform|${p.v}`, p.n] as [string, number]),
+    ...pays.map((p) => [`f_payment|${p.v}`, p.n] as [string, number]),
+  ];
+  const mismatches = want.filter(([k, n]) => (got.get(k) ?? 0) !== n).map(([k, n]) => `${k}: summary ${got.get(k) ?? 0} vs direct ${n}`);
+  return { checked: want.length, mismatches };
+}
+
+/** Which filters the summary table can answer: country + platform (and the plan's platform ceiling). */
+function rollupScope(f: BrowseFilters): { countries: string[]; platforms: string[] | null } | null {
+  const { country, platform, planPlatforms, limit: _l, offset: _o, sort: _s, refresh: _r, ...rest } = f;
+  const used = Object.values(rest).some((v) => v != null && v !== false && v !== "" && !(Array.isArray(v) && v.length === 0));
+  if (used) return null;
+  const visible: readonly string[] = VISIBLE_MARKETS;
+  const countries = country?.length ? country.filter((c) => visible.includes(c)) : [...visible];
+  let platforms: string[] | null = null;
+  if (planPlatforms?.length) {
+    platforms = platform?.length
+      ? platform.filter((p) => planPlatforms.some((a) => a.toLowerCase() === p.toLowerCase()))
+      : [...planPlatforms];
+  } else if (platform?.length) platforms = [...platform];
+  if (!countries.length || (platforms && !platforms.length)) return null;   // empty views: let the live path answer
+  return { countries, platforms };
+}
+
+let _rollupBuild: { at: number; id: number | null; scope: string[] } | null = null;
+async function currentRollup(): Promise<{ id: number; scope: string[] } | null> {
+  if (_rollupBuild && Date.now() - _rollupBuild.at < 60_000) return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
+  try {
+    const [b] = await db()<{ build_id: string; scope: string[] }[]>`
+      SELECT build_id, scope FROM browse_rollup_build
+      WHERE status = 'done' AND finished_at > now() - ${ROLLUP_MAX_AGE}::interval
+      ORDER BY build_id DESC LIMIT 1`;
+    _rollupBuild = { at: Date.now(), id: b ? Number(b.build_id) : null, scope: b?.scope ?? [] };
+  } catch { _rollupBuild = { at: Date.now(), id: null, scope: [] }; }   // table missing / DB busy → fall back
+  return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
+}
+
+/** Answer an aggregate from the summary table, or null when it can't (other filters, stale/missing
+ *  build, or a country the build didn't cover). Same keys as the live query, parsed the same way. */
+async function rollupAgg(f: BrowseFilters, wantApps: boolean): Promise<AggParsed | null> {
+  const scope = rollupScope(f);
+  if (!scope) return null;
+  const cur = await currentRollup();
+  if (!cur || !scope.countries.every((c) => cur.scope.includes(c))) return null;
+  try {
+    const sql = db();
+    const rows = await sql<{ facet: string; value: string; n: string }[]>`
+      SELECT facet, value, sum(n)::bigint AS n FROM browse_rollup
+      WHERE build_id = ${cur.id} AND country = ANY(${scope.countries})
+        ${scope.platforms ? sql`AND platform = ANY(${scope.platforms})` : sql``}
+      GROUP BY 1, 2`;
+    const agg: Record<string, unknown> = { total: 0 };
+    const facets = new Map<string, [string, number][]>();
+    const rec: Record<string, Record<string, number>> = { r_launched: {}, r_discovered: {} };
+    for (const r of rows) {
+      const n = Number(r.n);
+      if (r.facet === "_stat") agg[r.value] = n;
+      else if (r.facet in rec) rec[r.facet][r.value] = n;
+      else { if (!facets.has(r.facet)) facets.set(r.facet, []); facets.get(r.facet)!.push([r.value, n]); }
+    }
+    for (const [k, list] of facets) agg[k] = list.sort((a, b) => b[1] - a[1]).slice(0, 40);
+    if (!wantApps) agg.f_apps = [];          // the live path computes Apps only when Shopify is selected
+    for (const k of ["r_launched", "r_discovered"]) {
+      const days = k === "r_launched" ? ["7", "30", "90", "365"] : ["7", "30", "365"];
+      agg[k] = Object.fromEntries(days.map((d) => [d, rec[k][d] ?? 0]));
+    }
+    return parseAgg(agg);
+  } catch { return null; }
+}
+
+/** The per-store columns every browse aggregate reads. Shared by the live scan (browseQuery) and the
+ *  summary-table build (buildBrowseRollup) so the two can never count differently. */
+function aggColumns(side: SideTables) {
+  const sql = db();
+  const band = sql.unsafe(bandSqlExpr());
+  return sql`country, platform, city, category, btrim(theme) AS theme,
+             ${band} AS band, activity_tier, hosting_provider,
+             payments, shipping_providers, apps, plugins, technologies, plus, contact_type,
+             (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
+             (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
+             (contact_mx_ok IS FALSE) AS will_bounce,
+             (whatsapp IS NOT NULL AND whatsapp <> '') AS has_whatsapp,
+             COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
+             discovered_at,
+             COALESCE(g_id, domain) AS operator,
+             ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools" : "NULL::text AS dns_email, NULL::text[] AS dns_tools")},
+             ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}`;
+}
+
+const toFacet = (v: unknown): Facet =>
+  ((v ?? []) as [string, number][]).map(([value, count]) => ({ value: String(value), count: Number(count) }));
+const toRec = (v: unknown): Record<number, number> =>
+  Object.fromEntries(Object.entries((v ?? {}) as Record<string, number>).map(([k, n]) => [Number(k), Number(n)]));
+
+/** The aggregate row (live scan or summary table — same keys) → the parsed shape the page uses. */
+function parseAgg(agg: Record<string, unknown>): AggParsed {
+  return {
+    total: Number(agg.total),
+    stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), whatsapp: Number(agg.c_whatsapp ?? 0), whatsappOnly: Number(agg.c_wa_only ?? 0) },
+    facets: {
+      country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
+      band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
+      city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
+      activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
+      payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins), tech: toFacet(agg.f_tech),
+      emailProvider: toFacet(agg.f_email_provider), dnsTool: toFacet(agg.f_dns_tool), notTrading: toFacet(agg.f_not_trading),
+    },
+    recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
+  };
+}
+
 export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
   const sql = db();
   const side = await sideTables();
@@ -449,32 +706,18 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         FROM (SELECT tok AS v, count(*)::int n FROM f, unnest(f.dns_tools) AS tok
               WHERE tok <> ALL(${textArray(EMAIL_TOOLS)}) GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
 
-  const toFacet = (v: unknown): Facet =>
-    ((v ?? []) as [string, number][]).map(([value, count]) => ({ value: String(value), count: Number(count) }));
-  const toRec = (v: unknown): Record<number, number> =>
-    Object.fromEntries(Object.entries((v ?? {}) as Record<string, number>).map(([k, n]) => [Number(k), Number(n)]));
-
   const key = aggKey(f);
   const memHit = f.refresh ? undefined : _aggCache.get(key);
   let A: AggParsed | null = memHit && Date.now() - memHit.at < AGG_TTL_MS ? memHit.v : null;
+  // L1.5: the summary table answers any country/platform view exactly, at most an hour old.
+  if (!A && !f.refresh) A = await rollupAgg(f, wantApps);
   if (!A && !f.refresh) A = await dbAggGet(sql, key);   // L2: durable cross-instance cache, read before the heavy scan
   if (A) {
     _aggCache.set(key, { at: Date.now(), v: A });
   } else {
     const [agg] = await sql<Record<string, unknown>[]>`
     WITH f AS MATERIALIZED (
-      SELECT country, platform, city, category, btrim(theme) AS theme,
-             ${band} AS band, activity_tier, hosting_provider,
-             payments, shipping_providers, apps, plugins, technologies, plus, contact_type,
-             (${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> '') AS has_email,
-             (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
-             (contact_mx_ok IS FALSE) AS will_bounce,
-             (whatsapp IS NOT NULL AND whatsapp <> '') AS has_whatsapp,
-             COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
-             discovered_at,
-             COALESCE(g_id, domain) AS operator,
-             ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools" : "NULL::text AS dns_email, NULL::text[] AS dns_tools")},
-             ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}
+      SELECT ${aggColumns(side)}
       FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
         ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
       WHERE ${where}
@@ -516,19 +759,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '7',   count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 30),
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
-    A = {
-      total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), whatsapp: Number(agg.c_whatsapp ?? 0), whatsappOnly: Number(agg.c_wa_only ?? 0) },
-      facets: {
-        country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
-        band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
-        city: toFacet(agg.f_city), theme: toFacet(agg.f_theme),
-        activity: toFacet(agg.f_activity), hosting: toFacet(agg.f_hosting),
-        payment: toFacet(agg.f_payment), shipping: toFacet(agg.f_shipping), apps: toFacet(agg.f_apps), plugins: toFacet(agg.f_plugins), tech: toFacet(agg.f_tech),
-        emailProvider: toFacet(agg.f_email_provider), dnsTool: toFacet(agg.f_dns_tool), notTrading: toFacet(agg.f_not_trading),
-      },
-      recency: { launched: toRec(agg.r_launched), discovered: toRec(agg.r_discovered) },
-    };
+    A = parseAgg(agg);
     _aggCache.set(key, { at: Date.now(), v: A });
     void dbAggSet(sql, key, A);   // write-through so the next cold instance reads it back instead of re-scanning
   }
