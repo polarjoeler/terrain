@@ -16,6 +16,8 @@ export type Candidate = {
 
 export type WatchSummary = {
   open: number; newThisWeek: number; catalogueBacked: number; confirmed: number; tierB: number; lastRun: string | null;
+  /** Tier-A suspects that stopped answering, and the median days from first seen to gone. */
+  gone: number; medianDaysAlive: number | null;
 };
 
 export async function tableReady(): Promise<boolean> {
@@ -30,7 +32,10 @@ export async function watchSummary(): Promise<WatchSummary> {
            count(*) FILTER (WHERE catalog_score >= 50 AND status <> 'dismissed' AND status <> 'benign')::int AS "catalogueBacked",
            count(*) FILTER (WHERE status = 'confirmed')::int AS confirmed,
            count(*) FILTER (WHERE tier = 'B' AND status = 'new')::int AS "tierB",
-           max(last_seen_at)::text AS "lastRun"
+           max(last_seen_at)::text AS "lastRun",
+           count(*) FILTER (WHERE tier = 'A' AND catalog_detail ? 'gone_at')::int AS gone,
+           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM (catalog_detail->>'gone_at')::timestamptz - suspect_seen_at) / 86400)
+             FILTER (WHERE tier = 'A' AND catalog_detail ? 'gone_at' AND suspect_seen_at IS NOT NULL))::int AS "medianDaysAlive"
       FROM lookalike_candidates`;
   return r;
 }
