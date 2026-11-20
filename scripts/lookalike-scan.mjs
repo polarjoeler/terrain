@@ -19,6 +19,7 @@
  *  2. Tier. A = wraps/same-name AND (a bait word — official/sale/outlet/promo/deal… — or a
  *     throwaway TLD on a domain we first saw in the last 120 days). B = other wraps/same-name.
  *     One-edit typos are mostly coincidence (bakerswarehouse ↔ bikerswarehouse) and are not stored.
+ *     Full passes also prune rows they no longer emit (unreviewed, no catalogue evidence).
  *  3. Confirm. Up to --confirm tier-A Shopify/Woo candidates a run get a targeted catalogue check
  *     against their victim: Shopify product sitemaps (same polite path as sitemap-fp) or the Woo
  *     Store API. The first strong overlap is frozen into `evidence`, because clones empty themselves
@@ -259,6 +260,14 @@ async function scan(sql) {
     WHERE w.suspect LIKE 'www.%' AND a.suspect = substr(w.suspect, 5) AND a.brand = w.brand
       AND w.status = 'new' AND w.evidence IS NULL AND coalesce(w.catalog_score, 0) < 50`;
   if (gone.count) console.log(`  ✓ removed ${gone.count.toLocaleString()} www twin rows`);
+  // A full pass sees the whole corpus, so a row it did not emit is stale: the brand left the top
+  // 1,000, its label turned generic, its victim domain changed (www.easybake vs easybake), or the
+  // matching rules tightened. Drop those unless a human reviewed them or a catalogue backed them.
+  if (!since) {
+    const stale = await sql`DELETE FROM lookalike_candidates
+      WHERE last_seen_at < ${startedAt}::timestamptz AND status = 'new' AND evidence IS NULL AND coalesce(catalog_score, 0) < 50`;
+    if (stale.count) console.log(`  ✓ pruned ${stale.count.toLocaleString()} rows this full pass no longer finds`);
+  }
   for (const [k, v] of [[CURSOR_KEY, startedAt], ...(since ? [] : [[`${CURSOR_KEY}.generic`, JSON.stringify([...generic])]])])
     await sql`INSERT INTO app_settings (key, value, updated_at) VALUES (${k}, ${v}, now())
       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
