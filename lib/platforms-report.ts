@@ -4,6 +4,7 @@
  *  we're candid that coverage is deepest in our focus markets (the `coverage` block). */
 import { db as sharedDb } from "./db";
 import { cachedAgg } from "./agg-cache";
+import { platformFamilySql } from "./platform-family-sql";
 
 function db() { return sharedDb(); }
 
@@ -61,11 +62,18 @@ export async function platformReport(opts: { region?: string; country?: string; 
       // 2 · Migration flows — net stores gained/lost per CMS via platform switches.
       const migRows = await t<{ cms: string; joined: number; lft: number }[]>`
         SELECT cms, sum(joined)::int joined, sum(lft)::int lft FROM (
+          -- Both arms require the stacks to DIFFER, not just the labels: WooCommerce/SureCart/
+          -- WP eCommerce are WordPress plugins, so a relabel inside that family is not a flow.
+          -- See lib/platform-family-sql.ts.
           SELECT lower(live_platform) cms, count(*)::int joined, 0 lft FROM imported_stores
-            WHERE live_status='migrated' AND live_platform IS NOT NULL AND live_platform <> '' ${inScope} GROUP BY 1
+            WHERE live_status='migrated' AND live_platform IS NOT NULL AND live_platform <> ''
+              AND ${platformFamilySql(t, "live_platform")} <> ${platformFamilySql(t, "platform", "shopify")}
+              ${inScope} GROUP BY 1
           UNION ALL
           SELECT lower(platform) cms, 0 joined, count(*)::int lft FROM imported_stores
-            WHERE live_status='migrated' AND platform IS NOT NULL ${inScope} GROUP BY 1
+            WHERE live_status='migrated' AND platform IS NOT NULL
+              AND ${platformFamilySql(t, "live_platform")} <> ${platformFamilySql(t, "platform", "shopify")}
+              ${inScope} GROUP BY 1
         ) u WHERE cms IS NOT NULL AND cms <> '' GROUP BY cms ORDER BY (sum(joined)-sum(lft)) DESC`;
       const migrations: MigrationFlow[] = migRows.map((r) => ({ cms: r.cms, joined: r.joined, left: r.lft, net: r.joined - r.lft }));
 

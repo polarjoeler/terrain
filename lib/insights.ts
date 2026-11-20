@@ -9,6 +9,7 @@ import { after } from "next/server";
 import { db as sharedDb } from "./db";
 import { classify, cleanPayments, canonicalProvider, PAY_TYPES, type PayType } from "./payments-taxonomy";
 import { VISIBLE_MARKETS, FOCUS_MARKETS } from "./markets";
+import { platformFamilySql } from "./platform-family-sql";
 import { cachedAgg } from "./agg-cache";
 
 function db() {
@@ -469,6 +470,10 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
   // Cohort filter (Top 100, Brand New, …) applied inside the flag subquery.
   const inTag = cohortFilter(tag);
   const platClause = platformClause(sql, platform);
+  // Platform STACK, not platform label — see platformFamilySql. Used wherever this function asks
+  // "did the platform change", so one relabel inside the WordPress family can't read as a move.
+  const liveFam = platformFamilySql(sql, "live_platform");
+  const platFam = platformFamilySql(sql, "platform", "shopify");
 
   const [t] = await sql`
     SELECT
@@ -491,8 +496,10 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
       -- Two shapes count, because a confirmed move now HEALS platform (verify-liveness.mjs):
       -- afterwards platform = live_platform and the discrepancy is gone, so migrated_at is the
       -- durable marker. The discrepancy arm still catches a move seen but not yet confirmed.
+      -- The discrepancy arm compares FAMILIES, not strings: WooCommerce/SureCart/WP eCommerce are
+      -- WordPress plugins, so losing one label for another is a plugin change, not a move.
       COUNT(*) FILTER (WHERE za AND (migrated_at IS NOT NULL
-        OR (live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'Shopify')))))::int AS churn_migrated,
+        OR (live_platform IS NOT NULL AND ${liveFam} <> ${platFam})))::int AS churn_migrated,
       COUNT(*) FILTER (WHERE za AND live_status = 'dead')::int             AS churn_dead,
       COUNT(*) FILTER (WHERE live AND theme IS NOT NULL AND theme <> '')::int      AS themes_known,
       COUNT(*) FILTER (WHERE live AND category IS NOT NULL)::int           AS categories_known,
@@ -722,6 +729,8 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
     FROM imported_stores
     WHERE published AND country = ${country} ${inTag}
       AND live_platform IS NOT NULL AND live_platform <> 'Shopify'
+      -- a same-family relabel (Woo -> WordPress) is not somewhere a store "went"
+      AND ${platformFamilySql(sql, "live_platform")} <> ${platformFamilySql(sql, "platform", "shopify")}
     GROUP BY 1 ORDER BY n DESC`;
   const migratedTo = migratedRows.map((r) => ({ platform: r.platform, n: Number(r.n) }));
 
@@ -743,8 +752,15 @@ async function computeInsightsUncached(country = "ZA", tag?: string, platform: P
              ELSE lower(live_platform) END                 AS to_p
       FROM imported_stores
       WHERE published AND country = ${country} ${inTag} AND activity_tier IS DISTINCT FROM 'not_a_store'
-        AND (migrated_from IS NOT NULL
-             OR (live_platform IS NOT NULL AND lower(live_platform) <> lower(COALESCE(platform, 'shopify'))))
+        AND (
+          -- a confirmed move, with the origin recorded on the store...
+          (migrated_from IS NOT NULL
+            AND ${platformFamilySql(sql, "migrated_from")} <> ${platformFamilySql(sql, "platform", "shopify")})
+          -- ...or one seen but not yet confirmed, still showing as a live_platform discrepancy.
+          -- Both arms compare FAMILIES: a WordPress-plugin relabel is not a replatform.
+          OR (live_platform IS NOT NULL
+            AND ${platformFamilySql(sql, "live_platform")} <> ${platformFamilySql(sql, "platform", "shopify")})
+        )
     )
     SELECT p AS platform,
       COUNT(*) FILTER (WHERE dir = 'to')::int   AS gained,
