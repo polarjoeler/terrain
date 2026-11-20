@@ -16,6 +16,14 @@
  */
 import postgres from "postgres";
 const DRY = process.argv.includes("--dry-run");
+// Customer-visible markets (mirror of lib/markets.ts VISIBLE_MARKETS) and the eCommerce-platform rule.
+const VISIBLE = ["ZA","KE","NG","EG","MA","GH","TZ","UG","DZ","TN","CI","SN","MU","MZ","CM","BW","AO","NA","RW","ZM","ET","ZW","LY","MW","SO","LS","SZ"];
+const ECOMM_PLATFORMS = ["Shopify","EasyOrders","LightFunnels","YouCan","Magento","Ecwid","ecwid","Bumpa","PrestaShop","OpenCart",
+  "SureCart","Drupal Commerce","Shopware","SAP Hybris","Gumroad","nopCommerce","Shoplazza","Salesforce Commerce Cloud",
+  "Paystack Storefront","ShopStar","Big Cartel","Payhip","WP eCommerce","Easy Digital Downloads","Spree",
+  "Joomla (VirtueMart/HikaShop)","BigCommerce","Saleor","Square Space store","CS-Cart","Adobe Commerce","Shopline",
+  "Zen Cart / osCommerce","Shift4Shop/3dcart","Salla","Tiendanube/Nuvemshop","Medusa","WP EasyCart","Centra","Weebly/Square Online","Bagisto"];
+const BUILDER_PLATFORMS = ["Odoo","Wix","Squarespace","Webflow","GoDaddy","GoDaddy Website Builder","Duda","SITE123","Jimdo","Framer","Strikingly"];
 const REPORT = DRY || process.argv.includes("--verbose");
 
 async function main() {
@@ -72,6 +80,28 @@ async function main() {
     } else {
       const vres = await sql`UPDATE imported_stores SET published = true WHERE ${VERIFIED}`;
       console.log(`published ${vres.count} checkout-verified stores (were confirmed-live but hidden).`);
+    }
+
+    // THIRD — the eCommerce-platform rule (Joel 11-20: "if we think they are selling / eComm, we
+    // publish"). An African store identified on a shop platform is a store; liveness catches the dead
+    // ones afterwards. Before this, ~10k sat hidden because no lane ever confirmed them (5.8k Shopify
+    // that verify-liveness never reached, plus DNS/HTML-identified YouCan/EasyOrders/Magento/… from the
+    // sweep that confirm-other-cms's hosting_provider rule couldn't pass). Website builders count only
+    // where the sweep's classifier also saw cart/checkout/product markers. Left OUT on purpose:
+    // WooCommerce (the plugin sits on plenty of non-shops — it waits for the checkout probe), X-Cart
+    // (its 'xcart' signature matched clinics and wine estates), VTEX (crux-ranked misreads), Selar
+    // (banked by decision), and account./mail./cpanel.-style hosts that aren't storefronts.
+    const ECOMM = sql`NOT published AND upper(country) = ANY(${VISIBLE})
+      AND domain NOT LIKE 'www.%' AND domain NOT LIKE '%/%'
+      AND domain !~ '^(account|accounts|mail|webmail|cpanel|admin|checkout|login|auth|cdn|api)\\.'
+      AND (live_status IS NULL OR live_status NOT IN ('dead','migrated')) AND activity_tier IS DISTINCT FROM 'not_a_store'
+      AND (platform = ANY(${ECOMM_PLATFORMS}) OR (platform = ANY(${BUILDER_PLATFORMS}) AND source = 'crux-sweep'))`;
+    if (DRY) {
+      const [ep] = await sql`SELECT count(*)::int n FROM imported_stores WHERE ${ECOMM}`;
+      console.log(`[DRY] would publish ${ep.n} African stores on an eCommerce platform.`);
+    } else {
+      const eres = await sql`UPDATE imported_stores SET published = true WHERE ${ECOMM}`;
+      console.log(`published ${eres.count} African stores on an eCommerce platform.`);
     }
   } finally { await sql.end(); }
 }
