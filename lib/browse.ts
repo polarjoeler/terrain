@@ -84,6 +84,13 @@ export type BrowseFilters = {
    *  reachableContact: it reaches a person, but on a different channel with different rules
    *  (one-to-one, no bulk send), so a list built on it must be a deliberate choice. */
   hasWhatsapp?: boolean;
+  /** Stores where we INFERRED a personal address from the owner's name and a verifier then
+   *  confirmed the mailbox accepts mail (contact_guess_status = 'verified').
+   *  Deliberately NOT folded into reachableContact: that filter means the merchant PUBLISHED an
+   *  address that reaches a person, whereas this means the mailbox provably exists and the person
+   *  behind it is our inference. Different strength of claim, so it stays a separate choice and no
+   *  saved list silently changes meaning. */
+  verifiedGuess?: boolean;
   tier?: "top100" | "top500";
   /** Store groups (scripts/build-store-groups.mjs): `grouped` = stores whose operator runs other
    *  stores too; `group` = every store in one group (the drawer's "show all"). */
@@ -153,6 +160,9 @@ export type BrowseStats = {
   /** ...of which these have NO email that reaches a person — the segment where WhatsApp is the
    *  only way in, and the one worth a tile of its own. */
   whatsappOnly?: number;
+  /** Stores carrying a personal address we inferred and a verifier then confirmed as deliverable.
+   *  Undefined on aggregates cached before it shipped. */
+  verifiedGuess?: number;
 };
 
 export type BrowseResult = {
@@ -292,6 +302,7 @@ function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
   if (f.hasWhatsapp) conds.push(sql`whatsapp IS NOT NULL AND whatsapp <> ''`);
+  if (f.verifiedGuess) conds.push(sql`contact_guess_status = 'verified'`);
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
   if (f.grouped) conds.push(sql.unsafe(`domain IN ${GROUPED_SET}`));
   if (f.group) conds.push(sql`domain IN (SELECT domain FROM store_group_members WHERE group_id = ${f.group})`);
@@ -470,6 +481,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
              (contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}) AS reachable,
              (contact_mx_ok IS FALSE) AS will_bounce,
              (whatsapp IS NOT NULL AND whatsapp <> '') AS has_whatsapp,
+             (contact_guess_status = 'verified') AS verified_guess,
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at,
              COALESCE(g_id, domain) AS operator,
@@ -489,6 +501,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            -- NULL (NULL = ANY(...) is NULL), and NOT NULL is NULL, which FILTER drops — so an
            -- uncrawled store with a WhatsApp number would vanish from its own segment.
            (SELECT (count(*) FILTER (WHERE has_whatsapp AND reachable IS NOT TRUE))::int FROM f) AS c_wa_only,
+           (SELECT (count(*) FILTER (WHERE verified_guess))::int FROM f) AS c_vguess,
            (SELECT count(DISTINCT operator)::int FROM f)              AS c_operators,
            ${sql.unsafe(facetSub("contact_type"))}  AS f_contact,
            ${sql.unsafe(facetSub("country"))}       AS f_country,
@@ -518,7 +531,7 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
     A = {
       total: Number(agg.total),
-      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), whatsapp: Number(agg.c_whatsapp ?? 0), whatsappOnly: Number(agg.c_wa_only ?? 0) },
+      stats: { plus: Number(agg.c_plus ?? 0), email: Number(agg.c_email ?? 0), reachable: Number(agg.c_reachable ?? 0), willBounce: Number(agg.c_bounce ?? 0), operators: Number(agg.c_operators ?? 0), whatsapp: Number(agg.c_whatsapp ?? 0), whatsappOnly: Number(agg.c_wa_only ?? 0), verifiedGuess: Number(agg.c_vguess ?? 0) },
       facets: {
         country: toFacet(agg.f_country), platform: toFacet(agg.f_platform),
         band: toFacet(agg.f_band), category: toFacet(agg.f_category), contactType: toFacet(agg.f_contact),
