@@ -239,7 +239,7 @@ L.push(``);
 
 // 4 · BACKLOG
 L.push(`━━ 4 · BACKLOG — FOUND BUT NOT YET LIVE (focus markets) ━━`);
-L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   ← confirmed-live, awaiting auto-publish (should stay ~0)`);
+L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   ← confirmed-live; Rex publishes these every 3h, so a few hundred-to-thousand between runs is normal. Only a number that keeps rising day after day means it is stuck`);
 L.push(`Woo-checkout queue:           ${n(backTot.wq)}${d(backTot.wq, Y?.wq)}   ← Woo candidates awaiting the checkout probe`);
 L.push(`Never-probed tail:            ${n(backTot.np)}${d(backTot.np, Y?.np)}   ← unpublished, no payment/woo probe yet`);
 if (back.length > 1) { L.push(`By market  (verified-hidden · woo-queue · never-probed):`); for (const r of back) L.push(`   ${r.c.padEnd(4)} ${String(r.verified_hidden).padStart(6)} · ${String(r.woo_queue).padStart(5)} · ${String(r.never_probed).padStart(7)}`); }
