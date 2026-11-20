@@ -54,12 +54,40 @@ const GENERIC_FAN = 40;    // a label inside more domains than this is a word, n
 const RECENT_DAYS = 120;
 const PAUSE_MS = 1000;
 const CURSOR_KEY = "lookalike-scan.since";
+const GONE_AFTER = 2;      // suspect unreadable on this many checks → gone; stop spending fetches on it
 
 // Words a clone bolts onto a brand to look like its sale/official channel.
 // "wholesale" is a real channel, not bait, so "sale" must not match inside it.
 export const BAIT = /(official|outlet|(?<!whole)sales?|discount|factory|deals?|clearance|cheap|promo|blackfriday|warehouse)/;
 const SUFFIX = /(online|store|stores|shop|shops|sa|za|southafrica|africa|kenya|nigeria|mall|boutique|direct|express|hub|wholesale)/g;
 export const THROWAWAY_TLD = /\.(shop|store|online|xyz|top|site|club|live|vip|buzz|icu|life|fun|website|space)$/;
+
+// Short words a clone puts around a brand ("the", "buy", "official", "store"…). A brand label next to
+// anything else may be buried inside another word: pierretalamonds ⊃ retala, gadmax ⊃ admax.
+const WORDS = new Set(["the", "my", "buy", "get", "go", "best", "top", "new", "real", "original", "genuine", "authentic",
+  "official", "outlet", "sale", "sales", "shop", "shops", "store", "stores", "discount", "factory", "deal", "deals", "promo",
+  "cheap", "clearance", "blackfriday", "warehouse", "online", "mall", "hub", "direct", "express", "boutique", "co",
+  "za", "sa", "ke", "ng", "uk", "us", "mzansi", "africa", "southafrica", "kenya", "nigeria"]);
+const allWords = (p) => { const ok = [true]; for (let i = 1; i <= p.length; i++) { ok[i] = false; for (let j = Math.max(0, i - 12); j < i && !ok[i]; j++) ok[i] = ok[j] && WORDS.has(p.slice(j, i)); } return ok[p.length]; };
+const startsWord = (p) => { for (let i = 2; i <= Math.min(12, p.length); i++) if (WORDS.has(p.slice(0, i))) return true; return false; };
+const SHORT_BRAND = 8;   // shorter labels (admax, luron, crocssa) also need a clean right edge
+
+/** Does the brand label stand as its own word in the suspect's name? Its left edge must be the start
+ *  of the name, a hyphen or dot, or only lead words ("the", "official"…). A short brand also needs a
+ *  clean right edge — end of name, hyphen, or a known word next — because "crocssa|ndals" and
+ *  "dakotas|tore" are other words. Long brands keep any right edge: foxracinggrove.shop and
+ *  newbalancepress.shop are the dropship-clone pattern itself. Pure, so it's testable. */
+export function brandBounded(domain, brand) {
+  const raw = label(domain).replace(/^www\./, "");
+  const s = canon(raw), i = s.indexOf(brand);
+  if (i < 0) return false;
+  const toks = raw.split(/[-.]/).map(canon);
+  const cuts = new Set(); for (let k = 0, acc = 0; k < toks.length; k++) { cuts.add(acc); acc += toks[k].length; cuts.add(acc); }
+  const pre = s.slice(0, i), after = s.slice(i + brand.length);
+  const left = i === 0 || cuts.has(i) || allWords(pre);
+  const right = brand.length >= SHORT_BRAND || !after || cuts.has(i + brand.length) || startsWord(after);
+  return left && right;
+}
 
 /** One-character deletions, the SymSpell trick: two labels one edit apart share a deletion. */
 const del1 = (s) => { const o = new Set([s]); for (let i = 0; i < s.length; i++) o.add(s.slice(0, i) + s.slice(i + 1)); return o; };
@@ -78,7 +106,7 @@ export function buildMatcher(brands) {
     if (s.length < 5) return [];
     const found = new Map();
     for (let i = 0; i + 5 <= s.length; i++)
-      for (const c of pre.get(s.slice(i, i + 5)) ?? []) if (s.includes(c)) found.set(c, s === c ? "same-name" : "wraps");
+      for (const c of pre.get(s.slice(i, i + 5)) ?? []) if (!found.has(c) && s.includes(c)) found.set(c, s === c ? "same-name" : "wraps");
     for (const v of del1(s)) for (const c of dIdx.get(v) ?? []) if (!found.has(c) && c !== s) found.set(c, "typo");
     const reg = registrable(domain), out = [];
     for (const [c, how] of found) if (registrable(brands.get(c).domain) !== reg) out.push({ brand: c, how });
@@ -107,7 +135,9 @@ export function assess(h, s, v, now = Date.now()) {
   if (!social && (s.product_count ?? 0) >= 20) add(10, "no social accounts");
   if (s.name && canon(s.name).includes(h.brand)) add(10, `calls itself "${String(s.name).slice(0, 40)}"`);
   if ((s.product_count ?? 0) > 0) add(5, `${s.product_count} products`);
-  const tier = h.how === "typo" ? null : (bait || (odd && recent)) ? "A" : "B";
+  const bounded = h.how === "same-name" || brandBounded(s.domain, h.brand);
+  if (!bounded) sig.push("brand name buried inside another word");
+  const tier = h.how === "typo" ? null : bounded && (bait || (odd && recent)) ? "A" : "B";
   return { score, signals: sig, tier };
 }
 
@@ -183,8 +213,11 @@ async function scan(sql) {
     }
   }
   if (!since) generic = new Set([...fan].filter(([, f]) => f > GENERIC_FAN).map(([c]) => c));
-  const kept = hits.filter((h) => !generic.has(h.brand) && h.how !== "typo");
-  console.log(`lookalike-scan: ${since ? `incremental since ${since.slice(0, 19)}` : "FULL pass"} · ${brands.size.toLocaleString()} brand labels · ${n.toLocaleString()} domains · ${hits.length.toLocaleString()} raw hits · ${generic.size} generic labels dropped · ${kept.length.toLocaleString()} kept (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
+  // ct_tail lands both cert SANs, so most suspects exist as www.X and X. Keep the apex.
+  const apexHit = new Set(hits.filter((h) => !h.domain.startsWith("www.")).map((h) => `${h.domain}|${h.brand}`));
+  const twins = hits.filter((h) => h.domain.startsWith("www.") && apexHit.has(`${h.domain.slice(4)}|${h.brand}`)).length;
+  const kept = hits.filter((h) => !generic.has(h.brand) && h.how !== "typo" && !(h.domain.startsWith("www.") && apexHit.has(`${h.domain.slice(4)}|${h.brand}`)));
+  console.log(`lookalike-scan: ${since ? `incremental since ${since.slice(0, 19)}` : "FULL pass"} · ${brands.size.toLocaleString()} brand labels · ${n.toLocaleString()} domains · ${hits.length.toLocaleString()} raw hits · ${twins.toLocaleString()} www twins · ${generic.size} generic labels dropped · ${kept.length.toLocaleString()} kept (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
 
   // Details for suspects and their victims, in batches.
   const doms = [...new Set([...kept.map((h) => h.domain), ...kept.map((h) => brands.get(h.brand).domain)])];
@@ -221,6 +254,11 @@ async function scan(sql) {
         score = EXCLUDED.score, signals = EXCLUDED.signals, suspect_platform = EXCLUDED.suspect_platform,
         suspect_live = EXCLUDED.suspect_live, last_seen_at = now()`;
   }
+  // Twins stored before the apex rule: drop untouched www rows whose apex row exists.
+  const gone = await sql`DELETE FROM lookalike_candidates w USING lookalike_candidates a
+    WHERE w.suspect LIKE 'www.%' AND a.suspect = substr(w.suspect, 5) AND a.brand = w.brand
+      AND w.status = 'new' AND w.evidence IS NULL AND coalesce(w.catalog_score, 0) < 50`;
+  if (gone.count) console.log(`  ✓ removed ${gone.count.toLocaleString()} www twin rows`);
   for (const [k, v] of [[CURSOR_KEY, startedAt], ...(since ? [] : [[`${CURSOR_KEY}.generic`, JSON.stringify([...generic])]])])
     await sql`INSERT INTO app_settings (key, value, updated_at) VALUES (${k}, ${v}, now())
       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
@@ -266,19 +304,23 @@ async function confirm(sql, scanned) {
   // --dry with no table yet: check the scan's own top tier-A rows, write nothing.
   const todo = scanned ? await withBrandPlatform(sql, scanned.filter((r) => r.tier === "A" && /shopify|woo/i.test(r.suspect_platform ?? "")
       && !/dead|migrated/.test(r.suspect_live ?? "")).slice(0, CONFIRM)) : await sql`
-    SELECT c.suspect, c.brand, c.suspect_platform, v.platform AS brand_platform
+    SELECT c.suspect, c.brand, c.suspect_platform, v.platform AS brand_platform, c.catalog_detail AS prev
       FROM lookalike_candidates c LEFT JOIN imported_stores v ON v.domain = c.brand
+     JOIN imported_stores s ON s.domain = c.suspect
      WHERE c.tier = 'A' AND c.status IN ('new', 'confirmed')
-       AND coalesce(c.suspect_live, '') NOT IN ('dead', 'migrated')
+       AND coalesce(s.live_status, s.status, '') NOT IN ('dead', 'migrated', 'inactive')
+       AND coalesce(s.live_miss, 0) < 2
+       AND coalesce((c.catalog_detail->>'misses')::int, 0) < ${GONE_AFTER}::int
        AND (c.suspect_platform ILIKE 'shopify' OR c.suspect_platform ILIKE 'woo%')
        AND (c.catalog_checked_at IS NULL OR c.catalog_checked_at < now() - interval '14 days')
-     ORDER BY c.catalog_checked_at NULLS FIRST, c.suspect_seen_at DESC NULLS LAST
+     ORDER BY c.catalog_checked_at NULLS FIRST, c.score DESC, c.suspect_seen_at DESC NULLS LAST
      LIMIT ${CONFIRM}`;
   if (!todo.length) { console.log("confirm: nothing due"); return; }
   const pool = loadProxies();
   let requests = 0, throttled = 0;
   const get = async (url, p) => { requests++; const r = await fetchText(url, { proxy: pickProxy(p), timeoutMs: 20000, maxBytes: 12_000_000 }); if (r?.status === 429) throttled++; return r; };
   console.log(`confirm: ${todo.length} tier-A candidates · ${pool.length ? `${pool.length} proxies` : "DIRECT"}`);
+  const victims = new Map();   // one fetch per brand per run, success or failure
   const fpOf = async (domain, platform) => {
     const [row] = await sql`SELECT * FROM store_catalog_fp WHERE domain = ${domain} AND n_products > 0 AND fp_at > now() - interval '30 days'`;
     if (row) return { fp: toFp(row), cached: true };
@@ -292,15 +334,22 @@ async function confirm(sql, scanned) {
   for (const c of todo) {
     if (throttled >= 5) { console.log("! 5 × 429 — stopping; the rest wait for the next run"); break; }
     const sus = await fpOf(c.suspect, c.suspect_platform);
-    const vic = sus.error ? null : await fpOf(c.brand, c.brand_platform);
+    let vic = null;
+    if (!sus.error) { if (!victims.has(c.brand)) victims.set(c.brand, await fpOf(c.brand, c.brand_platform)); vic = victims.get(c.brand); }
     let detail, score = null, verdict = null;
     if (sus.error || vic?.error) {
       st.failed++;
       detail = { error: sus.error ? `suspect: ${sus.error}` : `brand: ${vic.error}` };
+      // Track how fast clones disappear: the first time a suspect stops answering is its gone_at.
+      if (sus.error) {
+        const misses = (c.prev?.misses ?? 0) + 1;
+        Object.assign(detail, { misses, gone_at: c.prev?.gone_at ?? new Date().toISOString() });
+        if (c.prev?.reasons) Object.assign(detail, { last_reasons: c.prev.reasons, last_score: c.prev.score ?? null });
+      }
     } else {
       const r = scorePair(vic.fp, sus.fp);
       score = r.score; verdict = r.verdict; st.ok++;
-      detail = { shared: r.k, copied: Math.round(r.copied * 1000) / 1000, suspect_products: sus.fp.n, brand_products: vic.fp.n, reasons: r.reasons,
+      detail = { score: r.score, shared: r.k, copied: Math.round(r.copied * 1000) / 1000, suspect_products: sus.fp.n, brand_products: vic.fp.n, reasons: r.reasons,
         sample: (sus.products ?? []).slice(0, 8).map((p) => p.title || p.handle) };
       if (score >= 50) st.strong++;
     }

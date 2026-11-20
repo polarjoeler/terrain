@@ -1,7 +1,7 @@
 // node --test scripts/lookalike-scan.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMatcher, assess, BAIT } from "./lookalike-scan.mjs";
+import { buildMatcher, assess, BAIT, brandBounded } from "./lookalike-scan.mjs";
 
 const brands = new Map([
   ["ripcurl", { domain: "ripcurl.co.za" }],
@@ -38,4 +38,20 @@ test("typos are never stored", () => {
 test("wholesale is not the bait word sale", () => {
   assert.equal(BAIT.test("julzshoes wholesale".replace(/\s/g, "")), false);
   assert.equal(BAIT.test("ripcurlsale"), true);
+});
+
+test("a brand buried mid-word is not bounded", () => {
+  for (const [d, b] of [["pierretalamonds.shop", "retala"], ["gadmax.store", "admax"], ["josephdavidson.shop", "hdavidson"],
+    ["dakotastore.shop", "dakotas"], ["crocssandals.shop", "crocssa"], ["mannsepicdeals.store", "epicdeals"]])
+    assert.equal(brandBounded(d, b), false, d);
+});
+test("a brand at the start, after a hyphen or after lead words is bounded", () => {
+  for (const [d, b] of [["sale-ripcurl.shop", "ripcurl"], ["salesripcurl.shop", "ripcurl"], ["officialyuppiechef.store", "yuppiechef"],
+    ["thetackshack.shop", "tackshack"], ["foxracinggrove.shop", "foxracing"], ["carrolboyesofficial.co.za", "carrolboyes"], ["www.ripcurl-za.shop", "ripcurl"]])
+    assert.equal(brandBounded(d, b), true, d);
+});
+test("a buried brand with bait words is still only tier B", () => {
+  const a = assess({ brand: "admax", how: "wraps" }, { domain: "gadmaxsale.store", seen: day(3) }, {}, now);
+  assert.equal(a.tier, "B");
+  assert.ok(a.signals.includes("brand name buried inside another word"));
 });

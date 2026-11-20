@@ -147,12 +147,16 @@ export default async function RadarWatch({ searchParams }: { searchParams: Promi
           </div>
         ) : (
           <>
-            <section className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-5">
+            <section className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-6">
               <Tile n={summary!.open} label="Tier A to review" accent />
               <Tile n={summary!.newThisWeek} label="New this week" />
               <Tile n={summary!.catalogueBacked} label="Catalogue overlap ≥ 50" />
               <Tile n={summary!.confirmed} label="Confirmed clones" />
               <Tile n={summary!.tierB} label="Tier B (weaker)" />
+              <Tile
+                n={summary!.gone}
+                label={summary!.medianDaysAlive === null ? "Gone offline" : `Gone offline · median ${summary!.medianDaysAlive}d alive`}
+              />
             </section>
 
             <section className="mt-6 grid gap-4 md:grid-cols-3">
