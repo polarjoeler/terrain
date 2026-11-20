@@ -6,7 +6,11 @@ import { marketLabel } from "@/lib/markets";
 import { isOpenSource, platformLabel } from "@/lib/platforms";
 import { NOT_TRADING, emailProviderLabel, notTradingLabel } from "@/lib/store-signals";
 import { scoreColor } from "@/lib/revenue";
+import { socialUrl } from "@/lib/social";
 import { bandTone, REVENUE_BANDS, bandDisplay, floorBand, type RevenueBand } from "@/lib/fx";
+// Value import from a LEAF module, never from lib/browse.ts: this is a client component and
+// that module pulls in postgres, which fails the bundle (tsc cannot see it; the build can).
+import { ROW_CAP } from "@/lib/browse-limits";
 import type { BrowseResult, BrowseFilters, Facet as FacetData } from "@/lib/browse";
 import { browse } from "./browse-action";
 import { LeadDrawer } from "./lead-drawer";
@@ -324,6 +328,22 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     limit,
   }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, whatsappOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
 
+  // Rows past the server's single-request ceiling, fetched by OFFSET and appended.
+  //
+  // THE BUG THIS FIXES. "Load more" only ever grew `limit`, and lib/browse.ts clamps one request
+  // to ROW_CAP rows. So at 1,000 loaded, every further click re-ran the SAME query, got the SAME
+  // 1,000 rows back, and left the button reading "N left" forever — the last page of any filter
+  // set between 1,001 and 1,060 rows was simply unreachable. (PAGE is 60, so the client was asking
+  // for 1,020 and being handed 1,000.) `total` is the true aggregate count and never clamped,
+  // which is why the button's arithmetic kept promising rows it could not deliver.
+  //
+  // Paging by offset is what the server was already built for: every entry in ORDER ends in
+  // `domain ASC` precisely so "LIMIT/OFFSET paging over a tied order" cannot serve one row twice
+  // and another never. It is also cheaper than the growing window, which re-shipped every row
+  // already on screen on each click.
+  const [tail, setTail] = useState<BrowseResult["rows"]>([]);
+  const [paging, setPaging] = useState(false);
+
   // initialData is SSR'd for the initial filters, so skip the very first run. A liveness guard keeps
   // an earlier slow reply from clobbering a newer one (facet toggles fire in quick succession).
   const firstRun = useRef(true);
@@ -331,6 +351,9 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     if (firstRun.current) { firstRun.current = false; return; }
     let live = true;
     setLoading(true);
+    // Any filter, sort or window change invalidates the appended tail — it was paged against the
+    // previous query's ordering, so keeping it would interleave two different result sets.
+    setTail([]);
     browse(filters).then((res) => {
       if (!live) return;
       if (!("error" in res)) setData(res);
@@ -339,7 +362,26 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     return () => { live = false; };
   }, [filters]);
 
-  const rows = data.rows;
+  const rows = useMemo(() => (tail.length ? [...data.rows, ...tail] : data.rows), [data.rows, tail]);
+
+  /** One more page. Below the cap this keeps growing the window exactly as before (which also
+   *  refreshes the rows already shown); at the cap it switches to offset paging and appends. */
+  async function loadMore() {
+    if (rows.length < ROW_CAP) { setLimit((s) => s + PAGE); return; }
+    if (paging) return;
+    setPaging(true);
+    try {
+      const res = await browse({ ...filters, limit: PAGE, offset: rows.length });
+      if (!("error" in res)) {
+        // De-duplicate defensively. The order is total, so this should never fire — but a store
+        // edited between two page fetches can shift, and a repeated row would collide on the
+        // table's `key={l.domain}`.
+        const seen = new Set(rows.map((r) => r.domain));
+        const fresh = res.rows.filter((r) => !seen.has(r.domain));
+        if (fresh.length) setTail((t) => [...t, ...fresh]);
+      }
+    } finally { setPaging(false); }
+  }
   // Facet data (server `{value,count}[]`) → the `[value,count][]` shape the <Facet> rail renders.
   const fv = (f: FacetData): [string, number][] => f.map((x) => [x.value, x.count] as [string, number]);
   const bandOrder = new Map(REVENUE_BANDS.map((b, i) => [b as string, i]));
@@ -834,9 +876,12 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
                             with no email at all this is the whole contact, so it renders even when
                             the email is missing — and as a wa.me link, which opens the chat. */}
                         {l.whatsapp && <a href={`https://wa.me/${l.whatsapp.replace(/[^\d]/g, "")}`} target="_blank" rel="noopener noreferrer" title={`WhatsApp ${l.whatsapp}`} className="text-mint/80 hover:text-mint">WA</a>}
-                        {l.instagram && <a href={`https://instagram.com/${l.instagram.replace(/^@/, "")}`} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream">IG</a>}
-                        {l.facebook && <span className="text-cream/40">FB</span>}
-                        {l.tiktok && <span className="text-cream/40">TT</span>}
+                {/* Same normalisation as the drawer (lib/social.ts): the stored value is a URL as
+                    often as a handle, and the old concatenation made a dead link of every URL.
+                    FB and TT were never linked at all — they are now, for free. */}
+                        {socialUrl(l.instagram, "instagram") && <a href={socialUrl(l.instagram, "instagram")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="Instagram">IG</a>}
+                        {socialUrl(l.facebook, "facebook") && <a href={socialUrl(l.facebook, "facebook")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="Facebook">FB</a>}
+                        {socialUrl(l.tiktok, "tiktok") && <a href={socialUrl(l.tiktok, "tiktok")!} target="_blank" rel="noopener noreferrer" className="text-cream/40 hover:text-cream" title="TikTok">TT</a>}
                       </div>
                     </td>
                   </tr>
@@ -848,8 +893,8 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
 
         {rows.length < data.total && (
           <div className="mt-4 text-center">
-            <button onClick={() => setLimit((s) => s + PAGE)} disabled={loading} className="rounded-full border border-cream/15 px-5 py-2 text-sm text-cream/70 hover:border-cream/40 disabled:opacity-50">
-              {loading ? "Loading…" : `Load more (${(data.total - rows.length).toLocaleString()} left)`}
+            <button onClick={loadMore} disabled={loading || paging} className="rounded-full border border-cream/15 px-5 py-2 text-sm text-cream/70 hover:border-cream/40 disabled:opacity-50">
+              {loading || paging ? "Loading…" : `Load more (${(data.total - rows.length).toLocaleString()} left)`}
             </button>
           </div>
         )}

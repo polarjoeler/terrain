@@ -45,7 +45,7 @@ const pArg = arg("--platform", null);   // narrow to platforms (comma list, case
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : null;   // null = worldwide
 
 // Self-hosted / not-DNS-fingerprintable dedicated platforms (HTTP-labelled by reconcile-probed).
-const SELF_HOSTED = ["prestashop", "magento", "opencart", "shopware", "ec-cube", "oscommerce", "zen cart", "virtuemart"];
+const SELF_HOSTED = ["prestashop", "magento", "opencart", "shopware", "ec-cube", "oscommerce", "zen cart", "virtuemart", "bagisto"];
 // Plus every `commerce` row of the shared hosted-platform table. Shopify has its own lanes; Selar is
 // path-based (selar.com/<shop>) and has its own sitemap ingester.
 const NOT_HERE = new Set(["shopify", "selar"]);

@@ -122,7 +122,7 @@ async function asnOf(ip) {
 // Hosting is looked up only for open-source (self-hosted) platforms; on Shopify, Wix and the other SaaS
 // builders the platform is the host (Joel, 2026-11-12). Same list as lib/platforms.ts. --domains runs
 // carry no platform and always look it up.
-const OPEN_SOURCE = new Set(["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart", "shopware"]);
+const OPEN_SOURCE = new Set(["woocommerce", "magento", "adobe_commerce", "prestashop", "ec-cube", "opencart", "shopware", "bagisto"]);
 const selfHosted = (platform) => platform === undefined || OPEN_SOURCE.has(String(platform || "").toLowerCase());
 
 async function scan(domain, platform) {

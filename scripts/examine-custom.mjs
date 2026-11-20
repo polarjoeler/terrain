@@ -42,6 +42,7 @@ const UNCOVERED = [
   { name: "Tiendanube/Nuvemshop", sig: ["tiendanube", "nuvemshop"] },
   { name: "CS-Cart", sig: ["cs-cart", "cscart"] },
   { name: "nopCommerce", sig: ["nopcommerce"] },
+  { name: "Bagisto", sig: ["/vendor/webkul/", "bagisto"] },   // Laravel commerce (NG: mouka.com)
   { name: "Volusion", sig: ["volusion"] },
   { name: "Shift4Shop/3dcart", sig: ["3dcart", "shift4shop"] },
   { name: "Zen Cart / osCommerce", sig: ["zencart", "oscommerce"] },

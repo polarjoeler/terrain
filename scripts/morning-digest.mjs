@@ -49,17 +49,32 @@ const Y = yday?.metrics ?? null; // nearest prior day (deltas for flows)
 const W = wago?.metrics ?? null; // ~a week ago (deltas for coverage trends)
 
 // ── 1. DISCOVERY — found, new vs legacy, and how much we've scanned ──────────────────────────
+// Launch date = the app's key (lib/insights.ts, lib/jp.ts): first product date, else launched_at
+// unless it came from a TLS certificate. Certificates renew every ~60-90 days, so a cert date is
+// usually a RENEWAL — 11-20 it made 640k of 641k "launched this week" finds (established stores
+// re-seen in the CT logs). shop_id / earliest_product / wp_oldest dates are real; cert dates aren't.
+const LAUNCH = sql`COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at, 10)::date END),
+  (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`;
+const AFRICA = FOCUS_MARKETS.filter((c) => c !== "JP");
+// The CT lander stores both certificate names, so most stores land twice (example.co.za AND
+// www.example.co.za). Finds are counted WITHOUT the www. copy; the copies get their own line.
 const [disc] = await sql`SELECT
-  count(*) FILTER (WHERE discovered_at > now()-interval '24 hours')::int d24,
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days')::int d7,
-  -- launch recency of this week's finds (truly new vs recent vs legacy/unknown)
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND launched_at > now()-interval '7 days')::int new7,
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND launched_at > now()-interval '90 days' AND launched_at <= now()-interval '7 days')::int recent7,
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND (launched_at IS NULL OR launched_at <= now()-interval '90 days'))::int legacy7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '24 hours' AND domain NOT LIKE 'www.%')::int d24,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%')::int d7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain LIKE 'www.%')::int www7,
+  -- launch recency of this week's finds (truly new vs recent vs older vs undated)
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND ${LAUNCH} > now()-interval '7 days')::int new7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND ${LAUNCH} > now()-interval '90 days' AND ${LAUNCH} <= now()-interval '7 days')::int recent7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND ${LAUNCH} <= now()-interval '90 days')::int legacy7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND ${LAUNCH} IS NULL)::int undated7,
+  -- Africa's share of the week, and its real launches
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND upper(country) = ANY(${AFRICA}))::int af7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND upper(country) = ANY(${AFRICA}) AND ${LAUNCH} > now()-interval '7 days')::int afnew7,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND upper(country) = ANY(${AFRICA}) AND published)::int afpub7,
   -- of this week's finds, how many have had each scan at least once
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND live_checked_at IS NOT NULL)::int sc_live,
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND (payments_checked_at IS NOT NULL OR woo_checkout_at IS NOT NULL))::int sc_pay,
-  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND catalog_checked_at IS NOT NULL)::int sc_cat
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND live_checked_at IS NOT NULL)::int sc_live,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND (payments_checked_at IS NOT NULL OR woo_checkout_at IS NOT NULL))::int sc_pay,
+  count(*) FILTER (WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND catalog_checked_at IS NOT NULL)::int sc_cat
   FROM imported_stores`;
 
 // ── 2. COVERAGE by market — the live base and how much of it carries data ────────────────────
@@ -68,16 +83,16 @@ const [mix] = await sql`SELECT
   count(*) FILTER (WHERE lower(platform)='shopify')::int shop,
   count(*) FILTER (WHERE platform IS NOT NULL AND platform<>'' AND lower(platform)<>'shopify')::int nonshop,
   count(*) FILTER (WHERE platform IS NULL OR platform='')::int unknownp
-  FROM imported_stores WHERE discovered_at > now()-interval '7 days'`.catch(() => [{ shop: 0, nonshop: 0, unknownp: 0 }]);
+  FROM imported_stores WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%'`.catch(() => [{ shop: 0, nonshop: 0, unknownp: 0 }]);
 const mixSrc = await sql`SELECT COALESCE(source,'(null)') s, count(*)::int c FROM imported_stores
-  WHERE discovered_at > now()-interval '7 days' GROUP BY 1 ORDER BY 2 DESC`.catch(() => []);
+  WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' GROUP BY 1 ORDER BY 2 DESC`.catch(() => []);
 const mixGeo = await sql`SELECT upper(country) c, count(*)::int cnt,
     count(*) FILTER (WHERE lower(platform)='shopify')::int shop,
-    count(*) FILTER (WHERE launched_at > now()-interval '90 days')::int nw
-  FROM imported_stores WHERE discovered_at > now()-interval '7 days' AND country IS NOT NULL AND country<>''
+    count(*) FILTER (WHERE ${LAUNCH} > now()-interval '90 days')::int nw
+  FROM imported_stores WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' AND country IS NOT NULL AND country<>''
   GROUP BY 1 ORDER BY 2 DESC LIMIT 12`.catch(() => []);
 const mixCms = await sql`SELECT COALESCE(NULLIF(platform,''),'(unclassified)') p, count(*)::int c FROM imported_stores
-  WHERE discovered_at > now()-interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`.catch(() => []);
+  WHERE discovered_at > now()-interval '7 days' AND domain NOT LIKE 'www.%' GROUP BY 1 ORDER BY 2 DESC LIMIT 8`.catch(() => []);
 // Source-class: continuous organic (CT/DNS firehose) vs targeted platform mines vs bulk imports/seeds.
 // Mines + imports are the "special finds" we call out by name so a one-off burst (e.g. a Selar
 // sitemap mine) can't masquerade as steady new-market discovery.
@@ -134,7 +149,7 @@ const backTot = back.reduce((a, r) => ({ vh: a.vh + r.verified_hidden, wq: a.wq 
 
 // ── Build the snapshot we'll store for tomorrow's deltas ─────────────────────────────────────
 const snap = {
-  d24: disc.d24, d7: disc.d7, new7: disc.new7, recent7: disc.recent7, legacy7: disc.legacy7,
+  d24: disc.d24, d7: disc.d7, www7: disc.www7, new7: disc.new7, recent7: disc.recent7, legacy7: disc.legacy7, undated7: disc.undated7, af7: disc.af7, afnew7: disc.afnew7,
   sc_live: disc.sc_live, sc_pay: disc.sc_pay, sc_cat: disc.sc_cat,
   live24: pipe.live24, pay24: pipe.pay24, mig24: pipe.mig24, dead24: pipe.dead24, sw24: sw.s24,
   vh: backTot.vh, wq: backTot.wq, np: backTot.np,
@@ -171,12 +186,16 @@ L.push(``);
 
 // 1 · DISCOVERY
 L.push(`━━ 1 · WHAT WE FOUND ━━`);
-L.push(`Found: ${n(disc.d24)} in the last 24h${d(disc.d24, Y?.d24)}   ·   ${n(disc.d7)} this week`);
+// Yesterday's snapshot predates the www./cert fix (11-20) when it lacks www7: no delta that one day.
+L.push(`Found: ${n(disc.d24)} in the last 24h${d(disc.d24, Y?.www7 !== undefined ? Y.d24 : undefined)}   ·   ${n(disc.d7)} this week`);
 const liveLaunch = disc.new7 + disc.recent7;
 L.push(`This week's ${n(disc.d7)} finds break down as:`);
-L.push(`   • ${n(disc.new7)} genuinely NEW   — launched in the last 7 days`);
+L.push(`   • ${n(disc.new7)} genuinely NEW   — launched in the last 7 days (dated by first product or Shopify shop number)`);
 L.push(`   • ${n(disc.recent7)} recent        — launched 8–90 days ago`);
-L.push(`   • ${n(disc.legacy7)} legacy        — older, or launch date unknown (backfill, not new market activity)`);
+L.push(`   • ${n(disc.legacy7)} established   — launched over 90 days ago (backfill, not new market activity)`);
+L.push(`   • ${n(disc.undated7)} not yet dated — no product date or shop number yet (certificate dates don't count: they renew every ~60–90 days)`);
+L.push(`Africa: ${n(disc.af7)} of this week's finds (${pctS(disc.af7, disc.d7)}) · ${n(disc.afnew7)} genuinely new · ${n(disc.afpub7)} on the dashboard so far`);
+L.push(`Not counted above: ${n(disc.www7)} www. copies of stores we already hold (the CT lander stores both certificate names)`);
 L.push(`Scanned so far (of this week's ${n(disc.d7)} finds):`);
 L.push(`   liveness ${pctS(disc.sc_live, disc.d7)} (${n(disc.sc_live)})  ·  payments ${pctS(disc.sc_pay, disc.d7)} (${n(disc.sc_pay)})  ·  catalog ${pctS(disc.sc_cat, disc.d7)} (${n(disc.sc_cat)})`);
 L.push(`   awaiting first liveness scan: ${n(Math.max(0, disc.d7 - disc.sc_live))}`);
@@ -220,7 +239,7 @@ L.push(``);
 
 // 4 · BACKLOG
 L.push(`━━ 4 · BACKLOG — FOUND BUT NOT YET LIVE (focus markets) ━━`);
-L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   ← confirmed-live, awaiting auto-publish (should stay ~0)`);
+L.push(`Checkout-verified but HIDDEN: ${n(backTot.vh)}${d(backTot.vh, Y?.vh)}   ← confirmed-live; Rex publishes these every 3h, so a few hundred-to-thousand between runs is normal. Only a number that keeps rising day after day means it is stuck`);
 L.push(`Woo-checkout queue:           ${n(backTot.wq)}${d(backTot.wq, Y?.wq)}   ← Woo candidates awaiting the checkout probe`);
 L.push(`Never-probed tail:            ${n(backTot.np)}${d(backTot.np, Y?.np)}   ← unpublished, no payment/woo probe yet`);
 if (back.length > 1) { L.push(`By market  (verified-hidden · woo-queue · never-probed):`); for (const r of back) L.push(`   ${r.c.padEnd(4)} ${String(r.verified_hidden).padStart(6)} · ${String(r.woo_queue).padStart(5)} · ${String(r.never_probed).padStart(7)}`); }
@@ -238,8 +257,9 @@ const text = L.join("\n");
 const html = `<div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.55;color:#0f2b2a;max-width:720px;white-space:pre-wrap">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>`;
 console.log(text);
 
-// Persist today's snapshot (best-effort — never block the send on it).
-await sql`INSERT INTO digest_snapshot (day, metrics) VALUES (current_date, ${sql.json(snap)})
+// Persist today's snapshot (best-effort — never block the send on it). A --print preview must not
+// overwrite the 07:00 snapshot that tomorrow's deltas compare against.
+if (!PRINT_ONLY) await sql`INSERT INTO digest_snapshot (day, metrics) VALUES (current_date, ${sql.json(snap)})
   ON CONFLICT (day) DO UPDATE SET metrics = EXCLUDED.metrics, created_at = now()`.catch((e) => console.error("(snapshot write failed:", e.message, ")"));
 
 if (PRINT_ONLY) { console.log("\n(--print: not sent)"); await sql.end(); process.exit(0); }

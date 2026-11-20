@@ -22,7 +22,7 @@ const ECOMM_PLATFORMS = ["Shopify","EasyOrders","LightFunnels","YouCan","Magento
   "SureCart","Drupal Commerce","Shopware","SAP Hybris","Gumroad","nopCommerce","Shoplazza","Salesforce Commerce Cloud",
   "Paystack Storefront","ShopStar","Big Cartel","Payhip","WP eCommerce","Easy Digital Downloads","Spree",
   "Joomla (VirtueMart/HikaShop)","BigCommerce","Saleor","Square Space store","CS-Cart","Adobe Commerce","Shopline",
-  "Zen Cart / osCommerce","Shift4Shop/3dcart","Salla","Tiendanube/Nuvemshop","Medusa","WP EasyCart","Centra","Weebly/Square Online"];
+  "Zen Cart / osCommerce","Shift4Shop/3dcart","Salla","Tiendanube/Nuvemshop","Medusa","WP EasyCart","Centra","Weebly/Square Online","Bagisto"];
 const BUILDER_PLATFORMS = ["Odoo","Wix","Squarespace","Webflow","GoDaddy","GoDaddy Website Builder","Duda","SITE123","Jimdo","Framer","Strikingly"];
 const REPORT = DRY || process.argv.includes("--verbose");
 

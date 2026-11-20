@@ -31,6 +31,10 @@ export const PLATFORMS = [
   // in Africa) + nopCommerce, and the African creator-commerce tools Selar & Bumpa.
   { name: "Shoplazza",      kind: "native", sig: ["shoplazza", "myshoplaza"] },
   { name: "nopCommerce",    kind: "native", sig: ["nopcommerce"] },
+  // Bagisto — open-source Laravel commerce (Webkul). Its theme assets live under /vendor/webkul/ (a
+  // Laravel package path); bare "webkul" would also match Webkul's Magento extensions. 2026-11-19:
+  // mouka.com (NG) ran on it with 0 Bagisto rows in the DB.
+  { name: "Bagisto",        kind: "native", sig: ["/vendor/webkul/", "bagisto"] },
   { name: "Selar",          kind: "native", sig: ["selar.co"] },
   { name: "Bumpa",          kind: "native", sig: ["getbumpa", "bumpa.shop"] },
   { name: "Wix",            kind: "mixed",  sig: ["wixstatic.com", "x-wix-", "wix-warmup", "wixcode"] },
