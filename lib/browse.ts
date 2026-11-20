@@ -19,6 +19,7 @@ import { db as sharedDb } from "./db";
 import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
 import { ROW_CAP } from "./browse-limits";
 import { socialUrl } from "./social";
+import { hasStoreColumn } from "./columns";
 
 export { ROW_CAP };
 
@@ -84,6 +85,10 @@ export type BrowseFilters = {
    *  reachableContact: it reaches a person, but on a different channel with different rules
    *  (one-to-one, no bulk send), so a list built on it must be a deliberate choice. */
   hasWhatsapp?: boolean;
+  /** Has a shop a customer can walk into (physical_store = true). The card-present split — the
+   *  one a payment processor segments on. Three-valued underneath, so this filter means
+   *  "confirmed yes", never "not confirmed no": see store-edit-action.ts. */
+  hasRetail?: boolean;
   tier?: "top100" | "top500";
   /** Store groups (scripts/build-store-groups.mjs): `grouped` = stores whose operator runs other
    *  stores too; `group` = every store in one group (the drawer's "show all"). */
@@ -292,6 +297,7 @@ function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   if (f.reachableContact) conds.push(sql`contact_type = ANY(${[...REACHABLE_TYPES]}) AND ${sql.unsafe(DELIVERABLE)}`);
   if (f.deliverable) conds.push(sql.unsafe(DELIVERABLE));
   if (f.hasWhatsapp) conds.push(sql`whatsapp IS NOT NULL AND whatsapp <> ''`);
+  if (f.hasRetail) conds.push(sql`physical_store IS TRUE`);
   if (f.noPayment) conds.push(sql`payments_checked_at IS NOT NULL AND (payments IS NULL OR payments = '')`);
   if (f.grouped) conds.push(sql.unsafe(`domain IN ${GROUPED_SET}`));
   if (f.group) conds.push(sql`domain IN (SELECT domain FROM store_group_members WHERE group_id = ${f.group})`);
@@ -640,6 +646,7 @@ export type ExportCell = string | number | boolean | null;
 export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header: string[]; rows: ExportCell[][] }> {
   const sql = db();
   const side = await sideTables();
+  const addrCol = await hasStoreColumn("store_address");
   const where = buildWhere(f, side);
   const usd = sql.unsafe(usdSqlExpr());
   const band = sql.unsafe(bandSqlExpr());
@@ -649,6 +656,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
            currency, ${usd}::int AS usd, ${band} AS band, plus,
            ${sql.unsafe(bestEmailSql)} AS email, contact_type, contact_name, contact_role,
            whatsapp, contact_phone, contact_form_url, contact_mx_ok, contact_mx_provider,
+           physical_store, ${sql.unsafe(addrCol ? "store_address" : "NULL::text AS store_address")}, phone AS shop_phone,
            contact_shared_count, contact_email_guess, contact_guess_status, payments, shipping_providers,
            logistics_apps, apps, plugins, technologies, instagram, facebook, tiktok, linkedin,
            price_min, price_max, products_sold, plan AS shopify_plan, description,
@@ -677,7 +685,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // normalised one. Both ship: the native pair is what a merchant recognises, the USD one is
   // what sorts across markets. shopify_plan is the plan-tier ladder (see the plan-detection
   // work), not Terrain's subscription plan.
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "migrated_from", "migrated_at", "email_provider", "dns_tools", "dns_verified", "not_trading"];
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "retail_store", "shop_address", "shop_phone", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "migrated_from", "migrated_at", "email_provider", "dns_tools", "dns_verified", "not_trading"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
@@ -688,6 +696,9 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
       sales, r.products_sold == null ? null : Number(r.products_sold), revenueBand(sales), r.plus, r.shopify_plan,
       r.email, r.contact_type, r.contact_name, r.contact_role,
       r.whatsapp, r.contact_phone, r.contact_form_url,
+      // Three-valued, and the CSV has to say so: "no" means we read the site and it has no shop,
+      // blank means nobody has looked. Collapsing them would invent a negative.
+      r.physical_store == null ? null : (r.physical_store ? "yes" : "no"), r.store_address, r.shop_phone,
       r.contact_mx_ok == null ? null : (r.contact_mx_ok ? "yes" : "no — no MX, will bounce"),
       r.contact_mx_provider, r.contact_shared_count, r.contact_email_guess, r.contact_guess_status,
       r.payments, shipMerged(r.shipping_providers, r.logistics_apps), appSlugs(r.apps),

@@ -6,6 +6,7 @@ import { getStoreGroup, type StoreGroup } from "./store-groups";
 import { getStoreBrands, type StoreBrand } from "./brands";
 import { sideTables } from "./browse";
 import { bandSqlExpr } from "./fx";
+import { hasStoreColumn } from "./columns";
 
 function db() {
   return sharedDb();
@@ -14,6 +15,9 @@ function db() {
 export type LeadDetail = {
   domain: string; name: string | null; category: string | null;
   country: string | null; city: string | null;
+  /** The store's own blurb. Shipped in the export and hand-editable in the drawer, so the drawer
+   *  has to read it — nothing else here needed it before. */
+  description: string | null;
   theme: string | null; platform: string | null; plus: boolean | null; published: boolean | null;
   activity_tier: string | null; activity_score: number | null;   // Woo: real-store reveal
   hosting_provider: string | null; hosting_asn: number | null; platform_version: string | null; plugins: string | null; technologies: string | null;
@@ -22,6 +26,10 @@ export type LeadDetail = {
   product_count: number | null; avg_product_price: string | null;
   estimated_monthly_sales: string | null; est_revenue_usd: string | null; currency: string | null;
   email: string | null; contact_email: string | null; contact_phone: string | null;
+  /** Retail presence. physical_store is three-valued: true / false / null = has a shop / we read
+   *  the site and it has none / nobody has looked. The address is hand-entered; `phone` is the
+   *  shop's own line, distinct from contact_phone. */
+  physical_store: boolean | null; store_address: string | null; phone: string | null;
   /** The person behind the store (name/role) + the best-guess personal email and its status —
    *  shown and admin-editable in the drawer. contact_email is the VERIFIED/known address; the guess
    *  is our inferred first@domain for a named decision-maker (kept separate so it never masquerades). */
@@ -102,12 +110,16 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
   // The side tables ride along in the one row query (PK lookups), so the drawer pays no extra round
   // trip for them. Left out while a table doesn't exist yet (before its script's --migrate).
   const side = await sideTables();
+  // store_address is newer than this code's first deploy; see lib/columns.ts for why the drawer
+  // cannot assume a column declared in schema.sql is in the database yet.
+  const addrCol = await hasStoreColumn("store_address");
   const [r] = await sql<(LeadDetail & SideRaw)[]>`
-    SELECT domain, name, category, country, city, theme, platform, plus, published,
+    SELECT domain, name, category, country, city, description, theme, platform, plus, published,
            activity_tier, activity_score, hosting_provider, hosting_asn, platform_version, plugins, technologies,
            payments, shipping_providers, free_shipping, logistics_apps, apps,
            product_count, avg_product_price, estimated_monthly_sales, est_revenue_usd, currency,
            email, contact_email, contact_phone,
+           physical_store, ${sql.unsafe(addrCol ? "store_address" : "NULL::text AS store_address")}, phone,
            contact_name, contact_role, contact_email_guess, contact_guess_status, contact_mx_ok,
            contact_type, contact_source, contact_name_source, contact_form_url, contact_checked_at,
            contacts, whatsapp, linkedin, contact_mx_provider, contact_shared_count,

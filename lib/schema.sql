@@ -195,6 +195,14 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS cert_checked_at TIMESTAMPTZ
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS est_revenue_usd NUMERIC;     -- our revenue estimate
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_email TEXT;          -- scraped from the store's own site
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+-- RETAIL PRESENCE. `physical_store` (boolean, three-valued) is NOT declared here — it is created
+-- by scripts/text-mine.mjs, which infers it from the homepage copy and calls it "a real shop →
+-- card-present, the single most useful split for a PSP". Deliberately left three-valued: true /
+-- false / NULL are "has a shop" / "we read the site and it has none" / "not looked at", and a PSP
+-- segment needs the last two kept apart. The address is the one thing nothing could infer, so it
+-- is hand-entered in the admin drawer; the shop's own phone goes in the existing `phone` column
+-- (the imported/vendor one, which only import-storeleads writes, and only via COALESCE).
+ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS store_address TEXT;
 -- Contact QUALITY (scripts/contact-enrich.mjs). The complaint that drove this: competitor lead
 -- data is full of generic mailboxes, and a buyer can't tell which rows are worth a send until
 -- they've burnt one. So we crawl the contact surface (contact/about/policy pages, not just the

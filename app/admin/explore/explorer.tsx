@@ -197,6 +197,7 @@ export type ExploreInitial = {
   plus?: boolean; email?: boolean; tier?: string; sort?: string;
   reachable?: boolean; contactType?: string[];   // contact-quality view, restorable by a Saved list
   whatsapp?: boolean;                            // "reachable on WhatsApp" view
+  retail?: boolean;                              // "has a shop you can walk into" view
   grouped?: boolean; group?: string; groupLabel?: string;   // store groups: multi-store operators / one group
   emailProvider?: string[]; dnsTool?: string[];   // DNS scan (store_dns): mailbox provider, tools in SPF/DKIM/TXT
   notTrading?: string[]; hideNotTrading?: boolean;   // checkout probe: why there was nothing to buy
@@ -260,6 +261,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
   // generic-mailbox complaint is really asking for.
   const [reachableOnly, setReachableOnly] = useState(initial?.reachable ?? false);
   const [whatsappOnly, setWhatsappOnly] = useState(initial?.whatsapp ?? false);
+  const [retailOnly, setRetailOnly] = useState(initial?.retail ?? false);
   const [contactType, setContactType] = useState<Set<string>>(new Set(initial?.contactType));
   const [noPaymentOnly, setNoPaymentOnly] = useState(initial?.noPayment ?? false); // no gateway detected yet
   const [tier, setTier] = useState<"" | "top100" | "top500">((initial?.tier as "" | "top100" | "top500") ?? ""); // curated Top 100 / Top 500
@@ -312,6 +314,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     hasEmail: emailOnly || undefined,
     reachableContact: reachableOnly || undefined,
     hasWhatsapp: whatsappOnly || undefined,
+    hasRetail: retailOnly || undefined,
     contactType: contactType.size ? [...contactType] : undefined,
     noPayment: noPaymentOnly || undefined,
     tier: tier || undefined,
@@ -326,7 +329,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     migratedDays: initial?.migratedDays,
     sort,
     limit,
-  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, whatsappOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
+  }), [qDebounced, country, platform, category, band, theme, city, payment, shipping, app, plugin, tech, activity, hosting, emailProvider, dnsTool, notTrading, hideNotTrading, plusOnly, emailOnly, reachableOnly, whatsappOnly, retailOnly, contactType, noPaymentOnly, tier, groupedOnly, group, launched, recency, initial?.migratedDays, sort, limit]);
 
   // Rows past the server's single-request ceiling, fetched by OFFSET and appended.
   //
@@ -427,8 +430,8 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
     whatsappReachOnly: data.stats.whatsappOnly,
   };
 
-  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setEmailProvider(new Set()); setDnsTool(new Set()); setNotTrading(new Set()); setHideNotTrading(false); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setWhatsappOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
-  const activeCount = country.size + platform.size + activity.size + hosting.size + emailProvider.size + dnsTool.size + notTrading.size + (hideNotTrading ? 1 : 0) + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + (whatsappOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
+  const clearAll = () => { setQ(""); setCountry(new Set()); setCategory(new Set()); setBand(new Set()); setTheme(new Set()); setCity(new Set()); setPayment(new Set()); setShipping(new Set()); setApp(new Set()); setPlatform(new Set()); setActivity(new Set()); setHosting(new Set()); setEmailProvider(new Set()); setDnsTool(new Set()); setNotTrading(new Set()); setHideNotTrading(false); setPlusOnly(false); setEmailOnly(false); setReachableOnly(false); setWhatsappOnly(false); setRetailOnly(false); setContactType(new Set()); setNoPaymentOnly(false); setTier(""); setGroupedOnly(false); setGroup(null); setRecency(""); setLaunched(""); setLimit(PAGE); };
+  const activeCount = country.size + platform.size + activity.size + hosting.size + emailProvider.size + dnsTool.size + notTrading.size + (hideNotTrading ? 1 : 0) + category.size + band.size + theme.size + city.size + payment.size + shipping.size + app.size + (plusOnly ? 1 : 0) + (emailOnly ? 1 : 0) + (reachableOnly ? 1 : 0) + (whatsappOnly ? 1 : 0) + (retailOnly ? 1 : 0) + contactType.size + (noPaymentOnly ? 1 : 0) + (tier ? 1 : 0) + (groupedOnly ? 1 : 0) + (group ? 1 : 0) + (recency ? 1 : 0) + (launched ? 1 : 0) + (q ? 1 : 0);
 
   // Export the FULL filtered set from the server (every matching row + full field set), not just the
   // page on screen — this also closes the old unmetered client-side export. POST the active filters.
@@ -524,7 +527,7 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
       theme: arr(theme), city: arr(city), payment: arr(payment), shipping: arr(shipping),
       activity: arr(activity), platform: arr(platform), apps: arr(app), plugins: arr(plugin), tech: arr(tech), hosting: arr(hosting),
       plus: plusOnly || undefined, email: emailOnly || undefined, tier: tier || undefined,
-      reachable: reachableOnly || undefined, whatsapp: whatsappOnly || undefined, contactType: arr(contactType),
+      reachable: reachableOnly || undefined, whatsapp: whatsappOnly || undefined, retail: retailOnly || undefined, contactType: arr(contactType),
       recency: recency || undefined, launched: launched || undefined, noPayment: noPaymentOnly || undefined,
       grouped: groupedOnly || undefined, group: group?.id, groupLabel: group?.label,
       emailProvider: arr(emailProvider), dnsTool: arr(dnsTool), notTrading: arr(notTrading), hideNotTrading: hideNotTrading || undefined,
@@ -584,6 +587,11 @@ export function Explorer({ initialData, initial, showStats, usage: usageProp }: 
               where WhatsApp is the ONLY way in. */}
           <button onClick={() => setWhatsappOnly((p) => !p)} title="A WhatsApp number published on the storefront — the channel an SA owner-operator actually answers" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${whatsappOnly ? "bg-mint/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${whatsappOnly ? "border-mint bg-mint" : "border-cream/25"}`} /> On WhatsApp
+          </button>
+          {/* physical_store is three-valued, so this means "confirmed has a shop" — never
+              "not confirmed to be online-only". The card-present split a PSP segments on. */}
+          <button onClick={() => setRetailOnly((p) => !p)} title="Has a shop a customer can walk into — the card-present segment" className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${retailOnly ? "bg-lilac/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
+            <span className={`h-3 w-3 rounded border ${retailOnly ? "border-lilac bg-lilac" : "border-cream/25"}`} /> Has a retail store
           </button>
           <button onClick={() => setNoPaymentOnly((p) => !p)} className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${noPaymentOnly ? "bg-orange/20 text-cream" : "text-cream/70 hover:bg-cream/[0.05]"}`}>
             <span className={`h-3 w-3 rounded border ${noPaymentOnly ? "border-orange bg-orange" : "border-cream/25"}`} /> Checked · no gateway yet

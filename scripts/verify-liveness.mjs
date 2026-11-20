@@ -263,6 +263,20 @@ async function main() {
     // ~63% of rows — so with a 300-store budget per run this lane was spending it on a near-random
     // slice. store_priority only ranks stores believed LIVE, so an already-dead store has no row
     // and sorts last on the fallback, which is the right order for a re-check anyway.
+    // MANUAL OVERRIDES. A live_status set by hand in the admin drawer is final until a human
+    // changes it back: this lane is the only one that can resurrect a store written off as dead
+    // (dns-liveness requires live_checked_at IS NULL, which the edit stamps; confirm-other-cms and
+    // meta-identify both already exclude dead/migrated), so without this guard an admin marking a
+    // frozen or closed store dead would watch it come back on the next sweep.
+    //
+    // Keyed off store_edits rather than a new column, which is how the other lanes already do it:
+    // scripts/revenue-ballpark.mjs leaves alone any domain with an 'estimated_monthly_sales' edit,
+    // and scripts/audit-nonstorefront-hosts.mjs skips any with an 'activity_tier' one. The table
+    // holds only admin edits (tens of rows), so the anti-join costs nothing.
+    const manual = (await sql`SELECT DISTINCT domain FROM store_edits WHERE field = 'live_status'`).map((r) => r.domain);
+    if (manual.length) console.log(`(skipping ${manual.length} store(s) whose live_status was set by hand)`);
+    const notManual = manual.length ? sql`AND domain <> ALL(${manual})` : sql``;
+
     const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
     const sizeOrder = hasPriority
       ? sql`(SELECT p.account_score FROM store_priority p WHERE p.domain = imported_stores.domain) DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST`
@@ -272,7 +286,7 @@ async function main() {
       const doms = readFileSync(fromFile, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
       rows = await sql`
         SELECT domain, live_miss, platform FROM imported_stores
-        WHERE domain = ANY(${doms})
+        WHERE domain = ANY(${doms}) ${notManual}
           ${COUNTRIES.length ? sql`AND UPPER(country) = ANY(${COUNTRIES})` : sql``}
         ORDER BY ${sizeOrder}
         ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
@@ -280,7 +294,7 @@ async function main() {
     } else {
       rows = await sql`
         SELECT domain, live_miss, platform FROM imported_stores
-        WHERE published AND (verified_checked_at IS NULL OR verified_checked_at < ${cutoff})
+        WHERE published AND (verified_checked_at IS NULL OR verified_checked_at < ${cutoff}) ${notManual}
           -- Shopify (or not yet classified) only: see the SHOPIFY-ONLY note in the header. Without
           -- this the queue holds ~58,000 non-Shopify stores in the sold markets — 46,339 of them
           -- WooCommerce, the half Partner is sold on — every one of which this probe would read as
@@ -316,7 +330,7 @@ async function main() {
       const frozenCap = LIMIT > 0 ? Math.ceil(LIMIT / 2) : 0;
       const frozenRows = await sql`
         SELECT domain, live_miss, platform FROM imported_stores
-        WHERE published AND storefront_http = 402
+        WHERE published AND storefront_http = 402 ${notManual}
           AND (platform IS NULL OR lower(platform) = 'shopify')
           AND activity_tier IS DISTINCT FROM 'not_a_store'
           AND live_status IS DISTINCT FROM 'dead'
