@@ -12,5 +12,9 @@ echo "===== build-rollups $(date '+%F %T') ====="
 # Date new Shopify shops from their shop ID first, so this hour's rollup counts them as launched.
 node --no-warnings --env-file=.env.local scripts/shop-id-dating.mjs 2>&1 | tail -2 || echo "!! shop-id-dating failed"
 node --no-warnings --env-file=.env.local scripts/build-rollups.mjs || echo "!! build-rollups failed"
+# Explorer counts + facets per country × platform (browse_rollup) — the dashboard sums these instead of
+# scanning every visible store. Needs the tables first (one-time: build-browse-rollup.ts --migrate);
+# until then this fails harmlessly and the dashboard keeps using its caches.
+npx tsx --env-file=.env.local scripts/build-browse-rollup.ts 2>&1 | tail -1 || echo "!! build-browse-rollup failed"
 node --env-file=.env.local scripts/heartbeat.mjs build-rollups "idle — done" >/dev/null 2>&1 || true
 echo "===== build-rollups done $(date '+%T') ====="
