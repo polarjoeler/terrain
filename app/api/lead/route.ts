@@ -22,5 +22,6 @@ export async function GET(req: Request) {
 
   const detail = await getLeadDetail(domain).catch(() => null);
   if (!detail) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ ...detail, canEdit: admin });
+  // Which fields an admin hand-locked is admin bookkeeping, not something a customer needs to see.
+  return NextResponse.json({ ...detail, locked_fields: admin ? detail.locked_fields : null, canEdit: admin });
 }
