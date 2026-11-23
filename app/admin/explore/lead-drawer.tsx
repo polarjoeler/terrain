@@ -8,7 +8,7 @@ import { isOpenSource } from "@/lib/platforms";
 import { socialUrl, socialLabel } from "@/lib/social";
 import { NOT_TRADING, dnsStackTools, emailProviderLabel } from "@/lib/store-signals";
 import { REVENUE_BANDS, bandMidpointLocal, bandDisplay, revenueBand, floorBand, toUsd, type RevenueBand } from "@/lib/fx";
-import { updateStore, type StorePatch } from "./store-edit-action";
+import { updateStore, unlockStoreField, type StorePatch } from "./store-edit-action";
 
 const fmtDate = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null);
 const fmtMonth = (v: string | null) => (v ? new Date(v).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }) : null);
@@ -192,14 +192,40 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   // Text fields, keyed by the imported_stores column they write (see StorePatch). Every one of them
   // must be in getLeadDetail's SELECT, or the form opens blank and saving wipes the stored value.
   type TextKey = "name" | "country" | "platform" | "category" | "city" | "contact_name" | "contact_role" | "contact_email"
-    | "contact_phone" | "whatsapp" | "contact_form_url" | "linkedin" | "instagram" | "facebook" | "tiktok";
+    | "contact_phone" | "whatsapp" | "contact_form_url" | "linkedin" | "instagram" | "facebook" | "tiktok"
+    | "payments" | "shipping_providers" | "technologies" | "plugins" | "apps" | "theme" | "currency" | "product_count" | "launched_at";
   const TEXT_KEYS: TextKey[] = ["name", "country", "platform", "category", "city", "contact_name", "contact_role", "contact_email",
-    "contact_phone", "whatsapp", "contact_form_url", "linkedin", "instagram", "facebook", "tiktok"];
+    "contact_phone", "whatsapp", "contact_form_url", "linkedin", "instagram", "facebook", "tiktok",
+    "payments", "shipping_providers", "technologies", "plugins", "apps", "theme", "currency", "product_count", "launched_at"];
   const FORM_GROUPS: { title: string; fields: [TextKey | "revenue" | "tagsText", string, string?][] }[] = [
     { title: "Store", fields: [["name", "Name"], ["country", "Country (ISO2)", "ZA"], ["city", "City"], ["platform", "Platform", "Shopify"], ["category", "Category"], ["revenue", "Monthly sales (est.)", "in the store's currency"], ["tagsText", "Tags", "comma-separated"]] },
     { title: "Contact", fields: [["contact_name", "Name"], ["contact_role", "Role"], ["contact_email", "Email"], ["contact_phone", "Phone", "+27…"], ["whatsapp", "WhatsApp", "+27…"], ["contact_form_url", "Contact form URL"]] },
     { title: "Social", fields: [["linkedin", "LinkedIn", "URL"], ["instagram", "Instagram", "handle or URL"], ["facebook", "Facebook", "handle or URL"], ["tiktok", "TikTok", "handle or URL"]] },
+    // Crawler-owned: these stick only because saving locks them (lib/field-locks.ts).
+    { title: "Payments & tech", fields: [["payments", "Payments", "PayFast; Yoco"], ["shipping_providers", "Shipping", "The Courier Guy; Bob Go"],
+      ["technologies", "Technologies", "Klaviyo; Google Analytics"], ["plugins", "Plugins", "WordPress/Woo plugins"], ["apps", "Apps", "Shopify apps"],
+      ["theme", "Theme", "Dawn"], ["currency", "Currency", "ZAR"], ["product_count", "Products", "number"], ["launched_at", "Launched", "YYYY-MM-DD"]] },
   ];
+  // The column each form key writes, for the lock markers.
+  const colOf = (k: string) => (k === "revenue" ? "estimated_monthly_sales" : k);
+  const isLocked = (k: string) => Boolean(data?.locked_fields?.includes(colOf(k)));
+  const [unlocking, setUnlocking] = useState<string | null>(null);
+  async function unlock(k: string) {
+    if (!data) return;
+    setUnlocking(k); setSaveErr(null);
+    const res = await unlockStoreField(data.domain, colOf(k));
+    setUnlocking(null);
+    if ("error" in res) { setSaveErr(res.error); return; }
+    const fresh = await fetch(`/api/lead?domain=${encodeURIComponent(data.domain)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    setData(fresh && !fresh.error ? (fresh as LeadDetail) : { ...data, locked_fields: (data.locked_fields ?? []).filter((f) => f !== colOf(k)) });
+  }
+  const LockMark = ({ k }: { k: string }) => isLocked(k) ? (
+    <button type="button" onClick={() => unlock(k)} disabled={unlocking === k}
+      title="Set by hand, so the crawlers leave it alone. Click to hand it back to them."
+      className="shrink-0 rounded bg-lilac/15 px-1.5 py-0.5 text-[10px] text-lilac transition hover:bg-lilac/25 disabled:opacity-50">
+      {unlocking === k ? "unlocking…" : "locked · unlock"}
+    </button>
+  ) : null;
   type Form = Record<TextKey, string> & { published: boolean; plus: boolean; revenue: string; tagsText: string };
   const blankForm = (): Form => ({ ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, ""])) as Record<TextKey, string>), published: false, plus: false, revenue: "", tagsText: "" });
   const [form, setForm] = useState<Form>(blankForm);
@@ -207,7 +233,11 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   function beginEdit() {
     if (!data) return;
     setForm({
-      ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, (data[k] as string | null) ?? ""])) as Record<TextKey, string>),
+      ...(Object.fromEntries(TEXT_KEYS.map((k) => {
+        const v = data[k] as string | number | null;
+        // launched_at arrives as an ISO timestamp from the JSON API; the form edits the date part.
+        return [k, v == null ? "" : k === "launched_at" ? String(v).slice(0, 10) : String(v)];
+      })) as Record<TextKey, string>),
       published: Boolean(data.published), plus: Boolean(data.plus), revenue: data.estimated_monthly_sales ?? "",
       tagsText: (data.tags ?? []).join(", "),
     });
@@ -352,6 +382,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                         <span className="w-28 shrink-0 text-xs text-cream/45">{label}</span>
                         <input value={form[k]} placeholder={hint} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
                           className="min-w-0 flex-1 rounded-lg border border-cream/15 bg-cream/[0.04] px-2.5 py-1.5 text-cream outline-none transition placeholder:text-cream/25 focus:border-cyan/60" />
+                        <LockMark k={k} />
                       </label>
                     ))}
                   </fieldset>
@@ -377,6 +408,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                       </option>
                     ))}
                   </select>
+                  <LockMark k="revenue" />
                 </label>
                 <p className="text-[11px] leading-snug text-cream/35">
                   {formBand === "New"
@@ -389,11 +421,13 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                   <span className="w-28 shrink-0 text-xs text-cream/45">Shopify Plus</span>
                   <input type="checkbox" checked={form.plus} onChange={(e) => setForm((f) => ({ ...f, plus: e.target.checked }))} className="h-4 w-4 accent-cyan" />
                   <span className="text-xs text-cream/50">{form.plus ? "shows the PLUS badge" : "not Plus"}</span>
+                  <LockMark k="plus" />
                 </label>
                 <label className="flex items-center gap-3">
                   <span className="w-28 shrink-0 text-xs text-cream/45">Published</span>
                   <input type="checkbox" checked={form.published} onChange={(e) => setForm((f) => ({ ...f, published: e.target.checked }))} className="h-4 w-4 accent-cyan" />
                   <span className="text-xs text-cream/50">{form.published ? "visible in customer dashboard" : "banked / hidden"}</span>
+                  <LockMark k="published" />
                 </label>
               </div>
               {saveErr && <p className="mt-2 text-xs text-orange">Couldn&apos;t save: {saveErr}</p>}
@@ -401,7 +435,7 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 <button onClick={save} disabled={saving} className="rounded-full bg-cyan px-4 py-1.5 text-sm font-semibold text-ink-deep transition hover:bg-cyan/90 disabled:opacity-50">{saving ? "Saving…" : "Save changes"}</button>
                 <button onClick={() => setEditing(false)} disabled={saving} className="rounded-full border border-cream/15 px-4 py-1.5 text-sm text-cream/60 transition hover:text-cream">Cancel</button>
               </div>
-              <p className="mt-2 text-[11px] text-cream/35">Shared data — this changes what every customer sees. Saved as a manual override (survives re-enrichment) and logged. Payments, apps, theme, catalog size and liveness are re-observed by the crawlers, so they aren&rsquo;t editable here.</p>
+              <p className="mt-2 text-[11px] text-cream/35">Shared data — this changes what every customer sees. Every field you change is logged and locked: the crawlers leave it as you set it until you click &ldquo;unlock&rdquo;. Lists take ; or , between items. Liveness isn&rsquo;t editable &mdash; use Published to hide a store.</p>
             </div>
           )}
 

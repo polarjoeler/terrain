@@ -6,6 +6,7 @@ import { getStoreGroup, type StoreGroup } from "./store-groups";
 import { getStoreBrands, type StoreBrand } from "./brands";
 import { sideTables } from "./browse";
 import { bandSqlExpr } from "./fx";
+import { hasFieldLocks } from "./field-locks";
 
 function db() {
   return sharedDb();
@@ -53,6 +54,8 @@ export type LeadDetail = {
    *  `revenue_ballpark_usd` says whether the MODEL priced this store at all, which is what the
    *  drawer gates the ballpark card (and the raw-estimate fallback) on. */
   revenue_band: string | null; revenue_confidence: string | null; revenue_ballpark_usd: string | null;
+  /** Columns an admin set by hand and locked against the crawlers (lib/field-locks.ts), or null. */
+  locked_fields: string[] | null;
   /** Set by /api/lead: the viewer is an admin (may edit; sees vendor estimates). */
   canEdit?: boolean;
   /** Curated tags (store_tags) — shown + editable in the admin drawer. */
@@ -102,6 +105,7 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
   // The side tables ride along in the one row query (PK lookups), so the drawer pays no extra round
   // trip for them. Left out while a table doesn't exist yet (before its script's --migrate).
   const side = await sideTables();
+  const locks = await hasFieldLocks();
   const [r] = await sql<(LeadDetail & SideRaw)[]>`
     SELECT domain, name, category, country, city, theme, platform, plus, published,
            activity_tier, activity_score, hosting_provider, hosting_asn, platform_version, plugins, technologies,
@@ -115,6 +119,7 @@ export async function getLeadDetail(domain: string): Promise<LeadDetail | null> 
            launched_at, launched_source, first_seen, first_product_at, discovered_at,
            source, live_status, migrated_from, migrated_at,
            crux_rank, crux_rank_month, crux_trend, revenue_confidence, revenue_ballpark_usd,
+           ${locks ? sql`locked_fields` : sql`NULL::text[]`} AS locked_fields,
            ${sql.unsafe(bandSqlExpr())} AS revenue_band,
            COALESCE((SELECT array_agg(tag ORDER BY tag) FROM store_tags WHERE store_tags.domain = imported_stores.domain), '{}') AS tags,
            ${side.dns ? sql`(SELECT to_jsonb(x) FROM (SELECT email_provider, tools, verified, checked_at, gone

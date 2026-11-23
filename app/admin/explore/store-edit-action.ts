@@ -3,9 +3,14 @@
 /** Admin-only manual store editing. imported_stores is a SHARED table (every customer's dashboard
  *  reads the same rows), so this is gated hard to isAdmin — never a per-customer action. Each save
  *  stamps the matching *_source='manual' where one exists (so re-enrichment respects the override)
- *  and writes a store_edits audit row (who/when/field/old→new). See lead-drawer.tsx for the UI. */
+ *  and writes a store_edits audit row (who/when/field/old→new). See lead-drawer.tsx for the UI.
+ *
+ *  Every edited column is also LOCKED (imported_stores.locked_fields, lib/field-locks.ts): a database
+ *  trigger keeps the hand-set value whichever crawler writes the row next, until it is unlocked here.
+ *  Before `scripts/field-locks.ts --migrate` has run, edits still save, just without the lock. */
 import { db } from "@/lib/db";
 import { currentUser, isAdmin } from "@/lib/auth";
+import { hasFieldLocks, lockSet } from "@/lib/field-locks";
 
 export type StorePatch = {
   country?: string | null;
@@ -31,11 +36,26 @@ export type StorePatch = {
   city?: string | null;
   plus?: boolean;
   tags?: string[];
+  // Crawler-owned fields. Without a lock the next probe would replace these, which is why #172 left
+  // them out; with one they stay as typed until unlocked.
+  payments?: string | null;
+  shipping_providers?: string | null;
+  technologies?: string | null;
+  plugins?: string | null;
+  apps?: string | null;
+  theme?: string | null;
+  currency?: string | null;
+  product_count?: string | null;
+  launched_at?: string | null;
 };
 
 const SCALARS = ["country", "platform", "published", "plus", "name", "category", "city", "estimated_monthly_sales",
   "contact_name", "contact_email", "contact_role", "contact_phone", "whatsapp", "contact_form_url",
-  "linkedin", "instagram", "facebook", "tiktok"] as const;
+  "linkedin", "instagram", "facebook", "tiktok",
+  "payments", "shipping_providers", "technologies", "plugins", "apps", "theme", "currency", "product_count", "launched_at"] as const;
+// Stored lists, written the way the lanes write them, so a typed "PayFast, Yoco" still feeds the
+// payment facets and the payments taxonomy (scripts/payments-taxonomy.mjs).
+const LISTS: Record<string, string> = { payments: "; ", shipping_providers: "; ", technologies: ";", plugins: ";" };
 const BOOLEANS = new Set<string>(["published", "plus"]);
 // Any of these edited → contact_source='manual', which scripts/contact-enrich.mjs treats as "a human
 // owns this contact record" and stops overwriting.
@@ -65,6 +85,9 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   if (!cur) return { error: "not_found" };
 
   const norm = (v: unknown) => (v == null || v === "" ? null : String(v).trim() || null);
+  // launched_at is a DATE column: postgres.js hands back a Date, the form sends YYYY-MM-DD.
+  const asList = (v: string | null, f: string) => (v ? v.split(/[;,]/).map((t) => t.trim()).filter(Boolean).join(LISTS[f]) || null : null);
+  const dateOnly = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : norm(v)?.slice(0, 10) ?? null);
   const set: Record<string, unknown> = {};
   const audits: { field: string; old: string | null; new: string | null }[] = [];
 
@@ -80,8 +103,17 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
       // Store numbers the way the lanes do (digits only, leading + kept) so wa.me links and the
       // WhatsApp/phone facets keep working on a hand-typed "+27 82 123 4567".
       if (nv && (f === "whatsapp" || f === "contact_phone")) nv = nv.replace(/(?!^\+)[^\d]/g, "") || null;
-      if (nv && f === "country") nv = nv.toUpperCase();
-      const ov = norm(cur[f]);
+      if (nv && (f === "country" || f === "currency")) nv = nv.toUpperCase();
+      if (nv && f === "currency" && !/^[A-Z]{3}$/.test(nv)) return { error: "currency must be a 3-letter code, e.g. ZAR" };
+      if (nv && f in LISTS) nv = asList(nv, f);
+      if (nv && f === "product_count") {
+        if (!/^\d+$/.test(nv)) return { error: "product count must be a whole number" };
+        nv = String(Number(nv));
+      }
+      if (nv && f === "launched_at" && !/^\d{4}-\d{2}-\d{2}$/.test(nv)) return { error: "launch date must be YYYY-MM-DD" };
+      // Compare in the same shape: an untouched "PayFast;Yoco" must not read as an edit (and get locked)
+      // just because the form would re-join it as "PayFast; Yoco".
+      const ov = f === "launched_at" ? dateOnly(cur[f]) : f in LISTS ? asList(norm(cur[f]), f) : norm(cur[f]);
       if (ov === nv) continue;
       set[f] = nv;
       audits.push({ field: f, old: ov, new: nv });
@@ -89,6 +121,8 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
   }
   // A manual country fix must survive re-enrichment: country-enrich skips country_source='manual'.
   if ("country" in set) set.country_source = "manual";
+  if ("launched_at" in set) set.launched_source = set.launched_at ? "manual" : null;
+  if ("payments" in set) set.payments_source = set.payments ? "manual" : null;
   // A hand-set revenue (a typed figure or a band picked in the drawer) must win over the MODELED
   // price immediately: revExpr() reads COALESCE(revenue_ballpark_usd, usd(estimated_monthly_sales)),
   // so leaving the ballpark columns in place would keep showing the model's band until the next
@@ -113,10 +147,20 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
     if ("contact_name" in set) set.contact_type = set.contact_name ? "named" : null;
   }
 
+  // Lock what was edited (plus its companion stamps), so no lane undoes it. Tags live in their own
+  // table and no lane writes them, so they need no lock.
+  const locking = await hasFieldLocks();
+  const lock = lockSet(audits.map((a) => a.field).filter((f) => f !== "tags"));
+
   try {
     await sql.begin(async (q) => {
+      // Marks this transaction as the admin edit, which the lock trigger lets through. SET LOCAL, not
+      // SET: DATABASE_URL is the transaction pooler, where a session SET lasts one statement.
+      await q`SELECT set_config('terrain.manual_edit', 'on', true)`;
       if (Object.keys(set).length) {
-        await q`UPDATE imported_stores SET ${q(set, ...Object.keys(set))} WHERE domain = ${d}`;
+        await q`UPDATE imported_stores SET ${q(set, ...Object.keys(set))}
+          ${locking && lock.length ? q`, locked_fields = ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(locked_fields, '{}'::text[]) || ${lock}::text[]) AS x ORDER BY 1)` : q``}
+          WHERE domain = ${d}`;
       }
       if (patch.tags) {
         const want = new Set(patch.tags.map((t) => t.trim()).filter(Boolean));
@@ -134,6 +178,32 @@ export async function updateStore(domain: string, patch: StorePatch): Promise<{ 
     });
   } catch (e) {
     return { error: e instanceof Error ? e.message : "save_failed" };
+  }
+  return { ok: true };
+}
+
+/** Hand a field back to the crawlers: drop it (and its companion stamps) from the lock list. The
+ *  value stays as it is until the next lane writes it. */
+export async function unlockStoreField(domain: string, field: string): Promise<{ ok: true } | { error: string }> {
+  const email = await currentUser();
+  if (!isAdmin(email)) return { error: "unauthorized" };
+  const d = (domain || "").trim().toLowerCase();
+  if (!d || !field) return { error: "bad_request" };
+  if (!(await hasFieldLocks())) return { error: "field locks not installed" };
+  const sql = db();
+  await ensureTables(sql);
+  const drop = lockSet([field]);
+  try {
+    await sql.begin(async (q) => {
+      await q`SELECT set_config('terrain.manual_edit', 'on', true)`;
+      await q`UPDATE imported_stores SET locked_fields = NULLIF(ARRAY(
+          SELECT x FROM unnest(locked_fields) AS x WHERE x <> ALL(${drop}::text[]) ORDER BY 1), '{}'::text[])
+        WHERE domain = ${d}`;
+      await q`INSERT INTO store_edits (domain, editor, field, old_value, new_value)
+        VALUES (${d}, ${email}, ${"unlock:" + field}, 'locked', 'crawler-owned')`;
+    });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "unlock_failed" };
   }
   return { ok: true };
 }
