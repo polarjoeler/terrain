@@ -299,7 +299,13 @@ const SOCIALS = {
   instagram: /instagram\.com\/([A-Za-z0-9_.]{2,30})/i,
   facebook: /facebook\.com\/([A-Za-z0-9_.-]{2,40})/i,
   tiktok: /tiktok\.com\/@([A-Za-z0-9_.]{2,30})/i,
-  linkedin: /linkedin\.com\/(?:company|in)\/([A-Za-z0-9_.-]{2,60})/i,
+  // Capture the PATH, not just the slug. `company/acme` and `in/jane-doe` are different kinds
+  // of thing, and the old non-capturing `(?:company|in)` collapsed both to a bare handle —
+  // destroying the only signal that says whether a value is an organisation page (shippable) or a
+  // personal profile (personal data under POPIA/GDPR/APPI, never exported). It also fed
+  // lib/social.ts, which assumes a bare handle IS a company and renders it as
+  // linkedin.com/company/<handle> — so a person's profile shipped as a dead company URL.
+  linkedin: /linkedin\.com\/((?:company|school|in)\/[A-Za-z0-9_.-]{2,60})/i,
 };
 const SOCIAL_JUNK = new Set(["sharer", "share", "intent", "tr", "plugins", "channel", "watch",
   "embed", "user", "c", "results", "hashtag", "p", "pin", "policy", "help", "login", "sharing"]);
@@ -308,7 +314,15 @@ function socialsFrom(html) {
   for (const [net, re] of Object.entries(SOCIALS)) {
     const m = html.match(re);
     const v = m?.[1];
-    if (v && !SOCIAL_JUNK.has(v.toLowerCase())) out[net] = v;
+    if (!v || SOCIAL_JUNK.has(v.toLowerCase())) continue;
+    if (net === "linkedin") {
+      // Personal profiles are never stored: we ship company pages plus a computed search
+      // deep-link instead (lib/linkedin.ts). Emit the same canonical URL shape as social-enrich.
+      if (/^in\//i.test(v)) continue;
+      out[net] = `https://linkedin.com/${v}`;
+      continue;
+    }
+    out[net] = v;
   }
   return out;
 }
