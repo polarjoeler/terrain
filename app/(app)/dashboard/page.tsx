@@ -34,12 +34,12 @@ export default async function Dashboard({
   const org = profile ? await getOrgProfile(orgKey(email)).catch(() => null) : null;
   // Persona-lensed shortcut — points each company type at what it came for.
   const PERSONA: Record<string, { line: string; cta: string; href: string }> = {
-    payments: { line: "See the payment landscape — every gateway ranked by adoption, with your own market report.", cta: "Product Partners", href: "/partners" },
-    app_developer: { line: "See which apps merchants install and where the gaps are.", cta: "App landscape", href: "/partners" },
-    shipping: { line: "See which carriers win at checkout across the market.", cta: "Carrier landscape", href: "/partners" },
+    payments: { line: "See the payment landscape — every gateway ranked by adoption, with your own market report.", cta: "Product Partners", href: "/partners/products?cat=payments" },
+    app_developer: { line: "See which apps merchants install and where the gaps are.", cta: "App landscape", href: "/partners/products?cat=apps" },
+    shipping: { line: "See which carriers win at checkout across the market.", cta: "Carrier landscape", href: "/partners/products?cat=shipping" },
     investor: { line: "Track how the market is growing — launches, churn and platform shift.", cta: "Market insights", href: "/insights" },
     researcher: { line: "Slice the full dataset and export what you need.", cta: "Open insights", href: "/insights" },
-    agency: { line: "Find the merchants and the partners moving in your space.", cta: "Explore partners", href: "/partners" },
+    agency: { line: "Find the merchants and the partners moving in your space.", cta: "Explore partners", href: "/partners/services" },
   };
   const persona = org ? PERSONA[org.companyType] : null;
 
