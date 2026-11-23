@@ -47,7 +47,7 @@ const RECHECK_WINDOW = RECHECK_NOW || new Date().getUTCHours() % 6 < 2;
 const DEAD_AFTER = 2;                                              // = verify-liveness.mjs DEAD_AFTER
 // Customer-visible markets — mirror of lib/markets.ts VISIBLE_MARKETS (as reconcile-probed.mjs does).
 const VISIBLE = ["ZA","KE","NG","EG","MA","GH","TZ","UG","DZ","TN","CI","SN","MU","MZ","CM","BW","AO","NA","RW","ZM","ET","ZW","LY","MW","SO","LS","SZ"];
-const UA = "terrain-radar/1.0 (woo payment probe; joelbronkowski@gmail.com)";
+const UA = "terrain-radar/1.0 (woo payment probe; hello@heyterrain.com)";
 
 // WooCommerce gateway ID / plugin token -> canonical gateway (taxonomy casing). First match wins.
 const GATEWAY = [
