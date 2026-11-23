@@ -87,7 +87,7 @@ export function closeAgents() {
 
 /* ---- the GET ------------------------------------------------------------- */
 /**
- * @returns {Promise<{status:number, url:string, contentType:string, text:string}|null>}
+ * @returns {Promise<{status:number, url:string, contentType:string, poweredBy:string, text:string}|null>}
  *          null on a network-level failure (DNS, TLS, timeout, dead proxy).
  *          A non-2xx response is RETURNED, not nulled — callers distinguish 404 from unreachable.
  */
@@ -140,6 +140,8 @@ export function fetchText(url, opts = {}) {
             status: res.statusCode ?? 0,
             url,
             contentType: String(res.headers["content-type"] ?? ""),
+            // Shopify's own stamp ("Shopify", or "Shopify, Oxygen, Hydrogen" for a headless store).
+            poweredBy: String(res.headers["powered-by"] ?? ""),
             // A NUL is never meaningful in a text body — it means binary or UTF-16 served as
             // text/html, or a truncated template. Postgres rejects \u0000 in BOTH text and jsonb,
             // and the error aborts the whole statement, so one stray byte in banked page text costs
