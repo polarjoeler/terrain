@@ -37,7 +37,7 @@ const PERSONA: Record<string, Persona> = {
   shipping: { focus: "Shipping", line: "Which carriers are winning at checkout across the market.", ctas: [{ label: "Carrier landscape", href: "/insights/shipping" }] },
   investor: { focus: "Market growth", line: "Launches, churn and platform shift across the market.", ctas: [{ label: "Market insights", href: "/insights" }] },
   researcher: { focus: "The full dataset", line: "Slice every signal and export what you need.", ctas: [{ label: "Open insights", href: "/insights" }, { label: "Browse leads", href: "/dashboard" }] },
-  agency: { focus: "Partners & merchants", line: "The agencies and brands moving in your space.", ctas: [{ label: "Explore partners", href: "/partners" }] },
+  agency: { focus: "Partners & merchants", line: "The agencies and brands moving in your space.", ctas: [{ label: "Explore partners", href: "/partners/services" }] },
 };
 
 function greeting() {
