@@ -20,7 +20,11 @@
  *     recording what it saw, so there is no evidence of a move at all. repair-false-migrations.mjs
  *     matches structurally on platform = live_platform and cannot see these. Repair = clear the
  *     verdict (NOT assert 'active': we never established it was alive, only that we never
- *     established it wasn't) so the fixed probe re-queues it.
+ *     established it wasn't) so the store returns to the customer-visible base, which lib/browse.ts
+ *     gates on live_status. ONLY live_status is cleared: since #161 this lane's clock is
+ *     verified_checked_at, while live_checked_at is shared with 12 other scripts, and the queue
+ *     gates on verified_checked_at — already NULL on this row, so it re-queues without any clock
+ *     being touched. Nulling the shared clock would discard other lanes' bookkeeping for nothing.
  *
  *  Dry run by default.
  *
@@ -60,6 +64,22 @@ try {
   const vis = sameFam.filter((r) => r.published).length;
   console.log(`    of which published: ${vis}`);
 
+  // Same-family churn EVENTS. Counted independently of `migrated_from`, because the shape exists
+  // both on the 54 above and on stores that never got a migrated_from stamped at all — 12 of them
+  // record WooCommerce -> WooCommerce, which is not even a relabel, just the Shopify-only probe
+  // meeting a Woo store. All of them are undated (died_at NULL), so none counts toward period
+  // churn and deleting them moves no reported figure.
+  const fakeChurnRows = await sql`SELECT cl.domain, i.platform, cl.migrated_to, cl.historic,
+      (cl.died_at IS NOT NULL) AS dated
+    FROM churn_log cl JOIN imported_stores i ON i.domain = cl.domain
+    WHERE cl.status = 'migrated'
+      AND lower(COALESCE(cl.migrated_to,'')) = ANY(${WORDPRESS_FAMILY})
+      AND lower(COALESCE(i.migrated_from, i.platform, '')) = ANY(${WORDPRESS_FAMILY})`;
+  const fakeChurn = fakeChurnRows.map((r) => r.domain);
+  const datedFake = fakeChurnRows.filter((r) => r.dated).length;
+  console.log(`\n   same-family churn EVENTS to delete : ${fakeChurn.length}`);
+  console.log(`     of which dated (would move a churn figure): ${datedFake}`);
+
   // ── B · stuck terminal verdict with no evidence ───────────────────────────────────────────────
   const stuck = await sql`SELECT domain, platform, country, published FROM imported_stores
     WHERE live_status = 'migrated' AND live_platform IS NULL
@@ -78,14 +98,15 @@ try {
         WHERE domain = ${r.domain} AND migrated_from IS NOT NULL`;
       a += res.count;
     }
-    // The churn row claims the store left a platform it never left.
-    const ch = await sql`DELETE FROM churn_log cl
-      USING imported_stores i
-      WHERE cl.domain = i.domain AND cl.status = 'migrated'
-        AND i.migrated_from IS NULL AND lower(COALESCE(i.platform,'')) = ANY(${WORDPRESS_FAMILY})
-        AND lower(COALESCE(cl.migrated_to,'')) = ANY(${WORDPRESS_FAMILY})`;
+    // The churn row claims the store left a platform it never left. Scoped to the domains counted
+    // in the dry run above — NOT to `migrated_from IS NULL`, which the loop has just made true for
+    // the 54 and which is also true of every other same-family row, so the delete would have
+    // depended on its own side effect and silently taken rows it never reported.
+    const ch = fakeChurn.length
+      ? await sql`DELETE FROM churn_log WHERE status = 'migrated' AND domain = ANY(${fakeChurn})`
+      : { count: 0 };
     const b = await sql`UPDATE imported_stores
-      SET live_status = NULL, live_checked_at = NULL
+      SET live_status = NULL
       WHERE live_status = 'migrated' AND live_platform IS NULL
         AND platform IS NOT NULL AND lower(platform) <> 'shopify'`;
     console.log(`\nA · same-family moves cleared   : ${a}`);
