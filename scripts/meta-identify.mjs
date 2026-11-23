@@ -17,8 +17,8 @@
  * minutes — see residential-ip-rate-budget). Pass --direct to override for a tiny test.
  *
  * Queue (all on idx_is_live_universe, no full scan): CrUX-ranked first, then live_status='active',
- * then never-liveness-checked. A store leaves the queue when it gets a country, or when it is
- * stamped country_checked_at with country_source='meta_miss:<reason>' (reversible as a set:
+ * then never-liveness-checked. A store is queued while country_source IS NULL, and leaves when
+ * it gets a country or is stamped country_source='meta_miss:<reason>' (reversible as a set:
  * `UPDATE ... SET country_checked_at=NULL, country_source=NULL WHERE country_source LIKE 'meta_miss:%'`).
  * A 429 is not an answer — it stays queued, and a throttle streak ends the run.
  *
@@ -130,8 +130,13 @@ const norm = (c) => {
 async function main() {
   const sql = postgres(process.env.DATABASE_URL, { prepare: false, max: 2, idle_timeout: 20,
     connection: { statement_timeout: 120000, idle_in_transaction_session_timeout: 120000, lock_timeout: 5000 } });
+  // "Not yet asked /meta.json" = no country_source. NOT country_checked_at IS NULL: country-enrich
+  // stamps country_checked_at when its storefront read finds nothing and leaves country_source NULL,
+  // so gating on the timestamp hid 146k stores from this lane (found 2026-11-23). Every outcome this
+  // lane writes sets country_source (shop_meta / meta_miss:* / meta_retry:*), and 'manual' /
+  // 'disputed' are set by people or the retag script, so a NULL source is exactly "never tried".
   const base = sql`published AND country IS NULL AND platform = 'Shopify'
-    AND country_checked_at IS NULL AND country_source IS DISTINCT FROM 'manual'`;
+    AND country_source IS NULL`;
   try {
     // Tier 0 — free: rows whose identity was already fetched (checkout probe / backfill) but whose
     // country was never copied across. No request needed.
