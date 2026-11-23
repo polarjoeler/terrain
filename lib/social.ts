@@ -50,11 +50,20 @@ export function socialHandle(value: string | null | undefined, network: Network)
   if (!segs.length) return null;
   if (network === "linkedin") {
     const kind = segs[0].toLowerCase();
-    if (kind === "company" || kind === "in" || kind === "school" || kind === "showcase") {
+    // ORGANISATION pages only. `in/` is an individual's profile: personal data under POPIA, GDPR
+    // and APPI, and not something we ship at all — lib/linkedin.ts offers a computed people
+    // SEARCH instead, which needs no stored profile and is right for every row.
+    if (kind === "company" || kind === "school" || kind === "showcase") {
       return segs[1] ? `${kind}/${decodeURIComponent(segs[1]).replace(/^@/, "")}` : null;
     }
-    // A bare value with no prefix is a company handle — how the column mostly stores them.
-    return segs.length === 1 ? decodeURIComponent(segs[0]).replace(/^@/, "") : null;
+    // A bare value used to be ASSUMED a company and rendered as linkedin.com/company/<handle>.
+    // That was wrong often enough to matter: contact-enrich matched LinkedIn with a non-capturing
+    // `(?:company|in)` group and kept only the slug, so personal profiles arrived here
+    // indistinguishable from company ones and shipped as company URLs that do not resolve.
+    // #185 preserves the prefix at the source and backfilled the column, so an unprefixed value
+    // now means "we do not know what this is" — which is not something to link to. Measured at
+    // the time of the change: 0 bare and 0 `in/` values remained, so this costs no live link.
+    return null;
   }
   const first = decodeURIComponent(segs[0]).replace(/^@/, "");
   if (!first || NOT_A_PROFILE.test(first)) return null;
@@ -69,7 +78,8 @@ export function socialUrl(value: string | null | undefined, network: Network): s
     case "instagram": return `https://instagram.com/${h}`;
     case "facebook": return `https://facebook.com/${h}`;
     case "tiktok": return `https://tiktok.com/@${h}`;
-    case "linkedin": return `https://www.linkedin.com/${h.includes("/") ? h : `company/${h}`}`;
+    // socialHandle only ever returns `kind/slug` for LinkedIn now, so no prefix is invented here.
+    case "linkedin": return `https://www.linkedin.com/${h}`;
   }
 }
 
