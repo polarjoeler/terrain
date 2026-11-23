@@ -19,8 +19,10 @@ export NVM_DIR="$HOME/.nvm"
 
 cd /Users/joel/storepulse || exit 1
 
-# Markets in sell-order.
-FOCUS="ZA,KE,NG"
+# Every customer-visible market (mirror of lib/markets.ts VISIBLE_MARKETS). Was ZA,KE,NG only, so
+# the other 24 markets the dashboard shows never had a contact crawled. The queue is ordered by
+# contact_type-missing then store size, not by country, so ZA's big stores still come first.
+FOCUS="ZA,KE,NG,EG,MA,GH,TZ,UG,DZ,TN,CI,SN,MU,MZ,CM,BW,AO,NA,RW,ZM,ET,ZW,LY,MW,SO,LS,SZ"
 
 # LANE SPLIT — this file runs on BOTH machines and both agents fire at 01:15. Without a split they
 # select the same `contact_checked_at IS NULL` rows in the same revenue order and crawl every store
