@@ -11,9 +11,9 @@ export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 node --env-file=.env.local scripts/heartbeat.mjs deep-enrich "non-Shopify homepages" >/dev/null 2>&1 || true
 echo "===== deep-enrich $(date '+%F %T') ====="
 
-# Default scope = focus markets (Africa + JP); non-Shopify only. 3000/night clears the backlog over
+# Default scope = the 27 visible African markets (JP dropped 2026-11-23); non-Shopify only. 3000/night clears the backlog over
 # a handful of runs and then just tops up newly-discovered stores.
-node --env-file=.env.local scripts/deep-enrich.mjs --country AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP --limit 30000 --concurrency 60 || echo "!! deep-enrich failed"
+node --env-file=.env.local scripts/deep-enrich.mjs --country AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW --limit 30000 --concurrency 60 || echo "!! deep-enrich failed"
 
 node --env-file=.env.local scripts/heartbeat.mjs deep-enrich "idle — done" >/dev/null 2>&1 || true
 echo "===== deep-enrich done $(date '+%T') ====="

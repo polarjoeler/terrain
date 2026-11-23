@@ -27,7 +27,10 @@ const platArg = (arg("--platform", null) || "").toLowerCase() || null;
 // Targeted re-scrape of a named set (e.g. the marquee giants), bypassing the platform/country/reprobe
 // gates — it fetches exactly these domains whatever their platform or last-enriched date.
 const DOMAINS = (arg("--domains", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
+// Default scope = the 27 customer-visible African markets (lib/markets.ts VISIBLE_MARKETS). JP was
+// dropped 2026-11-23 (Joel: "shift away from Japan") — it took ~35% of the Shopify deep-scan budget
+// for a market the dashboard doesn't show. Pass --country JP to scan it on purpose.
+const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW".split(",");
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MARKETS;
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
