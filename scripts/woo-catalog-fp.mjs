@@ -28,7 +28,7 @@
  */
 import postgres from "postgres";
 import { fetchWooCatalog, WooCatalogError } from "./lib/woo-catalog.mjs";
-import { buildFp, ensureFpTable, upsertFp, deferFp, FP_MARKETS, FP_STALE_DAYS } from "./lib/catalog-fp.mjs";
+import { buildFp, ensureFpTable, upsertFp, deferFp, FP_MARKETS, FP_STALE_DAYS, buildVendors, ensureVendorTable, upsertVendors } from "./lib/catalog-fp.mjs";
 
 const ALL = process.argv.includes("--all");
 const DRY = process.argv.includes("--dry");
@@ -41,6 +41,11 @@ const flagList = (name) => {
 const LIMIT = ALL ? 0 : flagNum("--limit", 500);
 const COUNTRIES = flagList("--country")?.map((c) => c.toUpperCase()) ?? null;
 const DOMAINS = flagList("--domains")?.map((d) => d.toLowerCase()) ?? null;
+// --backfill-brands: one-off pass over Woo stores fingerprinted BEFORE this lane captured brands
+// (~4.5k ZA/KE/NG on 2026-11-23). It re-reads catalogues that already have products and no brand
+// rows. A store whose catalogue carries no brand field stays brandless, so the 1-day fp_at guard
+// is what stops a same-day re-run asking it again; the normal 30-day refresh covers it after that.
+const BACKFILL_BRANDS = process.argv.includes("--backfill-brands");
 const CONCURRENCY = flagNum("--concurrency", 6);
 const PAUSE_MS = flagNum("--pause", 400);
 // MAX_PRODUCTS truncates at CAP (lib/catalog-fp.mjs), the point past which a fingerprint row can
@@ -61,12 +66,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
   await ensureFpTable(sql);
+  await ensureVendorTable(sql);
 
   // Mirrors catalog-enrich's --fp selection, with the platform test inverted: published + in a
   // market we sell into + never fingerprinted or gone stale. Peach stores first, because the fraud
   // pilot is what this coverage is for (see memory: peach-first-customer).
   const rows = DOMAINS
     ? await sql`SELECT domain, country FROM imported_stores WHERE domain = ANY(${DOMAINS}::text[])`
+    : BACKFILL_BRANDS
+    ? await sql`
+      SELECT s.domain, s.country
+      FROM imported_stores s
+      JOIN store_catalog_fp f ON f.domain = s.domain
+      WHERE s.published = true
+        AND lower(s.platform) = 'woocommerce'
+        AND upper(s.country) = ANY(${COUNTRIES ?? FP_MARKETS})
+        AND f.n_products > 0
+        AND f.fp_at < now() - interval '1 day'
+        AND NOT EXISTS (SELECT 1 FROM store_vendors v WHERE v.domain = s.domain)
+      ORDER BY f.n_products DESC, s.domain
+      ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`
     : await sql`
       SELECT s.domain, s.country
       FROM imported_stores s
@@ -82,7 +101,7 @@ async function main() {
     `(concurrency ${CONCURRENCY}, ${PAUSE_MS}ms pause, cap ${MAX_PRODUCTS} products)${DRY ? " — DRY RUN" : ""}…`);
   if (DRY) { console.log(rows.slice(0, 20).map((r) => `  ${r.domain} (${r.country})`).join("\n")); await sql.end(); return; }
 
-  let ok = 0, noApi = 0, tooBig = 0, transient = 0, products = 0;
+  let ok = 0, noApi = 0, tooBig = 0, transient = 0, products = 0, branded = 0;
   let i = 0;
   const worker = async () => {
     while (i < rows.length) {
@@ -93,8 +112,14 @@ async function main() {
         // An empty catalogue is a real answer: the store is reachable and sells nothing right now.
         // It is written (n_products 0) so the lane does not re-ask for FP_STALE_DAYS.
         await upsertFp(sql, domain, buildFp(ps), null);
+        // Brand index rides on the same download (no extra request). A fresh catalogue is the whole
+        // truth, so a store that dropped a brand loses its row — same rule as the Shopify lane.
+        const vendors = buildVendors(ps);
+        await upsertVendors(sql, domain, vendors);
+        if (vendors.length) branded++;
         ok++; products += ps.length;
-        console.log(`ok   ${domain} -> ${ps.length} products${total > ps.length ? ` (of ${total}, capped)` : ""}`);
+        console.log(`ok   ${domain} -> ${ps.length} products${total > ps.length ? ` (of ${total}, capped)` : ""}` +
+          (vendors.length ? `, ${vendors.length} brands (${vendors.slice(0, 3).map((v) => v.vendor).join(", ")}${vendors.length > 3 ? ", …" : ""})` : ""));
       } catch (err) {
         if (err instanceof WooCatalogError && err.status === 404) {
           await deferFp(sql, domain, -NO_API_DAYS); noApi++;
@@ -116,7 +141,7 @@ async function main() {
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
 
   const pct = rows.length ? Math.round((ok / rows.length) * 100) : 0;
-  console.log(`\n✓ Done. ${ok}/${rows.length} fingerprinted (${pct}%), ${products.toLocaleString()} products; ` +
+  console.log(`\n✓ Done. ${ok}/${rows.length} fingerprinted (${pct}%), ${products.toLocaleString()} products, ${branded} with brands; ` +
     `${noApi} no Store API, ${tooBig} too large, ${transient} transient (retry ${RETRY_DAYS}d).`);
   await sql.end();
 }
