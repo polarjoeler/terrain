@@ -114,11 +114,6 @@ ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS live_miss INTEGER NOT NULL 
 -- Deliberately NOT indexed: the predicate (IS NULL OR < cutoff) matches most of the table, so the
 -- planner would ignore the index while every liveness write still paid to maintain it.
 ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS verified_checked_at TIMESTAMPTZ;
--- meta-liveness's own clock and verdict (/meta.json via proxies, customer-visible African Shopify,
--- 14-day cycle). Written by scripts/meta-liveness.mjs ALONE, for the same reason as above. Not
--- indexed: its queue rides idx_is_live_universe (country, platform, live_status) and filters ~90k rows.
-ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS meta_live_checked_at TIMESTAMPTZ;
-ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS meta_live_result TEXT;
 -- First time a liveness check CONFIRMED this store live. A death only counts as
 -- real (forward) churn if this is set before it — otherwise the store was dead at
 -- first contact (e.g. a bulk-imported old site) and its death is HISTORIC, not churn.
