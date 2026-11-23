@@ -56,11 +56,24 @@ export function normalisePrice(prices) {
   return `${pad.slice(0, -minor)}.${pad.slice(-minor)}`;
 }
 
+/** The product's brand, from WooCommerce's built-in Brands (core since 9.6; the Store API returns
+ *  `brands: [{ name, slug }]` on every product). Older stores and third-party brand plugins send no
+ *  such field, so most products come back with no brand — that is "unknown", never a guess.
+ *  First brand wins when a product carries several: Shopify's `vendor` is single-valued, and the
+ *  brand index counts one brand per product on both platforms. */
+export function wooBrand(p) {
+  const b = Array.isArray(p?.brands) ? p.brands.find((x) => x && typeof x.name === "string" && x.name.trim()) : null;
+  return b ? decodeEntities(b.name).trim() : "";
+}
+
 /** One Woo product → the Shopify-shaped record the fingerprint builder expects. */
 export function toProduct(p) {
   const sku = typeof p.sku === "string" ? p.sku.trim() : "";
   return {
     title: decodeEntities(p.name ?? ""),
+    // Same field name as Shopify's products.json, so buildVendors() feeds the brand index from
+    // either platform without knowing which one it is reading.
+    vendor: wooBrand(p),
     handle: (p.slug ?? "").trim().toLowerCase(),
     // Trap 2: an empty SKU identifies nothing. Keep the field absent, not blank.
     variants: sku ? [{ sku, price: normalisePrice(p.prices) }] : [{ price: normalisePrice(p.prices) }],
