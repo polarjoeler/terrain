@@ -15,6 +15,7 @@
  */
 import { usdSqlExpr, usdExpr, bandSqlExpr, revenueBand, toUsd, type RevenueBand } from "./fx.ts";
 import { scoreExpr } from "./score.ts";
+import { linkedinPeopleUrl } from "./linkedin.ts";
 import { db as sharedDb } from "./db";
 import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
 import { ROW_CAP } from "./browse-limits";
@@ -908,7 +909,7 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
   // normalised one. Both ship: the native pair is what a merchant recognises, the USD one is
   // what sorts across markets. shopify_plan is the plan-tier ladder (see the plan-detection
   // work), not Terrain's subscription plan.
-  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "description", "first_product_at", "first_seen", "migrated_from", "migrated_at", "email_provider", "dns_tools", "dns_verified", "not_trading"];
+  const header = ["domain", "name", "category", "country", "city", "platform", "activity_tier", "activity_score", "hosting", "platform_version", "theme", "product_count", "price_min", "price_max", "currency", "aov_usd", "est_monthly_sales_usd", "products_sold", "revenue_band", "plus", "shopify_plan", "email", "contact_type", "contact_name", "contact_role", "whatsapp", "phone", "contact_form", "deliverable", "mail_provider", "shared_with_n_stores", "likely_personal_email_INFERRED", "inferred_status", "payments", "shipping", "apps", "plugins", "technologies", "instagram", "instagram_followers", "facebook", "facebook_followers", "tiktok", "linkedin", "linkedin_people", "description", "first_product_at", "first_seen", "migrated_from", "migrated_at", "email_provider", "dns_tools", "dns_verified", "not_trading"];
   const rows: ExportCell[][] = out.map((r) => {
     const sales = r.usd == null ? null : Number(r.usd);
     const aov = toUsd(r.avg_product_price != null ? Number(r.avg_product_price) : null, (r.currency as string) ?? null, (r.country as string) ?? null);
@@ -930,6 +931,10 @@ export async function browseExportRows(f: BrowseFilters = {}): Promise<{ header:
       socialUrl(r.instagram as string, "instagram") ?? r.instagram, r.instagram_followers == null ? null : Number(r.instagram_followers),
       socialUrl(r.facebook as string, "facebook") ?? r.facebook, r.facebook_followers == null ? null : Number(r.facebook_followers),
       socialUrl(r.tiktok as string, "tiktok") ?? r.tiktok, socialUrl(r.linkedin as string, "linkedin") ?? r.linkedin,
+      // Computed, never stored: the company People tab when the stored value really is a company
+      // page, else a prefilled people search. Covers every row, including the ~90% with no stored
+      // URL — and deliberately does NOT trust a bare handle the way socialUrl() does.
+      linkedinPeopleUrl(r.linkedin as string | null, r.name as string | null, r.domain as string | null),
       r.description, dayCell(r.first_product_at), dayCell(r.first_seen),
       r.migrated_from, dayCell(r.migrated_at),
       r.dns_email, list(r.dns_tools), list(r.dns_verified), r.nt_reason] as ExportCell[];
