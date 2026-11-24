@@ -31,7 +31,7 @@ async function main() {
       SELECT DISTINCT country FROM imported_stores
       WHERE published AND activity_tier IS DISTINCT FROM 'not_a_store' AND country IS NOT NULL AND country <> ''`).map((r) => r.country);
   }
-  const r = await buildBrowseRollup({ countries, bucketRows: Number(arg("--bucket-rows") ?? 120_000), log: (m) => console.log("  " + m) });
+  const r = await buildBrowseRollup({ countries, bucketRows: Number(arg("--bucket-rows") ?? 30_000), log: (m) => console.log("  " + m) });
   console.log(`build ${r.build}: ${r.partitions} partitions · ${r.rows.toLocaleString()} rows · ${r.seconds}s`);
   await db().end();
 }

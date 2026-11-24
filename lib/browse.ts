@@ -489,7 +489,7 @@ export async function buildBrowseRollup(opts: { countries?: string[]; bucketRows
   const sql = db();
   const log = opts.log ?? (() => {});
   const side = await sideTables();
-  const bucketRows = opts.bucketRows ?? 120_000;
+  const bucketRows = opts.bucketRows ?? 30_000;   // 120k timed out on ZA (68k stores, one bucket) at the 120s limit; 30k buckets take ~35s each
   const scope = opts.countries?.length ? opts.countries : [...VISIBLE_MARKETS];
   const sizes = await sql<{ country: string; n: number }[]>`
     SELECT country, count(*)::int n FROM imported_stores
