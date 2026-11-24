@@ -39,6 +39,16 @@ if pgrep -f "scripts/dedupe-www.mjs" >/dev/null 2>&1; then
   exit 0
 fi
 
+# launchd hands an agent a minimal PATH with no node on it, so resolve node the way every other
+# lane wrapper on Rex does. Without this the job runs daily and fails instantly on
+# "node: command not found" — silently, because nothing reads the error log.
+export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "$(date '+%F %T') FATAL node not on PATH — drain did not run" >&2
+  exit 127
+fi
+
 echo "=== $(date '+%F %T') dedupe-www drain starting ==="
 node --env-file=.env.local scripts/dedupe-www.mjs --batch 2000 --backup-dir "$BACKUP_DIR"
 rc=$?
