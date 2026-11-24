@@ -36,7 +36,7 @@ const NAV: NavNode[] = [
   {
     label: "Discover", children: [
       { label: "Partner Finder", href: "/partners" },
-      { label: "Radar", href: "/radar", match: ["/radar"] },
+      { label: "Brands", href: "/brands", match: ["/brands"] },
       { label: "Store Groups", soon: true },
       { label: "Creator Leads", soon: true },
     ],
@@ -49,7 +49,7 @@ const SIDEBAR_KEY = "terrain.sidebar.collapsed";
 // Route → page title. Longest matching prefix wins; falls back to the active nav label.
 const TITLES: Record<string, string> = {
   "/overview": "Overview", "/dashboard": "Leads", "/lists": "Saved lists",
-  "/insights": "Intelligence", "/partners": "Partner Finder", "/radar": "Radar",
+  "/insights": "Intelligence", "/partners": "Partner Finder", "/brands": "Brands", "/radar": "Copied catalogues",
   "/digests": "Digests", "/connections": "Connections", "/account": "Account & workspace",
 };
 function titleFor(pathname: string): string {
