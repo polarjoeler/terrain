@@ -31,6 +31,15 @@
  * unpublished or carries no country, so a plain delete would quietly shrink the sellable base by
  * that much. The pair is ONE shop: if we were selling the www row, the shop is sellable.
  *
+ * RUN THE SOURCE FIX FIRST — THIS SCRIPT IS WORTHLESS WITHOUT IT. ct_tail re-inserts any domain
+ * it no longer finds in the DB, so deleting the duplicates just makes 1.95M certificates look new
+ * again. Measured on 2026-11-24: 32,073 `www.` rows with a bare twin were BACK within ~4 hours of
+ * the bulk run finishing (~8k/hour), and the www share of ct_tail's inserts jumped from ~25%/hour
+ * to ~70%/hour the moment the delete landed. The fix is shopify-radar PR #9 (`_destub()` collapses
+ * `www.X` to `X`); it must be deployed AND `com.tembo.ct-tail` restarted on Rex before this runs.
+ * Check it is live: ct_tail inserts after the restart should contain no `www.` row whose bare twin
+ * already exists.
+ *
  * Run it in phases, and prove it on the customer-visible slice first:
  *   node --env-file=.env.local scripts/dedupe-www.mjs --dry-run --visible-only
  *   node --env-file=.env.local scripts/dedupe-www.mjs --visible-only
