@@ -43,7 +43,13 @@ export function db() {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL not set");
     assertTransactionPooler(url);
-    _sql = postgres(url, { prepare: false, max: 8, idle_timeout: 20, connect_timeout: 10 });
+    const sql = postgres(url, { prepare: false, max: 8, idle_timeout: 20, connect_timeout: 10 });
+    // A script ends the pool to exit; a stray end() on the request path (listSubscribers did this
+    // until 2026-11-24) used to leave this singleton pointing at a CLOSED pool, so every later query
+    // on that server instance threw CONNECTION_ENDED. Forget it on end() so the next db() reconnects.
+    const end = sql.end.bind(sql);
+    sql.end = ((opts?: { timeout?: number }) => { if (_sql === sql) _sql = null; return end(opts); }) as typeof sql.end;
+    _sql = sql;
   }
   return _sql;
 }
