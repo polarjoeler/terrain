@@ -27,6 +27,23 @@ export type BrandStore = {
 
 export type BrandDetail = { key: string; vendor: string; stores: BrandStore[]; official: BrandStore | null };
 
+/** Vendor values that are not a brand. Placeholders are what a theme or importer writes when nobody
+ *  filled the field in (Shopify's "My Store" becomes "mysite"); suppliers are print-on-demand and
+ *  dropship sources the vendor field names instead of the brand. Placeholders are hidden everywhere;
+ *  suppliers are hidden from the brand list only, since "uses Printify" is still true of a store. */
+export const PLACEHOLDER_VENDORS = ["not specified", "default", "default vendor", "mysite", "my store", "vendor", "unknown",
+  "n a", "na", "none", "no brand", "generic", "other", "brand", "test", "shopify"];
+export const SUPPLIER_VENDORS = ["printify", "printful", "eprolo", "cj dropshipping", "cjdropshipping", "spocket", "zendrop",
+  "aliexpress", "gelato", "teelaunch", "dsers", "gooten", "customcat"];
+
+/** Store names arrive HTML-escaped from WordPress titles ("Shoes &amp; Slides", "&#8211;"). */
+export function cleanName(s: string | null): string | null {
+  if (!s) return s;
+  return s.replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&quot;/g, '"').replace(/&apos;|&#039;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+}
+
 const site = (d: string) => d.replace(/^www\./, "");
 const compact = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 /** "steve madden" is spelled by stevemaddenshoes.co.za and by a store named "Steve Madden SA". */
@@ -40,6 +57,7 @@ export async function getStoreBrands(domain: string, limit = 8): Promise<{ brand
   const rows = await db()<{ vendor_key: string; vendor: string; n_products: number; total: number }[]>`
     SELECT vendor_key, vendor, n_products, count(*) OVER ()::int AS total
     FROM store_vendors WHERE domain = ${domain.trim().toLowerCase()}
+      AND vendor_key <> ALL(${PLACEHOLDER_VENDORS})
     ORDER BY n_products DESC, vendor_key LIMIT ${limit}`;
   return {
     brands: rows.map((r) => ({ key: r.vendor_key, vendor: r.vendor, products: Number(r.n_products) })),
@@ -56,6 +74,7 @@ export async function listBrands(q?: string, limit = 60): Promise<BrandSummary[]
     FROM store_vendors v JOIN imported_stores s ON s.domain = v.domain
     WHERE s.published AND s.country = ANY(${[...VISIBLE_MARKETS]})
       AND (s.live_status IS NULL OR s.live_status NOT IN ('dead','migrated'))
+      AND v.vendor_key <> ALL(${[...PLACEHOLDER_VENDORS, ...SUPPLIER_VENDORS]})
       ${q ? sql`AND v.vendor_key LIKE ${"%" + q.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").trim() + "%"}` : sql``}
     GROUP BY v.vendor_key
     ORDER BY stores DESC, products DESC, v.vendor_key
@@ -85,7 +104,7 @@ export async function getBrand(key: string): Promise<BrandDetail | null> {
     const catalogue = r.product_count == null ? null : Number(r.product_count);
     const products = Number(r.n_products);
     stores.push({
-      domain: r.domain, name: r.name, country: r.country, platform: r.platform, products, catalogue,
+      domain: r.domain, name: cleanName(r.name), country: r.country, platform: r.platform, products, catalogue,
       share: catalogue && catalogue > 0 ? Math.min(1, products / catalogue) : 1,
       namesBrand: spells(key, r.domain, r.name), role: "stockist", groupId: r.group_id,
     });
@@ -119,4 +138,15 @@ export async function getCatalogueCopies(domain: string, limit = 20): Promise<Ca
     suspect: r.suspect, score: Number(r.score), verdict: r.verdict, kind: r.kind,
     copiedShare: Number(r.copied_share), reasons: r.reasons ?? [], firstSeenAt: new Date(r.first_seen_at).toISOString().slice(0, 10),
   }));
+}
+
+/** How much of the visible base the index covers: stores with at least one brand row, and brands.
+ *  Shown on the customer page so a missing brand reads as "not read yet", never "nobody sells it". */
+export async function brandCoverage(): Promise<{ stores: number; brands: number }> {
+  const [r] = await db()<{ stores: number; brands: number }[]>`
+    SELECT count(DISTINCT regexp_replace(v.domain, '^www\\.', ''))::int AS stores, count(DISTINCT v.vendor_key)::int AS brands
+    FROM store_vendors v JOIN imported_stores s ON s.domain = v.domain
+    WHERE s.published AND s.country = ANY(${[...VISIBLE_MARKETS]})
+      AND (s.live_status IS NULL OR s.live_status NOT IN ('dead','migrated'))`;
+  return { stores: Number(r?.stores ?? 0), brands: Number(r?.brands ?? 0) };
 }

@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { currentUser, isAdmin } from "@/lib/auth";
-import { getSubscriber, hasAccess } from "@/lib/subscriptions";
 import { db } from "@/lib/db";
 import { loadClusters, railsInPlay } from "@/lib/radar/clusters";
 import { VISIBLE_MARKETS } from "@/lib/markets";
@@ -27,10 +26,10 @@ export default async function RadarPage({
 }) {
   const email = await currentUser();
   if (!email) redirect("/login");
-  if (!isAdmin(email)) {
-    const sub = await getSubscriber(email).catch(() => null);
-    if (!hasAccess(sub)) redirect("/billing");
-  }
+  // Retired for customers 2026-11-24: shared catalogues were mostly brand groups and dropship
+  // networks, not fraud, and customers found the clusters hard to act on. Brands (/brands) replaced
+  // it in the nav; this view stays as an admin research tool beside the fakes feed.
+  if (!isAdmin(email)) redirect("/brands");
 
   const sp = await searchParams;
   const lens: Lens = (["rail", "brand", "platform", "market"] as const).includes(sp.lens as Lens)

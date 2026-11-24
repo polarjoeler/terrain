@@ -29,15 +29,17 @@ export default async function DossierPage({
   const email = await currentUser();
   if (!email) redirect("/login");
   const owns = isAdmin(email) || (await brandsForEmail(email)).some((b) => b.brandDomain === brand);
-  if (!owns) redirect("/radar/dashboard");
+  if (!owns) redirect("/brands");
+  // /radar/dashboard never existed in this app; send people back to where they came from.
+  const back = isAdmin(email) ? "/admin/radar/watch" : "/brands";
 
   const d = await buildDossier(brand, suspect);
   if (!d) {
     return (
       <main className="mx-auto max-w-lg px-6 py-24 text-center">
         <h1 className="font-display text-3xl text-cream">Detection not found</h1>
-        <Link href="/radar/dashboard" className="mt-6 inline-block text-cyan underline">
-          ← Back to dashboard
+        <Link href={back} className="mt-6 inline-block text-cyan underline">
+          ← Back
         </Link>
       </main>
     );
@@ -48,8 +50,8 @@ export default async function DossierPage({
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-14">
-      <Link href="/radar/dashboard" className="text-sm text-cream/50 hover:text-cream print:hidden">
-        ← Dashboard
+      <Link href={back} className="text-sm text-cream/50 hover:text-cream print:hidden">
+        ← Back
       </Link>
 
       <header className="mt-6">

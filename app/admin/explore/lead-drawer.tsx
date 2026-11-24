@@ -582,9 +582,10 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
                 <Card title="Brands stocked">
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {data.brands.brands.map((b) => (
-                      <span key={b.key} className="inline-flex items-baseline gap-1 rounded-full border border-orange/20 bg-orange/[0.06] px-2 py-0.5 text-xs text-cream/80">
+                      <a key={b.key} href={`/brands/${encodeURIComponent(b.key)}`} title={`Every store selling ${b.vendor}`}
+                        className="inline-flex items-baseline gap-1 rounded-full border border-orange/20 bg-orange/[0.06] px-2 py-0.5 text-xs text-cream/80 transition hover:border-orange/50 hover:text-cream">
                         {b.vendor}<span className="font-mono text-[10px] text-cream/40">{b.products}</span>
-                      </span>
+                      </a>
                     ))}
                     {data.brands.total > data.brands.brands.length && (
                       <span className="px-1 py-0.5 font-mono text-[11px] text-cream/35">+{data.brands.total - data.brands.brands.length} more</span>
