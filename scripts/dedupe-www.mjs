@@ -29,7 +29,9 @@
  *
  * published IS OR'd, NOT taken from the bare row. 1,074 visible pairs have a bare twin that is
  * unpublished or carries no country, so a plain delete would quietly shrink the sellable base by
- * that much. The pair is ONE shop: if we were selling the www row, the shop is sellable.
+ * that much. The pair is ONE shop: if we were selling the www row, the shop is sellable — UNLESS a
+ * person unpublished the bare row (latest store_edits 'published' edit is false). Then the human
+ * decision wins and the www row's flag is ignored.
  *
  * RUN THE SOURCE FIX FIRST — THIS SCRIPT IS WORTHLESS WITHOUT IT. ct_tail re-inserts any domain
  * it no longer finds in the DB, so deleting the duplicates just makes 1.95M certificates look new
@@ -209,7 +211,14 @@ async function phaseMerge() {
   const sets = cols
     .map((c) => `"${c}" = CASE WHEN b."${c}" IS NULL OR b."${c}"::text = '' THEN w."${c}" ELSE b."${c}" END`)
     .concat([
-      `published = b.published OR w.published`,
+      // OR'd — except when a PERSON unpublished the bare row (its latest store_edits 'published'
+      // row says false). That is a decision, not a gap: on 2026-11-24 the OR put 12 Springbok
+      // clones taken down on 11-20 straight back into the lead list, because their www twin was
+      // still published. store_edits is tiny (hundreds of rows), so the subquery costs nothing.
+      `published = b.published OR (w.published AND b.domain NOT IN (
+         SELECT h.domain FROM (SELECT DISTINCT ON (domain) domain, new_value FROM store_edits
+                                WHERE field = 'published' ORDER BY domain, edited_at DESC, id DESC) h
+          WHERE h.new_value LIKE 'false%'))`,
       `discovered_at = LEAST(b.discovered_at, w.discovered_at)`,
     ])
     .join(", ");
