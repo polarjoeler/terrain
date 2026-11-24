@@ -253,6 +253,18 @@ async function phaseMerge() {
 }
 
 async function phaseSide() {
+  // Back the side rows up BEFORE deleting them. The first run of this script only backed up
+  // imported_stores, so 58,002 churn_log rows (and ~4.2M other side rows) were deleted with no
+  // copy on disk — they cannot be recovered. Nothing here has a foreign key, so this file is the
+  // only undo. One stream for every table, each line tagged with `_table`.
+  let sideGz = null, sideDone = null;
+  if (!DRY) {
+    mkdirSync(BACKUP_DIR, { recursive: true });
+    const sidePath = `${BACKUP_DIR}/side-rows-${VISIBLE_ONLY ? "visible" : "all"}-${new Date().toISOString().slice(0, 10)}.jsonl.gz`;
+    sideGz = createGzip();
+    sideDone = pipeline(sideGz, createWriteStream(sidePath));
+    console.log(`SIDE     backing every deleted side row up to ${sidePath}`);
+  }
   for (const t of SIDE_TABLES) {
     let moved = 0, dropped = 0;
     for await (const batch of pairs()) {
@@ -277,6 +289,13 @@ async function phaseSide() {
         );
         moved += up.count ?? 0;
       }
+      // Snapshot what is about to go, then delete it.
+      const doomed = await sql.unsafe(`SELECT * FROM ${t.table} WHERE ${t.col} = ANY($1)`, [doms]);
+      for (const row of doomed) {
+        if (!sideGz.write(JSON.stringify({ _table: t.table, ...row }) + "\n")) {
+          await new Promise((r) => sideGz.once("drain", r));
+        }
+      }
       const del = await sql.unsafe(`DELETE FROM ${t.table} WHERE ${t.col} = ANY($1)`, [doms]);
       dropped += del.count ?? 0;
     }
@@ -284,6 +303,7 @@ async function phaseSide() {
     totals.sideDeleted += dropped;
     console.log(`SIDE     ${t.table.padEnd(22)} moved=${fmt(moved).padStart(9)}  removed=${fmt(dropped).padStart(10)}  (${t.action})`);
   }
+  if (sideGz) { sideGz.end(); await sideDone; }
 }
 
 async function phaseDelete() {
