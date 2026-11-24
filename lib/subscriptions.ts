@@ -19,7 +19,7 @@ export async function listSubscribers(): Promise<Subscriber[]> {
   const url = process.env.DATABASE_URL;
   if (!url) return [];
   const sql = db();
-  try {
+  {
     const rows = await sql`SELECT * FROM subscribers ORDER BY updated_at DESC`;
     return rows.map((r: any) => ({
       email: r.email,
@@ -35,9 +35,10 @@ export async function listSubscribers(): Promise<Subscriber[]> {
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
       updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
     }));
-  } finally {
-    await sql.end();
   }
+  // No sql.end() here: db() is the ONE shared pool for the whole server instance. Ending it closed
+  // every connection for every later request on that instance (CONNECTION_ENDED on /dashboard and
+  // on admin lead edits, 2026-11-24 23:24) until Vercel recycled it.
 }
 
 /** Admin actions on a subscriber's access (used by /api/admin/subscriber). */
