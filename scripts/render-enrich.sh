@@ -4,7 +4,7 @@
 # the page AND records every network-request host (the most reliable gateway signal there is).
 # SECOND pass — deep-enrich runs first (cheap); this mops up what it couldn't reach. Own-domain
 # render, so NO shared Shopify-edge rate budget; heavy per page, so low concurrency.
-#   Driven by ~/Library/LaunchAgents/com.tembo.render-enrich.plist (every 12h).
+#   Driven by ~/Library/LaunchAgents/com.tembo.render-enrich.plist (every 12h; template in scripts/launchd/).
 #   Target (2026-11-12 sprint): first the non-Shopify stores of the ZA/KE/NG top-1,000 accounts
 #   (store_priority) still missing tech or payments; the rest of the run goes to the old tail —
 #   published, technologies IS NULL, deep_enriched_at set (deep-enrich tried + failed),
@@ -17,6 +17,12 @@ node --env-file=.env.local scripts/heartbeat.mjs render-enrich "ZA bot-blocked t
 echo "===== render-enrich $(date '+%F %T') ====="
 
 node --env-file=.env.local scripts/render-enrich.mjs --country ZA,KE,NG --top 1000 --limit 250 --concurrency 3 || echo "!! render-enrich failed"
+
+# Payments for the platforms no probe covers (not Shopify/Woo/Magento/Wix) across all 27 visible
+# markets, payments never checked, biggest first. A reachable render stamps payments_checked_at;
+# found gateways are tagged payments_source='render'. ~2s/store at concurrency 3, so 400 adds ~15 min
+# per run (800/day on the 12h interval; the ~11k backlog clears in ~2 weeks, then it only tops up).
+node --env-file=.env.local scripts/render-enrich.mjs --payments-gap --limit 400 --concurrency 3 || echo "!! render-enrich payments-gap failed"
 
 node --env-file=.env.local scripts/heartbeat.mjs render-enrich "idle — done" >/dev/null 2>&1 || true
 echo "===== render-enrich done $(date '+%T') ====="

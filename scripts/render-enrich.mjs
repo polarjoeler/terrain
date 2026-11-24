@@ -20,9 +20,18 @@
  *    node --env-file=.env.local scripts/render-enrich.mjs --country ZA --limit 100 --concurrency 2
  *    node --env-file=.env.local scripts/render-enrich.mjs --country ZA,KE,NG --top 1000 --limit 100   # sprint
  *    node --env-file=.env.local scripts/render-enrich.mjs                 # default: ZA bot-blocked tail
+ *    node --env-file=.env.local scripts/render-enrich.mjs --payments-gap --limit 400            # other-CMS payments
+ *
+ *  --payments-gap: the visible stores NO payment probe covers — not Shopify (checkout probe), not Woo
+ *  (Store API / checkout probe), not Magento or Wix (their own probes), in all 27 VISIBLE_MARKETS,
+ *  payments never checked. A storefront render is the only check these get, so a reachable render
+ *  stamps payments_checked_at (found or not) and any gateway it finds is marked payments_source='render'
+ *  (a network host or a named "we accept" badge, weaker than a checkout read). Biggest stores first.
  */
 import postgres from "postgres";
 import { chromium } from "playwright";
+import { cleanPayments } from "../lib/payments-taxonomy.ts";
+import { VISIBLE_MARKETS } from "../lib/markets.ts";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const DRY = process.argv.includes("--dry");
@@ -37,7 +46,9 @@ const cArg = arg("--country", null);
 // left of --limit then goes to the usual bot-blocked tail. Payment widgets (BNPL, PSP scripts) load
 // on the storefront, so a render often finds the gateway a plain fetch missed.
 const TOP = Number(arg("--top", 0));
-const MARKETS = "AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP".split(",");
+const GAP = process.argv.includes("--payments-gap");
+// Platforms another lane already probes for payments. NULL is queued as presumed-Shopify by payment-queue.
+const PROBED_PLATFORMS = ["shopify", "woocommerce", "magento", "wix"];
 const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : ["ZA"];
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
@@ -79,6 +90,19 @@ const PAY_FP = [
   { name: "Happy Pay",      host: /happypay/i,                   body: /happy\s*pay/i },
   { name: "RCS",            host: /rcsgroup|rcs\.co\.za/i,       body: null },
   { name: "Shopify Payments", host: /deposit\.shopifycs|shopifycloud\/checkout/i, body: /shopify\s*payments/i },
+  // Rest of Africa. Host-only where the brand name is a common word or shows up in blog copy.
+  { name: "Paystack",       host: /paystack\.(co|com)$/i,       body: /js\.paystack\.co|paystackpop/i },
+  { name: "Flutterwave",    host: /flutterwave\.com$|ravepay\.co$/i, body: /checkout\.flutterwave\.com/i },
+  { name: "Pesapal",        host: /pesapal\.com$/i,             body: /\bpesapal\b/i },
+  { name: "DPO",            host: /3gdirectpay\.com$|dpogroup\.com$/i, body: /3gdirectpay|\bdpo\s*pay\b/i },
+  { name: "Paymob",         host: /paymob\.com$/i,              body: /accept\.paymob\.com/i },
+  { name: "Interswitch",    host: /interswitchng\.com$|interswitchgroup\.com$/i, body: null },
+  { name: "Fawry",          host: /fawry(pay)?\.com$|atfawry\.com$/i, body: null },
+  { name: "CMI",            host: /\.cmi\.co\.ma$/i,           body: null },
+  { name: "Payzone",        host: /payzone\.ma$/i,              body: null },
+  { name: "iKhokha",        host: /ikhokha\.com$/i,             body: /\bikhokha\b/i },
+  { name: "PayPal",         host: /paypal\.com$|paypalobjects\.com$/i, body: null },
+  { name: "M-Pesa",         host: /safaricom\.co\.ke$/i,         body: /lipa\s*na\s*m-?pesa/i },
 ];
 
 const union = (cur, add, delim) => {
@@ -121,7 +145,9 @@ async function renderOne(browser, domain) {
     const status = resp ? resp.status() : 0;
     const hostStr = [...hosts].join(" ");
     const tech = TECH_FP.filter(([re]) => re.test(html) || re.test(hostStr)).map(([, n]) => n);
-    const pay = PAY_FP.filter((p) => (p.host && p.host.test(hostStr)) || (p.body && p.body.test(html))).map((p) => p.name);
+    // Per host, so a `$`-anchored pattern means "this host", not "the last host in the list".
+    const hostList = [...hosts];
+    const pay = PAY_FP.filter((p) => (p.host && hostList.some((h) => p.host.test(h))) || (p.body && p.body.test(html))).map((p) => p.name);
     // own-domain email first (skip free inboxes), else any
     const d2 = clean(domain).replace(/^www\./, "");
     const email = mails.find((m) => m.toLowerCase().endsWith(d2)) || mails.find((m) => !/gmail|yahoo|hotmail|outlook/.test(m)) || mails[0] || null;
@@ -144,7 +170,19 @@ async function main() {
     // Target: explicit --domains, else the bot-blocked high-value tail — published rows in the focus
     // market(s) that deep-enrich already TRIED (deep_enriched_at set) yet still have no technologies.
     const hasPriority = !!(await sql`SELECT to_regclass('public.store_priority') t`)[0].t;
-    const top = !DOMAINS.length && TOP > 0 && hasPriority
+    const gap = !DOMAINS.length && GAP
+      ? await sql`SELECT domain, platform, payments, payments_source, technologies, email, country FROM imported_stores
+          WHERE published AND UPPER(country) = ANY(${[...VISIBLE_MARKETS]})
+            AND platform IS NOT NULL AND lower(platform) <> ALL(${PROBED_PLATFORMS})
+            AND activity_tier IS DISTINCT FROM 'not_a_store'
+            AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
+            AND payments_checked_at IS NULL AND position('/' in domain) = 0
+            AND (render_enriched_at IS NULL OR render_enriched_at < now() - interval '30 days')
+          ORDER BY revenue_ballpark_usd DESC NULLS LAST, crux_rank ASC NULLS LAST
+          LIMIT ${LIMIT}`
+      : [];
+    if (GAP) console.log(`payments-gap: ${gap.length} visible other-CMS store(s) with payments never checked`);
+    const top = !DOMAINS.length && !GAP && TOP > 0 && hasPriority
       ? await sql`SELECT s.domain, s.platform, s.payments, s.technologies, s.email, p.country, p.market_rank
           FROM store_priority p JOIN imported_stores s ON s.domain = p.domain
           WHERE p.country = ANY(${countries}) AND p.market_rank <= ${TOP}
@@ -159,7 +197,7 @@ async function main() {
       : [];
     if (TOP > 0 && !hasPriority) console.log("--top: store_priority not built yet — tail only.");
     if (top.length) console.log(`top-${TOP} sprint: ${top.length} store(s) missing tech or payments (down to rank ${top[top.length - 1].market_rank})`);
-    const tail = DOMAINS.length || top.length >= LIMIT ? [] : await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores
+    const tail = DOMAINS.length || GAP || top.length >= LIMIT ? [] : await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores
           WHERE published AND UPPER(country) = ANY(${countries}) AND activity_tier IS DISTINCT FROM 'not_a_store'
             AND (technologies IS NULL OR technologies = '') AND deep_enriched_at IS NOT NULL
             AND (render_enriched_at IS NULL OR render_enriched_at < now() - interval '60 days')
@@ -167,29 +205,42 @@ async function main() {
           ORDER BY revenue_ballpark_usd DESC NULLS LAST, crux_rank ASC NULLS LAST
           LIMIT ${LIMIT - top.length}`;
     const rows = DOMAINS.length
-      ? await sql`SELECT domain, platform, payments, technologies, email FROM imported_stores WHERE domain = ANY(${DOMAINS})`
-      : [...top, ...tail];
+      ? await sql`SELECT domain, platform, payments, payments_source, technologies, email FROM imported_stores WHERE domain = ANY(${DOMAINS})`
+      : GAP ? gap : [...top, ...tail];
     if (!rows.length) { console.log("Nothing to render-enrich."); return; }
     console.log(`render-enrich: ${rows.length} store(s) at concurrency ${CONC}${DRY ? " [DRY]" : ""}…\n`);
 
     const browser = await chromium.launch({ headless: true });
     let idx = 0, ok = 0, blocked = 0, foundTech = 0, foundPay = 0, foundEmail = 0;
+    const provCount = new Map();
     async function worker() {
       while (idx < rows.length) {
         const r = rows[idx++];
         const res = await renderOne(browser, r.domain);
         if (res.ok) ok++; if (res.challenge || res.status === 403) blocked++;
         const newTech = res.tech.length ? union(r.technologies, res.tech, ";") : r.technologies;
-        const newPay = res.pay.length ? union(r.payments, res.pay, "; ") : r.payments;
+        // Canonical names only (lib/payments-taxonomy) — drops wallet buttons and card badges.
+        const pay = cleanPayments(res.pay);
+        pay.forEach((p) => provCount.set(p, (provCount.get(p) || 0) + 1));
+        const newPay = pay.length ? union(r.payments, pay, "; ") : r.payments;
         if (res.tech.length && newTech !== r.technologies) foundTech++;
-        if (res.pay.length && newPay !== r.payments) foundPay++;
+        const payAdded = pay.length > 0 && newPay !== r.payments;
+        if (payAdded) foundPay++;
+        // Render-found gateways on a row that had none are tagged 'render'. Existing data keeps its
+        // source (NULL there means the Shopify checkout probe, which provider-insights treats as verified).
+        const markSource = payAdded && !(r.payments || "").trim();
+        // A reachable render is the payment check for platforms nothing else probes. Never stamp a
+        // probed platform: magento-probe / wix-probe queue on payments_checked_at and would skip it.
+        const stampChecked = res.ok && !!r.platform && !PROBED_PLATFORMS.includes(String(r.platform).toLowerCase());
         const setEmail = !r.email && res.email ? res.email : null;
         if (setEmail) foundEmail++;
         const tag = res.ok ? "✓" : (res.challenge ? "⛔challenge" : res.status === 403 ? "⛔403" : `✗${res.status || res.err || ""}`);
-        console.log(`${tag.padEnd(12)} ${r.domain.padEnd(28)} tech[${res.tech.join(",")}] pay[${res.pay.join(",")}]${setEmail ? " ✉" + setEmail : ""}`);
+        console.log(`${tag.padEnd(12)} ${r.domain.padEnd(28)} tech[${res.tech.join(",")}] pay[${pay.join(",")}]${setEmail ? " ✉" + setEmail : ""}`);
         if (!DRY) {
           await sql`UPDATE imported_stores SET
               technologies = ${newTech || null}, payments = ${newPay || null},
+              ${markSource ? sql`payments_source = 'render',` : sql``}
+              ${stampChecked ? sql`payments_checked_at = now(),` : sql``}
               ${setEmail ? sql`email = ${setEmail}, contact_type = COALESCE(contact_type, ${roleOf(setEmail)}), contact_checked_at = now(),` : sql``}
               render_enriched_at = now(), deep_enriched_at = now()
             WHERE domain = ${r.domain}`.catch((e) => console.log(`  write failed ${r.domain}: ${e.message}`));
@@ -199,6 +250,7 @@ async function main() {
     await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, worker));
     await browser.close();
     console.log(`\nDone. ${rows.length} rendered · ${ok} reachable · ${blocked} still blocked · tech+${foundTech} · pay+${foundPay} · email+${foundEmail}`);
+    if (provCount.size) console.log("providers: " + [...provCount].sort((a, b) => b[1] - a[1]).map(([p, n]) => `${p} ${n}`).join(" · "));
   } finally { await sql.end(); }
 }
 main().catch((e) => { console.error(e); process.exit(1); });
