@@ -43,15 +43,16 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 echo "===== payments probe $(date '+%F %T') ====="
 
-# Target markets ONLY (Africa + JP) — the markets we sell into. Without this scope the queue
+# Target markets ONLY (the 27 visible African markets; JP dropped 2026-11-23 — it took ~35% of the
+# probe budget for a market the dashboard doesn't show; it still gets global-fill like any market). Without this scope the queue
 # is newest-discovered-first GLOBALLY, so the huge global CT-tail flow (UK/DE/AU/…) hijacks the
 # probe budget away from ZA/KE/NG. Matches radar-pipeline.sh's MARKETS.
-MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP"
+MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW"
 
 # Refresh the value-ranked queue (skips already-verified; re-surfaces >60d-stale so
 # provider switches get caught), then HTTP-probe the top batch and sync results.
-# --global-fill: after Africa+JP, up to GLOBAL_FILL never-probed Shopify stores from other markets' top-1,000
-# (store_priority), rank by rank. The Africa+JP pool is ~90% tried, so this is what keeps the probe busy.
+# --global-fill: after Africa, up to GLOBAL_FILL never-probed Shopify stores from other markets' top-1,000
+# (store_priority), rank by rank. The Africa pool is ~90% tried, so this is what keeps the probe busy.
 # 75 a run is ~1,200 stores a day; it shares the 250GB/month Webshare plan, so raise it only after
 # checking usage on the Webshare dashboard.
 node --env-file=.env.local scripts/payment-queue.mjs --limit 15000 --country "$MARKETS" --global-fill "${GLOBAL_FILL:-75}" >/dev/null 2>&1 \

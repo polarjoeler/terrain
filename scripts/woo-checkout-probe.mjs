@@ -13,15 +13,41 @@
  * Shopify-edge rate budget and no single-host throttle — safe to run from any machine.
  *
  *   node --env-file=.env.local scripts/woo-checkout-probe.mjs [--limit 300] [--concurrency 6] [--dry-run]
+ *     [--recheck 1800] [--recheck-days 14] [--recheck-now]
+ *
+ * RE-CHECK + LIVENESS (2026-11-23). The first pass probes each store ONCE (woo_at IS NULL), so a
+ * visible African Woo store was never looked at again: no liveness, no payment-provider change.
+ * Now each run also
+ *   · records liveness on every probe that gets an answer. A Woo answer (Store API or checkout ids)
+ *     → live_status 'active'; any HTTP answer → live_miss reset to 0; live_checked_at stamped.
+ *     It NEVER writes last_alive_at or verified_checked_at (verify-liveness owns both — see
+ *     memory liveness-column-ownership), so churn_log.died_at stays honest.
+ *   · re-probes visible-market (lib/markets.ts) Woo stores whose last probe (woo_checkout_at, this
+ *     lane's OWN clock) is older than --recheck-days. A silent re-check is a MISS on the shared
+ *     live_miss counter (DEAD_AFTER = 2, the same rule as verify-liveness, focus-liveness and
+ *     meta-identify, so the lanes confirm each other); the second miss writes 'dead' and logs churn
+ *     through scripts/lib/churn.mjs. A first miss comes back for its second look a day later.
+ *     Gateways read on a re-check refresh `payments` only where this lane (or plugin derivation)
+ *     owns the value — a provider from another source is never overwritten.
+ *   The re-check pick is a seq scan of store_work (~6s, ~1GB read, measured 2026-11-23), so it runs
+ *   in ONE fire per 6-hour UTC window (the job fires every 2h), or every run with --recheck-now.
  */
 import postgres from "postgres";
 import { workReady } from "./lib/work-ready.mjs";
+import { logChurn } from "./lib/churn.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const LIMIT = parseInt(arg("--limit", "300"), 10);
 const CONC = parseInt(arg("--concurrency", "6"), 10);
 const DRY = process.argv.includes("--dry-run");
-const UA = "terrain-radar/1.0 (woo payment probe; joelbronkowski@gmail.com)";
+const RECHECK = parseInt(arg("--recheck", "1800"), 10);          // re-probes per re-check window
+const RECHECK_DAYS = parseInt(arg("--recheck-days", "14"), 10);
+const RECHECK_NOW = process.argv.includes("--recheck-now");
+const RECHECK_WINDOW = RECHECK_NOW || new Date().getUTCHours() % 6 < 2;
+const DEAD_AFTER = 2;                                              // = verify-liveness.mjs DEAD_AFTER
+// Customer-visible markets — mirror of lib/markets.ts VISIBLE_MARKETS (as reconcile-probed.mjs does).
+const VISIBLE = ["ZA","KE","NG","EG","MA","GH","TZ","UG","DZ","TN","CI","SN","MU","MZ","CM","BW","AO","NA","RW","ZM","ET","ZW","LY","MW","SO","LS","SZ"];
+const UA = "terrain-radar/1.0 (woo payment probe; hello@heyterrain.com)";
 
 // WooCommerce gateway ID / plugin token -> canonical gateway (taxonomy casing). First match wins.
 const GATEWAY = [
@@ -185,13 +211,22 @@ async function main() {
         ORDER BY discovered_at DESC NULLS LAST
         LIMIT ${LIMIT}`;
       if (first.length >= LIMIT) return first;
-      const rest = await sql`
+      // Then the visible-market re-checks (stalest probe first), before any global first pass.
+      const re = RECHECK_WINDOW && RECHECK > 0 ? await sql`
+        SELECT domain, discovered_at, true AS recheck FROM store_work
+        WHERE platform = 'woocommerce' AND published AND live AND NOT not_store
+          AND country = ANY(${VISIBLE})
+          AND woo_at < now() - (${RECHECK_DAYS} || ' days')::interval
+        ORDER BY woo_at ASC
+        LIMIT ${Math.min(RECHECK, LIMIT - first.length)}` : [];
+      const room = LIMIT - first.length - re.length;
+      const rest = room > 0 ? await sql`
         SELECT domain, discovered_at FROM store_work
         WHERE platform = 'woocommerce' AND live AND woo_at IS NULL AND (NOT has_pay OR pay_woo_plugin)
           AND (country IS NULL OR country <> ALL(${AFRICA}))
         ORDER BY discovered_at DESC NULLS LAST
-        LIMIT ${LIMIT - first.length}`;
-      return [...first, ...rest];
+        LIMIT ${room}` : [];
+      return [...first, ...re, ...rest];
     };
     const rows = (await workReady(sql)) ? await pickWork() : await sql`
       SELECT domain, discovered_at FROM imported_stores
@@ -200,16 +235,51 @@ async function main() {
         AND (payments IS NULL OR payments = '' OR payments_source = 'woo_plugin')
       ORDER BY discovered_at DESC NULLS LAST
       LIMIT ${LIMIT}`;
-    console.log(`woo-checkout-probe: ${rows.length} stores (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
+    const nRe = rows.filter((r) => r.recheck).length;
+    console.log(`woo-checkout-probe: ${rows.length} stores (${rows.length - nRe} first probes, ${nRe} visible-market re-checks${RECHECK_WINDOW ? "" : " — not this fire's window"}) (concurrency ${CONC})${DRY ? " [DRY RUN]" : ""}`);
 
-    let i = 0, dated = 0, none = 0, net = 0, gaveup = 0, done = 0;
+    // Liveness written alongside every answered probe. Any HTTP answer resets the shared miss counter
+    // (the store is answering — same rule as a DNS answer in focus-liveness); only a Woo answer marks
+    // it 'active'. last_alive_at / verified_checked_at are deliberately absent (verify-liveness owns them).
+    const liveSet = (wooAnswer) => wooAnswer
+      ? sql`, live_checked_at = now(), live_miss = 0,
+             live_status = CASE WHEN live_status IN ('dead','migrated') THEN live_status ELSE 'active' END`
+      : sql`, live_checked_at = now(), live_miss = 0`;
+    // payments is this lane's to refresh only when it (or plugin derivation) wrote it, or it is empty.
+    const ownPay = () => sql`(COALESCE(payments,'') = '' OR payments_source IS NULL OR payments_source IN ('woo_checkout','woo_plugin'))`;
+
+    let i = 0, dated = 0, none = 0, net = 0, gaveup = 0, done = 0, alive = 0, missed = 0, churned = 0, reAnswered = 0;
     const tally = new Map();
     async function worker() {
       while (i < rows.length) {
-        const { domain, discovered_at } = rows[i++];
+        const { domain, discovered_at, recheck } = rows[i++];
         const res = await probe(domain);
         done++;
-        if (res.net) {
+        if (res.net && recheck && !(res.code === 0 || (res.code >= 520 && res.code <= 530))) {
+          // Any other 5xx on a re-check is the host ANSWERING (a WAF challenge is often a 503, a
+          // broken plugin a 500), so it is not a miss: reset the counter, try again next cycle.
+          net++; reAnswered++;
+          if (!DRY) await sql`UPDATE imported_stores SET woo_checkout_at = now() ${liveSet(false)}
+                  WHERE domain = ${domain}`.catch(() => {});
+        }
+        else if (res.net && recheck) {
+          // No response at all, or Cloudflare's origin-unreachable 52x: a store this lane reached
+          // before has gone silent — a liveness MISS on the shared counter. Below DEAD_AFTER it keeps
+          // its status and comes back a day later (woo_checkout_at is set just inside the re-check
+          // gate) for the confirming look; at DEAD_AFTER it is dead + logged.
+          net++;
+          if (!DRY) {
+            const [u] = await sql`UPDATE imported_stores SET live_miss = COALESCE(live_miss, 0) + 1,
+                live_checked_at = now(),
+                live_status = CASE WHEN COALESCE(live_miss, 0) + 1 >= ${DEAD_AFTER} THEN 'dead' ELSE live_status END,
+                woo_checkout_at = now() - (${RECHECK_DAYS - 1} || ' days')::interval
+              WHERE domain = ${domain} AND live_status IS DISTINCT FROM 'dead' AND live_status IS DISTINCT FROM 'migrated'
+              RETURNING live_status`.catch(() => []);
+            if (u?.live_status === "dead") { churned++; await logChurn(sql, domain, "dead").catch(() => {}); }
+            else missed++;
+          }
+        }
+        else if (res.net) {
           net++;
           // Zombie-queue guard ([[probe-queue-zombies]]): a net-fail normally leaves
           // woo_checkout_at null so it retries. But a store whose origin is permanently
@@ -230,19 +300,27 @@ async function main() {
           }
         }
         else if (res.gateways.length) {
-          dated++;
+          dated++; alive++;
           for (const g of res.gateways) tally.set(g, (tally.get(g) ?? 0) + 1);
-          if (!DRY) await sql`UPDATE imported_stores SET payments = ${res.gateways.join(";")},
-                    payments_source = 'woo_checkout', woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
+          if (!DRY) await sql`UPDATE imported_stores SET
+                    payments = CASE WHEN ${ownPay()} THEN ${res.gateways.join(";")} ELSE payments END,
+                    payments_source = CASE WHEN ${ownPay()} THEN 'woo_checkout' ELSE payments_source END,
+                    woo_checkout_at = now(), payments_checked_at = now() ${liveSet(true)}
+                  WHERE domain = ${domain}`.catch(() => {});
         } else {
-          none++;
-          if (!DRY) await sql`UPDATE imported_stores SET woo_checkout_at = now(), payments_checked_at = now() WHERE domain = ${domain}`.catch(() => {});
+          // Reachable, no gateway read. A Woo answer (Store API / checkout ids) still proves a live Woo
+          // store; a page with no Woo signal only proves something answered. Existing payments are
+          // never wiped here — a re-check that reads nothing is not evidence the provider left.
+          none++; if (res.via) alive++;
+          if (!DRY) await sql`UPDATE imported_stores SET woo_checkout_at = now(), payments_checked_at = now() ${liveSet(!!res.via)}
+                  WHERE domain = ${domain}`.catch(() => {});
         }
         if (done % 25 === 0) process.stdout.write(`\r  ${done}/${rows.length}  dated ${dated}, none ${none}, net-fail ${net}`);
       }
     }
     await Promise.all(Array.from({ length: CONC }, worker));
-    console.log(`\ndone. ${dated} stores got gateways, ${none} reachable-but-none, ${net} network-failed (${gaveup} exhausted→stamped, ${net - gaveup} retry).`);
+    console.log(`\ndone. ${dated} stores got gateways, ${none} reachable-but-none, ${net} network-failed (${gaveup} exhausted→stamped, ${net - gaveup - missed - churned - reAnswered} retry).`);
+    console.log(`liveness: ${alive} confirmed live Woo · ${reAnswered} re-checks answered with a 5xx (host up, not a miss) · re-check misses ${missed} (awaiting a 2nd look) · ${churned} confirmed dead + logged`);
     console.log("by gateway:");
     for (const [g, n] of [...tally.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${g}`);
   } finally { await sql.end(); }

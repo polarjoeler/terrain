@@ -40,7 +40,7 @@ export LOCAL_LLM_MODEL=qwen2.5:3b
 
 AFRICA="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW"
 MIDEAST="AE,SA,IL,TR,QA,KW,BH,OM,JO,LB,IQ,YE,PS,SY"
-FOCUS="$AFRICA,$MIDEAST,JP"
+FOCUS="$AFRICA,$MIDEAST"                 # JP dropped 2026-11-23 — it now waits for the global phase
 
 BATCH=6000                                   # rows per ai-enrich invocation
 DEADLINE=$(( $(date +%s) + 13800 ))          # ~3h50m — finish before the next 4h fire
@@ -70,7 +70,7 @@ node --env-file=.env.local scripts/heartbeat.mjs ai-enrich "starting (3b continu
 node --env-file=.env.local -e "import('postgres').then(({default:p})=>{const s=p(process.env.DATABASE_URL,{prepare:false,max:1});s\`ALTER TABLE imported_stores ADD COLUMN IF NOT EXISTS ai_enriched_at TIMESTAMPTZ\`.then(()=>s.end()).catch(e=>{console.error(e.message);s.end()})})" 2>&1 | head -2
 export SKIP_SCHEMA_ENSURE=1
 
-# ---- Phase 1: drain FOCUS (Africa + Middle East + JP) ----
+# ---- Phase 1: drain FOCUS (Africa + Middle East) ----
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   REMAIN=$(remaining focus)
   echo "focus backlog (probe capped at $(( FLOOR + 1 ))): ${REMAIN:-?}"

@@ -22,7 +22,7 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 PROVIDERS="paystack,stitch,peach"
-MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW,JP"
+MARKETS="AO,BW,CI,CM,DZ,EG,ET,GH,KE,LS,LY,MA,MU,MW,MZ,NA,NG,RW,SN,SO,SZ,TN,TZ,UG,ZA,ZM,ZW"   # JP dropped 2026-11-23
 OUT="feed/payment-watch.txt"
 LOCK="$HOME/shopify-radar/.probe.lock"
 MIN_AGE_DAYS="${WATCH_MIN_AGE_DAYS:-5}"
