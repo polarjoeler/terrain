@@ -36,6 +36,15 @@ const DOMAINS = arg("--domains", "") ? arg("--domains", "").split(",").map((d) =
 const STREAK_STOP = 5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// tembocommerce.africa/za/black-friday builds read these tables through the read-only tembo_bf_ro
+// role (Joel's decision 3, 2026-11-18). Granted only when missing: GRANT rewrites the table's ACL.
+export async function grantTemboReader(sql, table) {
+  const [{ r }] = await sql`SELECT to_regrole('tembo_bf_ro') IS NOT NULL r`;
+  if (!r) return;
+  const [{ ok }] = await sql`SELECT has_table_privilege('tembo_bf_ro', ${table}, 'SELECT') ok`;
+  if (!ok) await sql.unsafe(`GRANT SELECT ON ${table} TO tembo_bf_ro`);
+}
+
 export async function ensureProductTables(sql) {
   const [{ t }] = await sql`SELECT to_regclass('public.store_promo_products') t`;
   if (!t) {
@@ -61,6 +70,7 @@ export async function ensureProductTables(sql) {
   // ACCESS EXCLUSIVE lock even with IF NOT EXISTS.
   const [{ c }] = await sql`SELECT count(*)::int c FROM information_schema.columns WHERE table_name = 'store_promo_scan' AND column_name = 'products_at'`;
   if (!c) await sql`ALTER TABLE store_promo_scan ADD COLUMN products_at timestamptz, ADD COLUMN products_n int`;
+  await grantTemboReader(sql, "store_promo_products");
 }
 
 async function targets(sql) {
