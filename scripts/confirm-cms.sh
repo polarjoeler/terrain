@@ -6,7 +6,8 @@
 # ≤2 fetches per platform edge at a time and ≤1,500 rows per platform per run. Site builders are NOT
 # here — they need builder-promote's stricter catalogue check. Failed rows wait 7 days (unreachable)
 # or 30 days (live, no cart) before a retry once cms_confirm_at exists (confirm-other-cms --migrate).
-# Then confirm-custom does the same for platform='custom' stores in the visible markets.
+# Then confirm-custom does the same for platform='custom' stores in the visible markets, and
+# confirm-woo-catalogue publishes banked WooCommerce sites whose catalogue proves they sell.
 #   Driven by ~/Library/LaunchAgents/com.tembo.confirm-cms.plist (every ~6h).
 set -u
 cd "$HOME/storepulse" || exit 1
@@ -18,5 +19,9 @@ node --env-file=.env.local scripts/confirm-other-cms.mjs --limit 8000 --concurre
 # Bespoke/headless builds (platform=custom) in the visible markets: stricter bar — own-host page, cart
 # action, prices in the market's currency, not betting/news/fintech/… (see confirm-custom.mjs).
 node --env-file=.env.local scripts/confirm-custom.mjs --limit 1500 --concurrency 4 || echo "!! confirm-custom failed"
+# Banked WooCommerce in ZA/KE/NG: publish only on a buyable, priced, market-currency catalogue that
+# isn't a theme demo or behind a coming-soon page. Never re-publishes a person's unpublish; every
+# publish writes a store_edits row (see confirm-woo-catalogue.mjs).
+node --env-file=.env.local scripts/confirm-woo-catalogue.mjs --limit 1500 --concurrency 6 || echo "!! confirm-woo-catalogue failed"
 node --env-file=.env.local scripts/heartbeat.mjs confirm-cms "idle — done" >/dev/null 2>&1 || true
 echo "===== confirm-cms done $(date '+%T') ====="
