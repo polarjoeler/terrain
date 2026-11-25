@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways,
-  ecwidStoreId, ecwidPayments, ecwidOwns } from "./storefront-gateways.mjs";
+  ecwidStoreId, ecwidPayments, ecwidOwns, installedHit, INSTALLED_PROBE } from "./storefront-gateways.mjs";
 
 const names = (html, own = "shop.co.za") => detectGateways(html, own).map((f) => f.name);
 
@@ -142,4 +142,16 @@ test("Ecwid store id must belong to this domain", () => {
   assert.equal(ecwidOwns("shop.kartstore.co.za", "kartstore.co.za"), true);
   assert.equal(ecwidOwns("westendpetfarm.company.site", "westendpetfarm.co.za"), true);   // Instant Site host
   assert.equal(ecwidOwns("someoneelse.co.za", "kartstore.co.za"), false);
+});
+
+test("installed-module probe: a real module file vs the made-up control", () => {
+  const r = (status, len) => ({ status, text: "x".repeat(len) });
+  assert.equal(installedHit(r(200, 4), r(404, 1255)), true);           // pavingmoulds: route answers, control 404
+  assert.equal(installedHit(r(404, 1255), r(404, 1255)), false);
+  assert.equal(installedHit(r(200, 956), r(200, 116978)), true);        // bikelab: soft-404 page vs a tiny real answer
+  assert.equal(installedHit(r(200, 116968), r(200, 116978)), false);    // same soft-404 page
+  assert.equal(installedHit(r(200, 40000), null), false);               // no control: can't tell
+  assert.equal(INSTALLED_PROBE.prestashop.path("payfast"), "/modules/payfast/logo.png");
+  assert.ok(!("ps_checkout" in INSTALLED_PROBE.prestashop.modules));    // bundled with PrestaShop: proves nothing
+  assert.ok(!("pp_standard" in INSTALLED_PROBE.opencart.modules));      // ships with every OpenCart
 });

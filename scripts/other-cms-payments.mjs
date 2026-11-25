@@ -50,7 +50,7 @@ import postgres from "postgres";
 import { fetchText, loadProxies, pickProxy, closeAgents } from "./lib/proxy-fetch.mjs";
 import { logChurn } from "./lib/churn.mjs";
 import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways,
-  ecwidStoreId, ecwidPayments, ecwidOwns } from "./lib/storefront-gateways.mjs";
+  ecwidStoreId, ecwidPayments, ecwidOwns, INSTALLED_PROBE, INSTALLED_CONTROL, installedHit } from "./lib/storefront-gateways.mjs";
 import { cleanPayments } from "../lib/payments-taxonomy.ts";
 import { VISIBLE_MARKETS } from "../lib/markets.ts";
 
@@ -155,6 +155,20 @@ export async function probe(domain, platform) {
   if (pu) {
     const p = await get(pu);
     if (p && p.status < 400 && !platformHomeRedirect(domain, p.url)) { pages.push(p); finds.push(detectGateways(p.text, host)); }
+  }
+  // PrestaShop / OpenCart: which third-party gateway modules are installed (lib INSTALLED_PROBE).
+  const ip = INSTALLED_PROBE[String(platform || "").toLowerCase()];
+  if (ip) {
+    const control = await get(base + ip.path(INSTALLED_CONTROL));
+    if (control && !platformHomeRedirect(domain, control.url)) {
+      const hits = [];
+      for (const [m, name] of Object.entries(ip.modules)) {
+        if (hits.some((h) => h.name === name)) continue;
+        const res = await get(base + ip.path(m));
+        if (installedHit(res, control)) hits.push({ name, via: "installed", ev: m });
+      }
+      finds.push(hits);
+    }
   }
   const found = mergeFindings(...finds);
   const names = cleanPayments(found.map((f) => f.name));

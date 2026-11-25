@@ -141,7 +141,7 @@ export function detectGateways(html, ownHost = "") {
 
 /** Merge several pages' findings, keeping the strongest evidence per gateway (host > module > badge). */
 export function mergeFindings(...lists) {
-  const rank = { host: 0, module: 1, badge: 2 };
+  const rank = { ecwid: 0, host: 1, module: 2, installed: 3, badge: 4 };
   const m = new Map();
   for (const f of lists.flat()) {
     const cur = m.get(f.name);
@@ -293,4 +293,38 @@ export function ecwidOwns(storeHost, domain) {
   if (!storeHost) return true;
   if (/(^|\.)(company\.site|ecwid\.com|shop\.netcash\.co\.za)$/.test(storeHost)) return true;
   return sameSite(storeHost, domain) || storeHost.endsWith("." + String(domain).replace(/^www\./, ""));
+}
+
+/* ---- PrestaShop / OpenCart: is a third-party payment module INSTALLED? -------------------------
+ * Their checkouts list payment options only after the shopper types personal details, an address and
+ * a shipping choice (verified 2026-11-26: PrestaShop's "4 Payment" step is rendered empty and
+ * -unreachable even with an item in the cart). We never type into a real merchant's checkout. But
+ * both platforms serve a module's own files: PrestaShop /modules/<name>/logo.png, OpenCart 2/3
+ * index.php?route=extension/payment/<code>. A 200 there, where a made-up module name gets a 404, means
+ * the merchant uploaded that gateway's module. Installed is not proof it's switched on, so this is
+ * 'storefront' evidence like a badge. Modules every install ships (ps_checkout, ps_wirepayment,
+ * OpenCart's pp_standard / bank_transfer / cod) prove nothing and aren't asked about.
+ */
+export const INSTALLED_PROBE = {
+  prestashop: {
+    path: (m) => `/modules/${m}/logo.png`,
+    modules: { payfast: "PayFast", ozow: "Ozow", yoco: "Yoco", paygate: "PayGate", peachpayments: "Peach Payments",
+      payflex: "Payflex", payjustnow: "PayJustNow", mobicred: "Mobicred", stripe_official: "Stripe", paystack: "Paystack", netcash: "Netcash" },
+  },
+  opencart: {
+    path: (m) => `/index.php?route=extension/payment/${m}`,
+    modules: { payfast: "PayFast", paygate: "PayGate", yoco: "Yoco", ozow: "Ozow", peach: "Peach Payments", peachpayments: "Peach Payments",
+      payflex: "Payflex", payjustnow: "PayJustNow", mobicred: "Mobicred", paystack: "Paystack" },
+  },
+};
+export const INSTALLED_CONTROL = "zzterraincontrol";
+
+/** A module file answered as a real file would, unlike the made-up control name. */
+export function installedHit(res, control) {
+  if (!res || res.status !== 200) return false;
+  if (!control) return false;                                   // no control answer: can't tell a catch-all
+  if (control.status !== 200) return true;
+  // The control also answered 200 (a soft-404 page): only a body of clearly different size counts.
+  const a = (res.text || "").length, b = (control.text || "").length;
+  return Math.abs(a - b) > Math.max(500, b * 0.5);
 }
