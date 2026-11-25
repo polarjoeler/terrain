@@ -12,8 +12,16 @@ test("a priced, buyable ZAR catalogue is a store", () => {
   assert.equal(j.currency, "ZAR");
 });
 
-test("quote-only B2B catalogue (price 0, no buy button) stays banked", () => {
+test("quote-only B2B catalogue (price 0, no buy button) is quote_only (publishes as a no-checkout lead)", () => {
   assert.equal(judgeCatalogue([p("400L Digital Oven", 0), p("Gasket Set", 0), p("Toner", 0, "ZAR", false)], "ZA").verdict, "quote_only");
+  // catalogue mode: prices shown in rand, nothing purchasable
+  const j = judgeCatalogue([p("Pallet Racking", 125000, "ZAR", false), p("Shelf Beam", 34000, "ZAR", false)], "ZA");
+  assert.equal(j.verdict, "quote_only");
+  assert.equal(j.currency, "ZAR");
+});
+
+test("a quote-only catalogue priced in a foreign currency is an imported demo, not a lead", () => {
+  assert.equal(judgeCatalogue([p("Pallet Racking", 12500, "USD", false), p("Shelf Beam", 3400, "USD", false)], "ZA").verdict, "wrong_currency");
 });
 
 test("WooCommerce sample data and lorem products are a demo, even with prices", () => {
@@ -53,4 +61,10 @@ test("names lose dangling separators and holding-page tails", () => {
   assert.equal(tidyName("Zimple Web -"), "Zimple Web");
   assert.equal(tidyName("Boland Brand Solutions is coming soon"), "Boland Brand Solutions");
   assert.equal(tidyName("Littera Books &amp; Bibles"), "Littera Books & Bibles");
+});
+
+test("tidyName rejects names with no letters", () => {
+  assert.equal(tidyName("&rarr;"), null);
+  assert.equal(tidyName(" | "), null);
+  assert.equal(tidyName("Zimple Web -"), "Zimple Web");
 });

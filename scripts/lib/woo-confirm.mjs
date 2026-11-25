@@ -10,8 +10,10 @@
  *   - Theme demo shops: the WooCommerce sample data ("Hoodie with Logo", "WordPress Pennant"…) or
  *     a theme's lorem-ipsum products, left live on a brochure site. ~65% of early catalogue matches
  *     in the clone sweep were exactly this (memory: catalog-fingerprints).
- *   - Quote-only B2B catalogues: real businesses, products listed at price 0 with no buy button.
- *     Not an online store; left banked, never published.
+ *   - Quote-only B2B catalogues: real businesses, products listed at price 0 or with no buy button.
+ *     Not an online checkout, but a real catalogue: since 2026-11-26 they publish as leads with a
+ *     known "no online checkout" payments answer (Joel 11-25: "if there's a catalog but not a store
+ *     lets keep them in there"). Any prices they do show must be in the market's currency.
  *   - Foreign demo imports: a ZA site whose catalogue is priced in USD/GBP is almost always an
  *     imported theme demo, so the catalogue currency must match the market. */
 
@@ -59,8 +61,16 @@ export function judgeCatalogue(products, country) {
 
   // Half or more of the page is sample/lorem/test → the shop is a theme demo, whatever else is in it.
   if (placeholder * 2 >= ps.length) return { verdict: "demo", ...base };
-  if (buyable.length < MIN_BUYABLE) return { verdict: real.length >= MIN_BUYABLE ? "quote_only" : "tiny", ...base };
   const want = MARKET_CCY[String(country ?? "").toUpperCase()];
+  if (buyable.length < MIN_BUYABLE) {
+    if (real.length < MIN_BUYABLE) return { verdict: "tiny", ...base };
+    // A catalogue-mode shop still shows prices; a foreign-priced one is an imported demo, not a ZA B2B list.
+    const shown = {};
+    for (const p of real) { const c = String(p?.prices?.currency_code ?? "").toUpperCase(); if (c && Number(p?.prices?.price) > 0) shown[c] = (shown[c] ?? 0) + 1; }
+    const shownCcy = Object.entries(shown).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    if (want && shownCcy && shownCcy !== want) return { verdict: "wrong_currency", ...base, currency: shownCcy };
+    return { verdict: "quote_only", ...base, currency: shownCcy };
+  }
   if (want && currency !== want) return { verdict: "wrong_currency", ...base };
   return { verdict: "store", ...base };
 }
@@ -80,7 +90,9 @@ export function isHoldingPage(html) {
 
 /** Tidy a site name for display: strip a dangling separator ("Zimple Web -") and holding-page tails. */
 export function tidyName(name) {
-  return decode(name ?? "")
+  const t = decode(name ?? "")
     .replace(/\s+(is\s+)?(coming soon|under construction)\.?$/i, "")
-    .replace(/[\s|:·–—-]+$/u, "").replace(/\s+/g, " ").trim() || null;
+    .replace(/[\s|:·–—-]+$/u, "").replace(/\s+/g, " ").trim();
+  // A "name" with no letters in it ("&rarr;", "|", "2024") is markup debris, not a store name.
+  return t && /\p{L}{2}/u.test(decode(t).replace(/&[a-z]+;/gi, "")) ? t : null;
 }
