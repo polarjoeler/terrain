@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { marketLabel, marketFlag } from "@/lib/markets";
 import type { LeadDetail } from "@/lib/lead-detail";
 import { normalizeTechStack } from "@/lib/tech-stack";
@@ -229,9 +229,21 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   type Form = Record<TextKey, string> & { published: boolean; plus: boolean; revenue: string; tagsText: string };
   const blankForm = (): Form => ({ ...(Object.fromEntries(TEXT_KEYS.map((k) => [k, ""])) as Record<TextKey, string>), published: false, plus: false, revenue: "", tagsText: "" });
   const [form, setForm] = useState<Form>(blankForm);
+  // Which store the open form was filled from. Clicking another row swaps `domain` (and `data`)
+  // but used to leave `editing` on with the PREVIOUS store's values in the form, so Save wrote
+  // store A's name/country/revenue onto store B (outdoorphoto.co.za got el-clan.com's, 2026-11-18).
+  const [formDomain, setFormDomain] = useState<string | null>(null);
+  const [formFor, setFormFor] = useState(domain);
+  if (formFor !== domain) {            // React's "reset state when a prop changes", done during render
+    setFormFor(domain);
+    setEditing(false); setForm(blankForm()); setFormDomain(null); setSaveErr(null);
+  }
+  const domainRef = useRef(domain);
+  useEffect(() => { domainRef.current = domain; }, [domain]);
 
   function beginEdit() {
     if (!data) return;
+    setFormDomain(data.domain);
     setForm({
       ...(Object.fromEntries(TEXT_KEYS.map((k) => {
         const v = data[k] as string | number | null;
@@ -245,12 +257,18 @@ export function LeadDrawer({ domain, onClose, onOpen, onShowGroup }: {
   }
   async function save() {
     if (!data) return;
+    // Belt and braces: never write a form onto a store it wasn't opened for.
+    if (formDomain !== data.domain || domain !== data.domain) {
+      setSaveErr(`This form was opened for ${formDomain ?? "another store"}. Close it and click Edit again.`);
+      return;
+    }
     setSaving(true); setSaveErr(null);
     const tags = form.tagsText.split(",").map((t) => t.trim()).filter(Boolean);
     const text = Object.fromEntries(TEXT_KEYS.map((k) => [k, form[k].trim() || null])) as Record<TextKey, string | null>;
     const patch: StorePatch = { ...text, published: form.published, plus: form.plus, estimated_monthly_sales: form.revenue || null, tags };
     const res = await updateStore(data.domain, patch);
     setSaving(false);
+    if (domainRef.current !== data.domain) return;   // moved to another store while saving: don't paint this one over it
     if ("error" in res) { setSaveErr(res.error); return; }
     // A manual revenue drops the modeled price (see store-edit-action), so the read-only "Ballpark
     // revenue" row below has to go with it rather than keep showing the model's range.
