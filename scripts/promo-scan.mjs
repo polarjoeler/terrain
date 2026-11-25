@@ -40,6 +40,9 @@ const DRY = has("--dry");
 const BASELINE = has("--baseline");
 const LLM = has("--llm");
 const TOP = Number(arg("--top", 1500));
+// Non-Shopify stores past the top list (sister brands in a group, the traffic-ranked tail). Their
+// homepages are their own servers, not Shopify's edge, so they cost none of the home IP's budget.
+const EXTRA_OTHER = Number(arg("--extra-other", 0));
 const LIMIT = Number(arg("--limit", TOP));
 const CONC = Number(arg("--concurrency", 2));
 const PAUSE_MS = Number(arg("--pause-ms", 1200));
@@ -118,6 +121,29 @@ async function watchList(sql) {
     seen.add(site);
     out.push(r);
     if (out.length >= TOP) break;
+  }
+  if (EXTRA_OTHER > 0) {
+    const have = new Set(out.map((r) => r.domain));
+    const extra = await sql`
+      SELECT s.domain, lower(s.platform) platform, s.name, p.market_rank, ps.scanned_at, ps.klaviyo_cid
+        FROM imported_stores s
+        LEFT JOIN store_priority p ON p.domain = s.domain
+        LEFT JOIN store_promo_scan ps ON ps.domain = s.domain
+       WHERE s.published AND s.country = ${COUNTRY} AND lower(coalesce(s.platform, '')) <> 'shopify'
+         AND coalesce(s.live_status, '') NOT IN ('dead', 'migrated')
+         AND s.activity_tier IS DISTINCT FROM 'not_a_store' AND s.storefront_http IS DISTINCT FROM 402
+         AND s.password_protected IS NOT TRUE
+         AND s.domain !~ '^(account|accounts|mail|webmail|cpanel|shop-admin|admin|login|portal|payments?|app|archive[0-9]*|ipaper|staging|dev|test)\.'
+         AND (p.market_rank <= ${TOP} OR s.crux_rank <= 50000)
+       ORDER BY s.crux_rank NULLS LAST, p.market_rank NULLS LAST
+       LIMIT ${EXTRA_OTHER * 2}`;
+    const sites = new Set(out.map((r) => siteOf(r.domain)));
+    let n = 0;
+    for (const r of extra) {
+      if (n >= EXTRA_OTHER) break;
+      if (have.has(r.domain) || sites.has(siteOf(r.domain))) continue;
+      sites.add(siteOf(r.domain)); out.push(r); n++;
+    }
   }
   const cutoff = Date.now() - STALE_H * 3600e3;
   return out.filter((r) => BASELINE || !r.scanned_at || new Date(r.scanned_at).getTime() < cutoff).slice(0, LIMIT);
