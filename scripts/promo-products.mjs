@@ -71,6 +71,26 @@ export async function ensureProductTables(sql) {
   const [{ c }] = await sql`SELECT count(*)::int c FROM information_schema.columns WHERE table_name = 'store_promo_scan' AND column_name = 'products_at'`;
   if (!c) await sql`ALTER TABLE store_promo_scan ADD COLUMN products_at timestamptz, ADD COLUMN products_n int`;
   await grantTemboReader(sql, "store_promo_products");
+  await ensurePriceHistory(sql);
+}
+
+/**
+ * One row per product per day: what it cost, and the "was" price the store showed. The deal check
+ * (lib/deal-verdict.mjs) compares today's price with what the product cost before the sale.
+ * source = 'scan' (this lane) or 'wayback' (deal-check-backfill.mjs, archived copies from before we watched).
+ */
+export async function ensurePriceHistory(sql) {
+  const [{ t }] = await sql`SELECT to_regclass('public.store_promo_product_prices') t`;
+  if (t) return grantTemboReader(sql, "store_promo_product_prices");
+  await sql`CREATE TABLE store_promo_product_prices (
+    domain text NOT NULL,
+    handle text NOT NULL,
+    seen_on date NOT NULL,
+    price numeric NOT NULL,
+    regular numeric,
+    source text NOT NULL DEFAULT 'scan',
+    PRIMARY KEY (domain, handle, seen_on))`;
+  await grantTemboReader(sql, "store_promo_product_prices");
 }
 
 async function targets(sql) {
@@ -127,6 +147,10 @@ async function save(sql, r, out) {
           source = EXCLUDED.source, rank = EXCLUDED.rank, last_seen_at = now()`;
     }
     await tx`UPDATE store_promo_scan SET products_at = now(), products_n = ${rows.length} WHERE domain = ${r.domain}`;
+    if (rows.length) {
+      await tx`INSERT INTO store_promo_product_prices ${tx(rows.map((x) => ({ domain: x.domain, handle: x.handle, seen_on: new Date().toISOString().slice(0, 10), price: x.price, regular: x.regular, source: "scan" })))}
+        ON CONFLICT (domain, handle, seen_on) DO UPDATE SET price = EXCLUDED.price, regular = EXCLUDED.regular`;
+    }
   });
 }
 

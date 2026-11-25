@@ -18,7 +18,7 @@ STALE="${PROMO_STALE_HOURS:-18}"
 STORE_PROBE_PROXY_FILE="$HOME/shopify-radar/proxies.txt" \
 LOCAL_LLM_URL="${LOCAL_LLM_URL:-http://localhost:11434/v1}" \
   perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 14400 \
-  node --no-warnings --env-file=.env.local scripts/promo-scan.mjs --top 1500 --concurrency 2 --pause-ms 1200 --stale-hours "$STALE" --llm \
+  node --no-warnings --env-file=.env.local scripts/promo-scan.mjs --top 1500 --extra-other 2500 --concurrency 2 --pause-ms 1200 --stale-hours "$STALE" --llm \
   || echo "!! promo-scan failed or capped"
 # Sale products behind each deal (Woo Store API + the top 300 Shopify BF collection pages). Runs after
 # the scan, under the same lock, so the two never share the Shopify budget at once: ~900 Shopify
@@ -26,4 +26,9 @@ LOCAL_LLM_URL="${LOCAL_LLM_URL:-http://localhost:11434/v1}" \
 perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 7200 \
   node --no-warnings --env-file=.env.local scripts/promo-products.mjs --shopify-top 300 --stale-hours "$STALE" \
   || echo "!! promo-products failed or capped"
+# Rebuild tembocommerce.africa/za/black-friday from what this run found. The Tembo build reads the
+# database through a read-only role (Joel's decision 3, 2026-11-18); Rex can't push to GitHub, so a
+# Vercel deploy hook is the refresh. TEMBO_BF_DEPLOY_HOOK lives in .env.local on Rex.
+HOOK="$(grep -E '^TEMBO_BF_DEPLOY_HOOK=' .env.local 2>/dev/null | cut -d= -f2- | tr -d '"')"
+if [ -n "$HOOK" ]; then curl -fsS -X POST "$HOOK" >/dev/null && echo "tembo black-friday rebuild requested" || echo "!! tembo deploy hook failed"; fi
 echo "===== promo-scan done $(date '+%F %T') ====="
