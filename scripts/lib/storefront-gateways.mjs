@@ -36,6 +36,10 @@ export const GATEWAYS = [
   { name: "SnapScan",       host: /(^|\.)snapscan\.(co\.za|io)$/,               token: SUB("snapscan"),              module: /snapscan/ },
   { name: "Zapper",         host: /(^|\.)zapper\.com$/,                          token: /(^|[^a-z])zapper([^a-z]|$)/,   module: /zapper/ },
   { name: "iKhokha",        host: /(^|\.)ikhokha\.com$/,                         token: SUB("ikhokha"),               module: /ikhokha/ },
+  { name: "WalletDoc",      host: /(^|\.)walletdoc\.com$/,                       token: SUB("walletdoc"),             module: /walletdoc/ },
+  { name: "CallPay",        host: /(^|\.)callpay\.com$/,                         token: SUB("callpay"),               module: /callpay/ },
+  { name: "iVeri",          host: /(^|\.)iveri\.(com|co\.za|net)$/,             token: null,                         module: /iveri/ },
+  { name: "TradeSafe",      host: /(^|\.)tradesafe\.co\.za$/,                   token: SUB("tradesafe"),             module: /tradesafe/ },
   { name: "Stitch",         host: /(^|\.)stitch\.money$/,                        token: null,                         module: /stitch_?(money|pay)/ },
   { name: "Adumo Online",   host: /(^|\.)(adumoonline\.com|adumo\.com)$/,       token: SUB("adumo"),                 module: /adumo|virtual_?card/ },
   { name: "PayU",           host: /(^|\.)payu\.(co\.za|com|in)$/,               token: /(^|[^a-z])payu([^a-z]|$)/,     module: /^payu/ },
@@ -217,4 +221,76 @@ export const extraPathFor = (platform) => EXTRA_PATH[String(platform || "").toLo
 export function impliedGateways(domain) {
   if (/\.shop\.netcash\.co\.za$/i.test(domain)) return [{ name: "Netcash", via: "host", ev: "netcash shop" }];
   return [];
+}
+
+/* ---- Ecwid: the storefront's own public settings call ------------------------------------------
+ * Ecwid renders checkout in JS, so no page we fetch names a gateway. But every Ecwid storefront, on
+ * load, POSTs {"lang":"en"} to app.ecwid.com/storefront/api/v1/<storeId>/initial-data (no token, no
+ * cart, no customer details) and gets back storeProfile.value.jsApiOnly.paymentMethods: the methods
+ * the merchant has switched on, each with its processor ("payFast", "offline", a payment app's
+ * namespace). Found 2026-11-26 by watching what a browser loads; plain HTTP returns the same JSON.
+ */
+
+/** The Ecwid store id a page embeds, or null. */
+export function ecwidStoreId(html, domain = "") {
+  const m = /\bstore(\d{5,10})\.shop\.netcash\.co\.za$/i.exec(domain);
+  if (m) return m[1];
+  if (!/ecwid/i.test(html)) return null;
+  for (const re of [
+    /app\.ecwid\.com\/script\.js\?(\d{5,10})/,
+    /storefront\/api\/v1\/(\d{5,10})\//,
+    // storeId / siteId / ownerid, also inside escaped JSON (\"siteId\":78879008 on Instant Sites)
+    /\\?["']?(?:storeId|siteId)\\?["']?\s*[:=]\s*\\?["']?(\d{5,10})\b/i,
+    /[?&]ownerid=(\d{5,10})\b/i,
+    /\/images\/(\d{5,10})\/\d+/,                 // Ecwid's image CDN path: /images/<storeId>/<imageId>…
+  ]) { const x = re.exec(html); if (x) return x[1]; }
+  return null;
+}
+
+/** Same registrable host, ignoring www (so a store id lifted from a page belongs to that store). */
+const sameSite = (a, b) => String(a || "").toLowerCase().replace(/^www\./, "") === String(b || "").toLowerCase().replace(/^www\./, "");
+
+/**
+ * Read Ecwid's initial-data JSON.
+ * Returns { ok, closed, storeHost, gateways:[canonical names], methods:[raw {name, processor, app}] }.
+ * `ok` is false when the payload isn't an Ecwid store profile.
+ */
+export function ecwidPayments(json) {
+  const v = json?.storeProfile?.value;
+  // A closed store answers 409 with storeProfile {type: "general-closed"} and no value.
+  if (!v && json?.storeProfile?.type && json.storeProfile.type !== "opened") return { ok: true, closed: true, storeHost: null, gateways: [], methods: [] };
+  if (!v) return { ok: false, closed: false, storeHost: null, gateways: [], methods: [] };
+  const closed = json.storeProfile.type && json.storeProfile.type !== "opened" || v.store?.closed === true || v.flags?.isStoreClosed === true;
+  let storeHost = null;
+  try { storeHost = new URL(v.jsApiOnly?.storeUrl || "").hostname.toLowerCase(); } catch { /* none */ }
+  const methods = (v.jsApiOnly?.paymentMethods || []).map((m) => ({
+    name: String(m.name || ""), processor: String(m.processor || ""), app: String(m.appNamespace || m.appClientId || ""),
+  }));
+  const out = [];
+  const add = (n) => { if (n && !out.includes(n)) out.push(n); };
+  for (const m of methods) {
+    const key = (m.processor === "customPaymentApp" ? m.app : m.processor).toLowerCase().replace(/[\s-]+/g, "_");
+    const name = m.name.toLowerCase();
+    if (m.processor === "offline" || !key) {
+      // A merchant-named manual method: "Pay by EFT", "Cash on delivery", "SnapScan on collection"…
+      const named = GATEWAYS.find((g) => g.token && g.token.test(name));
+      if (named) add(named.name);
+      else if (/\beft\b|bank|transfer|deposit|wire/.test(name)) add("Bank Transfer");
+      else if (/cash|\bcod\b|on delivery|on collection/.test(name)) add("Cash on Delivery");
+      continue;
+    }
+    const g = GATEWAYS.find((x) => x.module && x.module.test(key));
+    if (g) add(g.name);
+    else if (/^paypal/.test(key)) add("PayPal");
+    else if (/^stripe/.test(key)) add("Stripe");
+  }
+  return { ok: true, closed: !!closed, storeHost, gateways: out.sort((a, b) => ORDER.get(a) - ORDER.get(b)), methods };
+}
+
+/** True when the store profile's own URL is this domain (or an Ecwid/Netcash-hosted one we can't
+ *  compare): guards against a page that embeds SOMEONE ELSE's Ecwid store id. */
+export function ecwidOwns(storeHost, domain) {
+  if (!storeHost) return true;
+  if (/(^|\.)(company\.site|ecwid\.com|shop\.netcash\.co\.za)$/.test(storeHost)) return true;
+  return sameSite(storeHost, domain) || storeHost.endsWith("." + String(domain).replace(/^www\./, ""));
 }
