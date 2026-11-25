@@ -47,7 +47,9 @@ async function scopeMetrics(sql: ReturnType<typeof db>, scope: ReturnType<Return
     count(*) FILTER (WHERE ${scope} AND contact_checked_at >= now()-interval '14 days' AND contact_checked_at < now()-interval '7 days')::int crawled7_prev,
     -- SCORE
     count(*) FILTER (WHERE ${PUB} AND estimated_monthly_sales IS NOT NULL)::int has_rev,
-    count(*) FILTER (WHERE ${PUB} AND payments IS NOT NULL AND payments <> '')::int has_pay,
+    -- "known" includes a store with no online checkout (a B2B portal or quote catalogue): that is an
+    -- answer, not a gap (Joel 11-25). other-cms-payments.mjs writes it as payments_source='no_checkout'.
+    count(*) FILTER (WHERE ${PUB} AND ((payments IS NOT NULL AND payments <> '') OR payments_source = 'no_checkout'))::int has_pay,
     -- TRACK: never-checked GAP vs re-checks this window vs prior; churn
     count(*) FILTER (WHERE ${PUB} AND live_checked_at IS NULL)::int live_never,
     count(*) FILTER (WHERE ${scope} AND live_checked_at >= now()-interval '7 days')::int live7,
