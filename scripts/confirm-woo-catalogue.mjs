@@ -135,8 +135,14 @@ async function main() {
           // asserts it, exactly as confirm-other-cms does; every other outcome just stamps the clock.
           if (verdict === "store") {
             await sql.begin(async (q) => {
+              // A buyable catalogue outranks an older homepage-based 'not_a_store' / empty activity label:
+              // lib/browse.ts hides not_a_store from the lead list, so leaving it would publish a store
+              // nobody can see (10 of the first 26 publishes, 2026-11-25). 'active' = selling products,
+              // no order evidence; selling/dormant labels from the Woo probe are kept.
               await q`UPDATE imported_stores SET published = true, name = ${name}, live_status = 'active',
-                        live_checked_at = now(), cms_confirm_at = now() WHERE domain = ${r.domain} AND NOT published`;
+                        live_checked_at = now(), cms_confirm_at = now(),
+                        activity_tier = CASE WHEN activity_tier IS NULL OR activity_tier = 'not_a_store' THEN 'active' ELSE activity_tier END
+                      WHERE domain = ${r.domain} AND NOT published`;
               await q`INSERT INTO store_edits (domain, editor, field, old_value, new_value)
                       VALUES (${r.domain}, ${EDITOR}, 'published', 'false', ${`true (Woo catalogue: ${detail})`})`;
             }).catch((e) => console.log(`!! write failed ${r.domain}: ${e.message}`));
