@@ -1,7 +1,8 @@
 // node --test scripts/lib/storefront-gateways.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways } from "./storefront-gateways.mjs";
+import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways,
+  ecwidStoreId, ecwidPayments, ecwidOwns, installedHit, INSTALLED_PROBE } from "./storefront-gateways.mjs";
 
 const names = (html, own = "shop.co.za") => detectGateways(html, own).map((f) => f.name);
 
@@ -97,4 +98,60 @@ test("extra path per platform", () => {
   assert.equal(extraPathFor("OpenCart"), "/index.php?route=checkout/cart");
   assert.equal(extraPathFor("Odoo"), "/shop");
   assert.equal(extraPathFor("custom"), "/cart");
+});
+
+const ecwid = (methods, storeUrl = "https://kartstore.co.za/", type = "opened") =>
+  ({ storeProfile: { type, value: { jsApiOnly: { storeUrl, paymentMethods: methods } } } });
+
+test("Ecwid store id: loader script, escaped siteId, ownerid, image CDN, Netcash shop host", () => {
+  assert.equal(ecwidStoreId(`<script src="https://app.ecwid.com/script.js?77668011&data_platform=code">`), "77668011");
+  assert.equal(ecwidStoreId(`ecwid {\\"siteId\\":78879008,\\"serviceUrl\\"`), "78879008");
+  assert.equal(ecwidStoreId(`ecwid <a href="https://my.ecwid.com/edit-starter-site?ownerid=131201288&lang=en">`), "131201288");
+  assert.equal(ecwidStoreId(`ecwid <img src="https://d2j6dbq0eux0bg.cloudfront.net/images/63607701/4471.jpg">`), "63607701");
+  assert.equal(ecwidStoreId(``, "store87085797.shop.netcash.co.za"), "87085797");
+  assert.equal(ecwidStoreId(`<img src="/images/63607701/4471.jpg">`), null);       // no Ecwid on the page
+});
+
+test("Ecwid payment methods map to canonical gateways, offline methods by their name", () => {
+  const e = ecwidPayments(ecwid([
+    { name: "Pay with Card or Bank Account", processor: "customPaymentApp", appNamespace: "paystack" },
+    { name: "Pay by EFT", processor: "offline" },
+    { name: "Credit or debit card", processor: "payFast" },
+    { name: "PayGate by Payfast", processor: "customPaymentApp", appClientId: "paygate-appinlet" },
+    { name: "Cash on collection", processor: "offline" },
+    { name: "SnapScan on collection", processor: "offline" },
+    { name: "Card payment via Walletdoc", processor: "customPaymentApp", appClientId: "walletdoc" },
+    { name: "PayPal", processor: "paypalStandard" },
+  ]));
+  assert.equal(e.ok, true);
+  assert.equal(e.closed, false);
+  assert.deepEqual(e.gateways, ["PayFast", "PayGate", "SnapScan", "WalletDoc", "PayPal", "Paystack", "Bank Transfer", "Cash on Delivery"]);
+});
+
+test("Ecwid: a closed store, an empty method list, and a non-Ecwid payload", () => {
+  assert.deepEqual(ecwidPayments({ storeProfile: { type: "general-closed" } }).closed, true);
+  const none = ecwidPayments(ecwid([]));
+  assert.equal(none.ok, true); assert.deepEqual(none.methods, []); assert.deepEqual(none.gateways, []);
+  assert.equal(ecwidPayments({ error: "x" }).ok, false);
+  assert.equal(ecwidPayments(null).ok, false);
+});
+
+test("Ecwid store id must belong to this domain", () => {
+  assert.equal(ecwidOwns("kartstore.co.za", "kartstore.co.za"), true);
+  assert.equal(ecwidOwns("www.kartstore.co.za", "kartstore.co.za"), true);
+  assert.equal(ecwidOwns("shop.kartstore.co.za", "kartstore.co.za"), true);
+  assert.equal(ecwidOwns("westendpetfarm.company.site", "westendpetfarm.co.za"), true);   // Instant Site host
+  assert.equal(ecwidOwns("someoneelse.co.za", "kartstore.co.za"), false);
+});
+
+test("installed-module probe: a real module file vs the made-up control", () => {
+  const r = (status, len) => ({ status, text: "x".repeat(len) });
+  assert.equal(installedHit(r(200, 4), r(404, 1255)), true);           // pavingmoulds: route answers, control 404
+  assert.equal(installedHit(r(404, 1255), r(404, 1255)), false);
+  assert.equal(installedHit(r(200, 956), r(200, 116978)), true);        // bikelab: soft-404 page vs a tiny real answer
+  assert.equal(installedHit(r(200, 116968), r(200, 116978)), false);    // same soft-404 page
+  assert.equal(installedHit(r(200, 40000), null), false);               // no control: can't tell
+  assert.equal(INSTALLED_PROBE.prestashop.path("payfast"), "/modules/payfast/logo.png");
+  assert.ok(!("ps_checkout" in INSTALLED_PROBE.prestashop.modules));    // bundled with PrestaShop: proves nothing
+  assert.ok(!("pp_standard" in INSTALLED_PROBE.opencart.modules));      // ships with every OpenCart
 });

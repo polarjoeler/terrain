@@ -93,6 +93,10 @@ export function closeAgents() {
  */
 export function fetchText(url, opts = {}) {
   const { proxy = null, timeoutMs = 10_000, maxBytes = 700_000, ua = DEFAULT_UA, redirects = 3 } = opts;
+  // Optional POST (e.g. Ecwid's public storefront API): method + body + extra headers. GET by default.
+  const method = opts.method || "GET";
+  const body = opts.body == null ? null : Buffer.from(typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body));
+  const extra = { ...(opts.headers || {}), ...(body ? { "Content-Length": String(body.length) } : {}) };
   return new Promise((resolve) => {
     let u;
     try { u = new URL(url); } catch { resolve(null); return; }
@@ -103,17 +107,17 @@ export function fetchText(url, opts = {}) {
     const req = mod.request(
       viaPlainProxy
         ? {
-            host: pp.hostname, port: Number(pp.port) || 80, method: "GET", path: u.href,
+            host: pp.hostname, port: Number(pp.port) || 80, method, path: u.href,
             headers: {
-              Host: u.host, "User-Agent": ua, "Accept-Language": "en",
+              Host: u.host, "User-Agent": ua, "Accept-Language": "en", ...extra,
               ...(pp.username ? { "Proxy-Authorization": "Basic " + Buffer.from(
                 `${decodeURIComponent(pp.username)}:${decodeURIComponent(pp.password)}`).toString("base64") } : {}),
             },
           }
         : {
             host: u.hostname, port: u.port || (u.protocol === "http:" ? 80 : 443),
-            method: "GET", path: u.pathname + u.search,
-            headers: { "User-Agent": ua, "Accept-Language": "en", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            method, path: u.pathname + u.search,
+            headers: { "User-Agent": ua, "Accept-Language": "en", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", ...extra },
             agent: u.protocol === "http:" ? undefined : agentFor(proxy),
             servername: u.hostname,
           },
@@ -121,7 +125,7 @@ export function fetchText(url, opts = {}) {
         const loc = res.headers.location;
         if (loc && res.statusCode >= 300 && res.statusCode < 400) {
           res.resume();
-          if (redirects <= 0) { resolve({ status: res.statusCode, url, contentType: "", text: "" }); return; }
+          if (redirects <= 0) { resolve({ status: res.statusCode, url, location: loc, contentType: "", text: "" }); return; }
           let next;
           try { next = new URL(loc, url).href; } catch { resolve(null); return; }
           resolve(fetchText(next, { ...opts, redirects: redirects - 1 }));
@@ -159,6 +163,6 @@ export function fetchText(url, opts = {}) {
     );
     req.setTimeout(timeoutMs, () => req.destroy(new Error("timeout")));
     req.once("error", () => resolve(null));
-    req.end();
+    req.end(body ?? undefined);
   });
 }

@@ -39,11 +39,18 @@
  *   node --env-file=.env.local scripts/other-cms-payments.mjs --dry --limit 50
  *   node --env-file=.env.local scripts/other-cms-payments.mjs [--country ZA,KE,NG] [--limit 300] [--concurrency 4]
  *   node --env-file=.env.local scripts/other-cms-payments.mjs --domains a.co.za,b.co.za --dry
+ *   node --env-file=.env.local scripts/other-cms-payments.mjs --platform ecwid --recheck-days 0   # re-read one platform
+ *
+ * Ecwid (2026-11-26): its checkout is JS, but the storefront's public initial-data call lists the
+ * merchant's enabled payment methods, so an Ecwid store gets its real checkout list from one POST
+ * (payments_source 'ecwid_checkout'); a closed Ecwid store is a liveness miss; one with no method
+ * switched on is 'no_checkout'.
  */
 import postgres from "postgres";
 import { fetchText, loadProxies, pickProxy, closeAgents } from "./lib/proxy-fetch.mjs";
 import { logChurn } from "./lib/churn.mjs";
-import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways } from "./lib/storefront-gateways.mjs";
+import { detectGateways, mergeFindings, pageState, platformHomeRedirect, firstProductUrl, extraPathFor, impliedGateways,
+  ecwidStoreId, ecwidPayments, ecwidOwns, INSTALLED_PROBE, INSTALLED_CONTROL, installedHit } from "./lib/storefront-gateways.mjs";
 import { cleanPayments } from "../lib/payments-taxonomy.ts";
 import { VISIBLE_MARKETS } from "../lib/markets.ts";
 
@@ -54,6 +61,8 @@ const LIMIT = Number(arg("--limit", 300));
 const CONC = Number(arg("--concurrency", 4));
 const RECHECK_DAYS = Number(arg("--recheck-days", 45));
 const DOMAINS = (arg("--domains", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+// --platform ecwid: one platform only (e.g. a one-off re-read after a new method, with --recheck-days 0).
+const PLATFORMS = (arg("--platform", "") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const COUNTRIES = (arg("--country", "") || "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
 const DEAD_AFTER = 2;                                  // = verify-liveness.mjs DEAD_AFTER
 // Platforms with their own payment probe. NULL platform is presumed Shopify by payment-queue.
@@ -66,6 +75,24 @@ const pool = loadProxies();
 // 2MB: payment badges live in the FOOTER, and big theme pages run past 600KB (cashbuild 585KB,
 // atmotile 590KB in the first sample) — a lower cap cuts off exactly the part we read.
 const get = (url) => fetchText(url, { proxy: pickProxy(pool), timeoutMs: 15000, maxBytes: 2_000_000, redirects: 4 });
+
+/** Ecwid's storefront settings for a store id. app.ecwid.com 301s a store hosted in another region
+ *  to that region's "-internal" API host, which doesn't answer from outside; the storefront itself
+ *  calls the same region's public host (eu-fra2-storefront-api.ecwid.com), so follow it there. */
+async function ecwidInitialData(id, base) {
+  const opts = { proxy: pickProxy(pool), timeoutMs: 15000, maxBytes: 3_000_000, method: "POST", redirects: 0,
+    headers: { "Content-Type": "application/json", Referer: base + "/" }, body: { lang: "en" } };
+  const post = async (url) => (await fetchText(url, opts)) ?? fetchText(url, { ...opts, proxy: pickProxy(pool) });  // one retry on another proxy
+  let r = await post(`https://app.ecwid.com/storefront/api/v1/${id}/initial-data`);
+  if (r && r.status >= 300 && r.status < 400 && r.location) {
+    let next;
+    try { next = new URL(r.location); } catch { return null; }
+    if (!/\.ecwid\.com$/.test(next.hostname)) return null;
+    next.hostname = next.hostname.replace(/-internal(?=\.ecwid\.com$)/, "");
+    r = await post(next.href);
+  }
+  return r;
+}
 
 /** Homepage, with one retry on the www-toggled host (apex vs www is the commonest "unreachable"). */
 async function home(domain) {
@@ -92,6 +119,26 @@ export async function probe(domain, platform) {
     // 404/410/500 on the homepage itself: the site answers but serves no shop. Count it as nothing read.
     return { outcome: "none", status: r.status };
   }
+  // Ecwid: the storefront's own public settings call lists the merchant's enabled payment methods
+  // (lib/storefront-gateways ecwidPayments). One POST, no cart, no customer details. That's the
+  // checkout's own list, so it is recorded as 'ecwid_checkout', stronger than an advertised badge.
+  const ecId = ecwidStoreId(r.text, domain);
+  if (ecId) {
+    const er = await ecwidInitialData(ecId, base);
+    let ej = null;
+    try { ej = er && er.text ? JSON.parse(er.text) : null; } catch { /* not JSON */ }   // 409 carries the closed profile
+    const ec = ecwidPayments(ej);
+    if (ec.ok && ecwidOwns(ec.storeHost, domain)) {
+      if (ec.closed) return { outcome: "gone", status: r.status, url: `ecwid:${ecId}:closed` };
+      if (ec.gateways.length) {
+        return { outcome: "found", source: "ecwid_checkout", gateways: cleanPayments(ec.gateways),
+          found: ec.gateways.map((n) => ({ name: n, via: "ecwid", ev: ecId })), pages: 2 };
+      }
+      // An open Ecwid store with NO payment method switched on can't take an order online.
+      if (!ec.methods.length) return { outcome: "portal", why: "ecwid: no payment methods", pages: 2 };
+    }
+  }
+
   const pages = [r];
   const finds = [impliedGateways(domain), detectGateways(r.text, host)];
 
@@ -108,6 +155,20 @@ export async function probe(domain, platform) {
   if (pu) {
     const p = await get(pu);
     if (p && p.status < 400 && !platformHomeRedirect(domain, p.url)) { pages.push(p); finds.push(detectGateways(p.text, host)); }
+  }
+  // PrestaShop / OpenCart: which third-party gateway modules are installed (lib INSTALLED_PROBE).
+  const ip = INSTALLED_PROBE[String(platform || "").toLowerCase()];
+  if (ip) {
+    const control = await get(base + ip.path(INSTALLED_CONTROL));
+    if (control && !platformHomeRedirect(domain, control.url)) {
+      const hits = [];
+      for (const [m, name] of Object.entries(ip.modules)) {
+        if (hits.some((h) => h.name === name)) continue;
+        const res = await get(base + ip.path(m));
+        if (installedHit(res, control)) hits.push({ name, via: "installed", ev: m });
+      }
+      finds.push(hits);
+    }
   }
   const found = mergeFindings(...finds);
   const names = cleanPayments(found.map((f) => f.name));
@@ -129,6 +190,7 @@ async function main() {
           SELECT domain, platform, country FROM imported_stores
           WHERE published AND country = ANY(${MARKETS})
             AND platform IS NOT NULL AND lower(platform) <> ALL(${PROBED})
+            ${PLATFORMS.length ? sql`AND lower(platform) = ANY(${PLATFORMS})` : sql``}
             AND activity_tier IS DISTINCT FROM 'not_a_store'
             AND (live_status IS NULL OR live_status NOT IN ('dead', 'migrated'))
             AND COALESCE(payments, '') = ''
@@ -160,7 +222,7 @@ async function main() {
         if (res.outcome === "found") {
           for (const g of res.gateways) byGw.set(g, (byGw.get(g) || 0) + 1);
           for (const f of res.found) byVia.set(f.via, (byVia.get(f.via) || 0) + 1);
-          await write(sql`UPDATE imported_stores SET payments = ${res.gateways.join("; ")}, payments_source = 'storefront',
+          await write(sql`UPDATE imported_stores SET payments = ${res.gateways.join("; ")}, payments_source = ${res.source || "storefront"},
                 payments_checked_at = now() ${answered}
               WHERE domain = ${domain} AND COALESCE(payments, '') = ''`, domain);
         } else if (res.outcome === "portal") {
