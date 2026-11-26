@@ -6,7 +6,12 @@
  *  never the Shopify edge, no paid API) and publishes only when lib/woo-confirm.mjs says "store":
  *  >= MIN_BUYABLE buyable, priced products, not a theme demo, priced in the market's currency.
  *
- *  Quote-only catalogues, demos, one-product sites and missing Store APIs stay banked and are stamped
+ *  Quote-only catalogues (real products, no online checkout) also publish since 2026-11-26, as leads
+ *  with payments_source 'no_checkout' (a known answer, not a payments gap), through the same homepage,
+ *  holding-page and name checks. --recheck-quotes re-asks sites already stamped, once, so the ones
+ *  banked as quote-only before that change get their publish.
+ *
+ *  Demos, one-product sites and missing Store APIs stay banked and are stamped
  *  (cms_confirm_at, the shared confirm-lane clock) so they are asked again in 30 days, not every run.
  *  Unreachable sites come back in 7.
  *
@@ -28,6 +33,7 @@ const LIMIT = Number(arg("--limit", 1500));
 const CONC = Number(arg("--concurrency", 6));
 const PAUSE_MS = Number(arg("--pause", 400));
 const COUNTRIES = arg("--country", "ZA,KE,NG").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+const RECHECK_QUOTES = process.argv.includes("--recheck-quotes");
 const DOMAINS = arg("--domains", null)?.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean) ?? null;
 const EDITOR = "lane:confirm-woo-catalogue";
 // Same rule as confirm-other-cms: staging/API/dev hosts are never a lead in their own right.
@@ -85,8 +91,8 @@ async function main() {
            AND (s.live_status IS NULL OR s.live_status NOT IN ('dead', 'migrated'))
            AND s.domain NOT LIKE 'www.%'
            AND s.domain !~* ${NON_PROD_HOST}
-           AND (s.cms_confirm_at IS NULL OR s.cms_confirm_at < now() -
-                CASE WHEN s.live_status = 'active' THEN interval '30 days' ELSE interval '7 days' END)
+           ${RECHECK_QUOTES ? sql`AND s.cms_confirm_at IS NOT NULL` : sql`AND (s.cms_confirm_at IS NULL OR s.cms_confirm_at < now() -
+                CASE WHEN s.live_status = 'active' THEN interval '30 days' ELSE interval '7 days' END)`}
            -- A person's unpublish is final for this lane (see header).
            AND NOT EXISTS (
              SELECT 1 FROM (SELECT DISTINCT ON (domain) domain, new_value FROM store_edits
@@ -114,7 +120,8 @@ async function main() {
         }
 
         let name = null;
-        if (verdict === "store") {
+        const kind = verdict;                       // store | quote_only reach the publish gates
+        if (verdict === "store" || verdict === "quote_only") {
           const home = await homepage(r.domain);
           if (!home) { verdict = "home_unreachable"; detail += ", homepage did not load"; }
           else if (home.holding) { verdict = "holding_page"; detail += ", coming-soon/maintenance page"; }
@@ -126,14 +133,16 @@ async function main() {
             if (!name) { verdict = "no_name"; detail += ", no usable name"; }
           }
         }
+        const publish = verdict === "store" || verdict === "quote_only";
         tally[verdict] = (tally[verdict] ?? 0) + 1;
-        if (verdict === "store") published++;
-        if (verdict === "store" || (DRY && shown.length < 15)) shown.push(`${verdict.padEnd(14)} ${r.domain.padEnd(36)} ${detail}${verdict === "store" ? `  "${name}"` : ""}`);
+        if (publish) published++;
+        if (publish || (DRY && shown.length < 15)) shown.push(`${verdict.padEnd(14)} ${r.domain.padEnd(36)} ${detail}${publish ? `  "${name}"` : ""}`);
 
         if (!DRY) {
           // Liveness belongs to verify-liveness (memory: liveness-column-ownership). Only a publish
           // asserts it, exactly as confirm-other-cms does; every other outcome just stamps the clock.
-          if (verdict === "store") {
+          if (publish) {
+            const quote = kind === "quote_only";
             await sql.begin(async (q) => {
               // A buyable catalogue outranks an older homepage-based 'not_a_store' / empty activity label:
               // lib/browse.ts hides not_a_store from the lead list, so leaving it would publish a store
@@ -142,9 +151,11 @@ async function main() {
               await q`UPDATE imported_stores SET published = true, name = ${name}, live_status = 'active',
                         live_checked_at = now(), cms_confirm_at = now(),
                         activity_tier = CASE WHEN activity_tier IS NULL OR activity_tier = 'not_a_store' THEN 'active' ELSE activity_tier END
+                        ${quote ? q`, payments_source = CASE WHEN COALESCE(payments, '') = '' THEN 'no_checkout' ELSE payments_source END,
+                                     payments_checked_at = CASE WHEN COALESCE(payments, '') = '' THEN now() ELSE payments_checked_at END` : q``}
                       WHERE domain = ${r.domain} AND NOT published`;
               await q`INSERT INTO store_edits (domain, editor, field, old_value, new_value)
-                      VALUES (${r.domain}, ${EDITOR}, 'published', 'false', ${`true (Woo catalogue: ${detail})`})`;
+                      VALUES (${r.domain}, ${EDITOR}, 'published', 'false', ${`true (Woo ${quote ? "quote catalogue, no online checkout" : "catalogue"}: ${detail})`})`;
             }).catch((e) => console.log(`!! write failed ${r.domain}: ${e.message}`));
           } else {
             await sql`UPDATE imported_stores SET cms_confirm_at = now() WHERE domain = ${r.domain}`.catch((e) => console.log(`!! stamp failed ${r.domain}: ${e.message}`));
