@@ -8,8 +8,9 @@
  *                 not a coverage gap; it is the wrong column.
  *   technologies  cross-platform JS / vendor fingerprints (Klaviyo, Gorgias, Meta Pixel…),
  *                 already clean names, ';'-separated. Filled for ~56% Shopify / ~89% non-Shopify.
- *   plugins       WP/Woo/PrestaShop module slugs (wp-content/plugins/<slug>, /modules/<slug>),
- *                 ';'-separated. Non-Shopify only.
+ *   plugins       add-ons read from the storefront's own markup, ';'-separated. Non-Shopify only:
+ *                 WP/Woo/PrestaShop slugs (wp-content/plugins/<slug>, /modules/<slug>), OpenCart
+ *                 extension slugs, Magento Vendor_Module names, and Wix / Odoo app names as shown.
  *
  * A non-Shopify store's entire stack lives in technologies+plugins. Any surface that reads
  * `apps` on its own (a drawer section, a facet, a coverage metric, an onboarding agent
@@ -50,10 +51,11 @@ export function techNames(raw: string | null | undefined): string[] {
   return split(raw);
 }
 
-/** WP/Woo/Presta plugin/module slugs → readable names. */
+/** Plugin slugs → readable names. Already-cased names pass through (Wix "Fera Reviews"); a Magento
+ *  module keeps its vendor (Klevu_Search → "Klevu Search"). */
 export function pluginNames(raw: string | null | undefined): string[] {
   return split(raw).filter((s) => s.length >= 3 && !APP_SKIP.has(s.toLowerCase()))
-    .map((s) => (/[A-Z ]/.test(s) ? s : titleCase(s)));
+    .map((s) => (/[A-Z ]/.test(s) ? s.replace(/_/g, " ") : titleCase(s)));
 }
 
 /**

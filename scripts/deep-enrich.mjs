@@ -16,6 +16,7 @@
  * existing (never drop a StoreLeads/probe value). Always banks homepage_text + stamps deep_enriched_at.
  */
 import postgres from "postgres";
+import { platformAddons, looksOdoo, odooInfoApps, ODOO_INFO_PATH } from "./lib/platform-addons.mjs";
 
 const DRY = process.argv.includes("--dry");
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : d; };
@@ -36,13 +37,13 @@ const countries = cArg ? cArg.split(",").map((c) => c.trim().toUpperCase()) : MA
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const clean = (d) => (d || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 
-async function getHtml(domain, ms = 12000) {
+async function getHtml(domain, ms = 12000, path = "/") {
   try {
-    const r = await fetch(`https://${clean(domain)}/`, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.timeout(ms) });
+    const r = await fetch(`https://${clean(domain)}${path}`, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.timeout(ms) });
     if (!r.ok) return null;
     const ct = r.headers.get("content-type") || "";
     if (!/html/i.test(ct)) return null;
-    return (await r.text()).slice(0, 1_500_000); // cap pathological pages
+    return (await r.text()).slice(0, 3_000_000); // cap pathological pages (a Wix viewer model runs to ~3 MB; its app list sits past 1.5 MB on some)
   } catch { return null; }
 }
 
@@ -153,7 +154,7 @@ async function main() {
     if (!rows.length) { console.log("Nothing to deep-enrich — all matching stores done within the window."); return; }
     console.log(`Deep-enriching ${rows.length} store(s) at concurrency ${CONC}${DRY ? " [DRY]" : ""}…\n`);
 
-    let idx = 0, checked = 0, ok = 0, unreachable = 0, subs = 0;
+    let idx = 0, checked = 0, ok = 0, unreachable = 0, subs = 0, gained = 0;
     async function worker() {
       while (idx < rows.length) {
         const r = rows[idx++];
@@ -161,18 +162,23 @@ async function main() {
         const h = await getHtml(r.domain);
         if (!h) { unreachable++; if (!DRY) await sql`UPDATE imported_stores SET deep_enriched_at = now() WHERE domain = ${clean(r.domain)}`.catch(() => {}); continue; }
         ok++;
-        const theme = wpTheme(h);
-        const plugins = cmsPlugins(h, r.platform);
+        // Platform add-ons (Wix apps, Magento modules, OpenCart extensions) from the same page, plus
+        // Odoo's /website/info app list: one extra GET, only on pages that are Odoo.
+        const addons = platformAddons(h, clean(r.domain));
+        const odoo = looksOdoo(h, r.platform) ? odooInfoApps(await getHtml(r.domain, 12000, ODOO_INFO_PATH)) : [];
+        const theme = wpTheme(h) || addons.theme;
+        const plugins = [...new Set([...cmsPlugins(h, r.platform), ...addons.plugins, ...odoo])];
         const tech = techFingerprints(h);
         const st = subTools(h);
         if (st.length) subs++;
         const newTheme = r.theme || theme;                    // fill-if-empty (don't clobber StoreLeads)
         const newPlugins = union(r.plugins, plugins);
+        if (newPlugins.length > union(r.plugins, []).length) gained++;
         const newTech = union(r.technologies, tech);
         const newSubs = union(r.subscription_tools, st);
         const text = pageText(h);
         if (DRY) {
-          if (checked <= 12) console.log(`● ${clean(r.domain)} [${r.platform}] theme=${newTheme || "-"} plugins=${newPlugins.length} tech=${newTech.length}${st.length ? " SUB→" + st.join(",") : ""}`);
+          if (checked <= 12) console.log(`● ${clean(r.domain)} [${r.platform}] theme=${newTheme || "-"} plugins=${newPlugins.length}${newPlugins.length ? " (" + newPlugins.slice(0, 6).join("; ") + ")" : ""} tech=${newTech.length}${st.length ? " SUB→" + st.join(",") : ""}`);
         } else {
           await sql`UPDATE imported_stores SET
             theme = ${newTheme},
@@ -187,7 +193,7 @@ async function main() {
       }
     }
     await Promise.all(Array.from({ length: CONC }, worker));
-    console.log(`\nDone${DRY ? " [DRY — no writes]" : ""}. ${checked} checked · ${ok} scanned · ${unreachable} unreachable · ${subs} with a subscription signal.`);
+    console.log(`\nDone${DRY ? " [DRY — no writes]" : ""}. ${checked} checked · ${ok} scanned · ${unreachable} unreachable · ${gained} gained add-ons · ${subs} with a subscription signal.`);
   } finally { await sql.end(); }
 }
 main().catch((e) => { console.error("failed:", e.message); process.exit(1); });
