@@ -515,9 +515,14 @@ export async function buildBrowseRollup(opts: { countries?: string[]; bucketRows
     throw e;
   }
   await sql`UPDATE browse_rollup_build SET status = 'done', finished_at = now(), rows = ${rows}, partitions = ${partitions} WHERE build_id = ${build}`;
-  // Keep the two newest finished builds (a reader mid-request may still be on the previous one).
+  // Keep the two newest finished builds (a reader mid-request may still be on the previous one), AND
+  // the two newest that cover every visible market — otherwise two narrower builds in a row would
+  // delete the build the dashboard is serving from.
   await sql`DELETE FROM browse_rollup WHERE build_id NOT IN (
-    SELECT build_id FROM browse_rollup_build WHERE status = 'done' ORDER BY build_id DESC LIMIT 2)
+      SELECT build_id FROM browse_rollup_build WHERE status = 'done' ORDER BY build_id DESC LIMIT 2)
+    AND build_id NOT IN (
+      SELECT build_id FROM browse_rollup_build WHERE status = 'done' AND scope @> ${[...VISIBLE_MARKETS]}::text[]
+      ORDER BY build_id DESC LIMIT 2)
     AND build_id NOT IN (SELECT build_id FROM browse_rollup_build WHERE status = 'building')`;
   await sql`DELETE FROM browse_rollup_build WHERE build_id < ${build} - 7 * 864e5`;
   return { build, rows, partitions, seconds: Math.round((Date.now() - t0) / 1000) };
@@ -570,17 +575,21 @@ function rollupScope(f: BrowseFilters): { countries: string[]; platforms: string
   return { countries, platforms };
 }
 
-let _rollupBuild: { at: number; id: number | null; scope: string[] } | null = null;
-async function currentRollup(): Promise<{ id: number; scope: string[] } | null> {
-  if (_rollupBuild && Date.now() - _rollupBuild.at < 60_000) return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
-  try {
-    const [b] = await db()<{ build_id: string; scope: string[] }[]>`
-      SELECT build_id, scope FROM browse_rollup_build
-      WHERE status = 'done' AND finished_at > now() - ${ROLLUP_MAX_AGE}::interval
-      ORDER BY build_id DESC LIMIT 1`;
-    _rollupBuild = { at: Date.now(), id: b ? Number(b.build_id) : null, scope: b?.scope ?? [] };
-  } catch { _rollupBuild = { at: Date.now(), id: null, scope: [] }; }   // table missing / DB busy → fall back
-  return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
+// The newest fresh build whose scope COVERS the countries asked for. Picking simply the newest build
+// let a one-off build for other countries (a `--countries US` sizing run) hide every visible market
+// until the next hourly build, sending all of Africa's views to the live scan.
+let _rollupBuilds: { at: number; list: { id: number; scope: string[] }[] } | null = null;
+async function currentRollup(countries: string[]): Promise<{ id: number; scope: string[] } | null> {
+  if (!_rollupBuilds || Date.now() - _rollupBuilds.at >= 60_000) {
+    try {
+      const rows = await db()<{ build_id: string; scope: string[] }[]>`
+        SELECT build_id, scope FROM browse_rollup_build
+        WHERE status = 'done' AND finished_at > now() - ${ROLLUP_MAX_AGE}::interval
+        ORDER BY build_id DESC LIMIT 20`;
+      _rollupBuilds = { at: Date.now(), list: rows.map((b) => ({ id: Number(b.build_id), scope: b.scope })) };
+    } catch { _rollupBuilds = { at: Date.now(), list: [] }; }   // table missing / DB busy → fall back
+  }
+  return _rollupBuilds.list.find((b) => countries.every((c) => b.scope.includes(c))) ?? null;
 }
 
 /** Answer an aggregate from the summary table, or null when it can't (other filters, stale/missing
@@ -588,8 +597,8 @@ async function currentRollup(): Promise<{ id: number; scope: string[] } | null> 
 async function rollupAgg(f: BrowseFilters, wantApps: boolean): Promise<AggParsed | null> {
   const scope = rollupScope(f);
   if (!scope) return null;
-  const cur = await currentRollup();
-  if (!cur || !scope.countries.every((c) => cur.scope.includes(c))) return null;
+  const cur = await currentRollup(scope.countries);
+  if (!cur) return null;
   try {
     const sql = db();
     const rows = await sql<{ facet: string; value: string; n: string }[]>`
