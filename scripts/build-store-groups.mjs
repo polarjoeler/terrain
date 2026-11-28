@@ -175,14 +175,21 @@ for (const [k, set] of sitesBy) {
 const groups = new Map();     // group root → [rowIdx]
 rows.forEach((_, i) => { const g = sfind(siteOf[i]); (groups.get(g) ?? groups.set(g, []).get(g)).push(i); });
 
-const outGroups = []; const outMembers = [];
+const outGroups = []; const outMembers = []; const usedGids = new Set();
 const sizes = { "2": 0, "3": 0, "4": 0, "5-9": 0, "10-40": 0, review: 0 };
 for (const idx of groups.values()) {
   // A *.myshopify.com host that links to a group is that store's own alias, not another store.
   const sites = new Set(idx.filter((i) => !/\.myshopify\.com$/.test(rows[i].domain)).map((i) => siteOf[i]));
   if (sites.size < 2) continue;                    // one store on several hostnames — not a group
-  const regs = [...new Set(idx.map((i) => siteKey(rows[i].domain).slice(5)))].sort();
-  const gid = "g_" + createHash("md5").update(regs[0]).digest("hex").slice(0, 12);
+  // Strip the key's prefix by name: the old .slice(5) fitted "host:" but cut a letter off every
+  // "reg:" key, so masa.co.za and pasa.co.za both read "asa.co.za". Two groups then hashed to one id
+  // and the upsert failed ("cannot affect row a second time") every night from 2026-11-21.
+  const regs = [...new Set(idx.map((i) => siteKey(rows[i].domain).replace(/^(reg|host):/, "")))].sort();
+  // Every site belongs to exactly one group, so the group's whole site list is unique to it; hashing
+  // regs[0] alone is kept for stable ids, with the full list as the tie-break if two ever collide.
+  let gid = "g_" + createHash("md5").update(regs[0]).digest("hex").slice(0, 12);
+  if (usedGids.has(gid)) gid = "g_" + createHash("md5").update(regs.join(",")).digest("hex").slice(0, 12);
+  usedGids.add(gid);
   // Operator: a corporate email domain the members share that isn't itself one of their stores
   // (tregerbrands.co.za), else the biggest store's name.
   const maildoms = {};
