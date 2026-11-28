@@ -85,7 +85,9 @@ async function main() {
         const tier = r.isStore ? "selling" : "not_a_store";
         const pay = r.isStore && r.gateways.length ? r.gateways.join("; ") : null;
         await sql`UPDATE imported_stores SET
-          activity_tier = ${tier},
+          -- a published row's 'dormant' is classify-wix-selling's verdict (apps + sitemap), finer than this
+          -- probe's store markers; keep it so the two lanes don't flip the row every 30 days
+          activity_tier = CASE WHEN published AND activity_tier = 'dormant' THEN activity_tier ELSE ${tier} END,
           payments = COALESCE(${pay}, payments),
           payments_checked_at = now()
           WHERE domain = ${domain}`.catch(() => {});
