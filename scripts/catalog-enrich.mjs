@@ -191,8 +191,13 @@ async function main() {
       -- ZA-first: the focus markets we sell into lead (the launch metric is per-country and this is
       -- where coverage matters), then stores missing a launch date, then confirmed Shopify before the
       -- unconfirmed NULL bucket (banked ccTLD certs that time out and tank throughput).
-      ORDER BY (upper(country) = ANY(ARRAY['ZA','KE','NG'])) DESC, (launched_at IS NULL OR launched_source = 'cert') DESC, (platform = 'Shopify') DESC,
-               discovered_at DESC NULLS LAST, estimated_monthly_sales DESC NULLS LAST, created_at DESC
+      -- COALESCE: a NULL country sorts FIRST under DESC, so 85k not-yet-placed stores headed the queue
+      -- ahead of ZA/KE/NG (2026-11-28: 5,521 recent ZA/KE/NG Shopify leads never dated). And within a
+      -- discovery day the order rotates (md5 of domain + date): retriable failures stay unstamped, and
+      -- a fixed order let the same 1,500 refusing stores head every run (0/1500 from 11-27).
+      ORDER BY COALESCE(upper(country) = ANY(ARRAY['ZA','KE','NG']), false) DESC,
+               (launched_at IS NULL OR launched_source = 'cert') DESC, COALESCE(platform = 'Shopify', false) DESC,
+               discovered_at::date DESC NULLS LAST, md5(domain || current_date::text)
       ${LIMIT > 0 ? sql`LIMIT ${LIMIT}` : sql``}`;
     console.log(`${FP ? "Fingerprinting" : "Catalog-enriching"} ${rows.length.toLocaleString()} stores (concurrency ${CONCURRENCY}${PROXIED ? `, fanned across ${PROXIES.length} proxies` : ", DIRECT single-IP"})…`);
 
