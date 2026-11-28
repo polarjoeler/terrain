@@ -13,6 +13,7 @@
  */
 import postgres from "postgres";
 import { readFileSync, writeFileSync, statSync } from "fs";
+import { readNewLines } from "./lib/read-new-lines.mjs";
 
 const FINDS = process.env.CT_FINDS || "/Users/joel/shopify-radar/feed/ct-discoveries.jsonl";
 // Byte-offset watermark. ct-discoveries.jsonl is append-only, but the script re-read
@@ -43,21 +44,25 @@ function countryFromDomain(d) {
   return tld && tld.length === 2 && !GENERIC.has(tld) ? tld.toUpperCase() : null;
 }
 
+// Most bytes one run reads. The file passed 2 GiB on 2026-11-25 and readFileSync() of the WHOLE
+// file (to slice the new tail) threw ERR_FS_FILE_TOO_LARGE, which the catch below reported as
+// "no file yet": landing silently stopped for 3 days while ct_tail kept appending. Now we read only
+// [offset, offset+MAX) with a positioned read, so the file's total size no longer matters, and a
+// backlog drains over several runs (normal growth is ~2 MB per 30-minute run).
+const MAX_BYTES = Number(process.env.CT_MAX_BYTES || 16 * 1024 * 1024);
+
 async function main() {
   let text = "";
-  try {
-    const startOffset = readOffset();
-    const fullSize = statSync(FINDS).size;
-    // Slice from the watermark. Read as a Buffer so the offset is in BYTES, matching
-    // statSync().size — slicing a decoded string would drift on any multi-byte char.
-    text = readFileSync(FINDS).subarray(startOffset, fullSize).toString("utf8");
-    if (startOffset) text = text.slice(text.indexOf("\n") + 1);   // drop a partial first line
-    console.log(`reading from byte ${startOffset.toLocaleString()} of ${fullSize.toLocaleString()} (${((1 - startOffset / fullSize) * 100).toFixed(1)}% new)`);
-    globalThis.__ctNewOffset = fullSize;
-  } catch {
-    console.log(`No CT discoveries file at ${FINDS} yet — nothing to land.`);
-    return;
-  }
+  let fullSize;
+  try { fullSize = statSync(FINDS).size; }
+  catch { console.log(`No CT discoveries file at ${FINDS} yet — nothing to land.`); return; }
+  const startOffset = readOffset();
+  const { text: chunk, next } = readNewLines(FINDS, startOffset, fullSize, MAX_BYTES);   // read errors now throw loudly
+  text = chunk;
+  globalThis.__ctNewOffset = next;
+  const left = fullSize - next;
+  console.log(`reading bytes ${startOffset.toLocaleString()}→${next.toLocaleString()} of ${fullSize.toLocaleString()}` +
+    (left > 0 ? ` · ${(left / 1048576).toFixed(0)} MB still queued for later runs` : ""));
 
   // domain -> { at: earliest seen date, country }
   const seen = new Map();
@@ -83,7 +88,8 @@ async function main() {
     }
   }
   if (!seen.size) {
-    console.log("CT discoveries file is empty — nothing to land.");
+    writeFileSync(OFFSET_FILE, String(globalThis.__ctNewOffset));   // skip past a chunk with nothing to land
+    console.log("No new CT discoveries since the last run — nothing to land.");
     return;
   }
 
