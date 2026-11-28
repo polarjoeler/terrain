@@ -21,7 +21,7 @@ import { EMAIL_TOOLS, HARD_NOT_TRADING } from "./store-signals.ts";
 import { ROW_CAP } from "./browse-limits";
 import { socialUrl } from "./social";
 
-export { ROW_CAP };
+export { ROW_CAP, ORDER };
 
 // Shared pool (see lib/db.ts). This module previously created its own pool WITHOUT prepare:false —
 // a latent bug on the Supabase transaction pooler (which rejects prepared statements). The shared
@@ -181,9 +181,31 @@ export type BrowseResult = {
 // correlated form cost ~8s on the full-table aggregate, the join ~0.
 const GROUPED_SET = `(SELECT m.domain FROM store_group_members m JOIN store_groups g ON g.group_id = m.group_id
   WHERE NOT g.review AND g.n_sites > 1)`;
-const GROUP_JOIN = `LEFT JOIN (SELECT m.domain AS g_domain, g.group_id AS g_id, g.n_sites AS g_sites
+const groupJoin = (t: Src) => `LEFT JOIN (SELECT m.domain AS g_domain, g.group_id AS g_id, g.n_sites AS g_sites
   FROM store_group_members m JOIN store_groups g ON g.group_id = m.group_id
-  WHERE NOT g.review AND g.n_sites > 1) grp ON grp.g_domain = imported_stores.domain`;
+  WHERE NOT g.review AND g.n_sites > 1) grp ON grp.g_domain = ${t}.domain`;
+const GROUP_JOIN = groupJoin("imported_stores");
+
+/* ── Source table for aggregates: imported_stores or the slim store_browse ─────────────────────────
+ * Every count and facet used to scan imported_stores (6.9GB, ~150 columns, internal blobs included)
+ * plus a per-row store_dns lookup. store_browse (scripts/store-browse.mjs) is one narrow row per
+ * PUBLISHED store worldwide: the same column names, only the ones the filters and facets read, with
+ * store_dns.email_provider/tools and store_not_trading.reason copied in (dns_email, dns_tools,
+ * nt_reason), kept in step by triggers on all three tables. Because the names match, buildWhere and
+ * aggColumns run on either table; only the FROM changes. The row page and the export stay on
+ * imported_stores (they need display columns, and they are index-cheap). */
+type Src = "imported_stores" | "store_browse";
+let _slim: { at: number; ok: boolean } | null = null;
+/** True once store_browse exists and its backfill has finished (no 'store-browse.backfill' marker). */
+export async function slimReady(): Promise<boolean> {
+  if (_slim && Date.now() - _slim.at < 5 * 60_000) return _slim.ok;
+  try {
+    const [r] = await db()<{ ok: boolean }[]>`SELECT to_regclass('public.store_browse') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'store-browse.backfill') AS ok`;
+    _slim = { at: Date.now(), ok: Boolean(r?.ok) };
+  } catch { _slim = { at: Date.now(), ok: false }; }
+  return _slim.ok;
+}
 
 const d = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 10) : null);
 
@@ -219,14 +241,15 @@ const NT_LATERAL = `LEFT JOIN LATERAL (SELECT nt.reason AS nt_reason
 const DNS_NULLS = "NULL::text AS dns_email, NULL::text[] AS dns_tools, NULL::text[] AS dns_verified";
 const textArray = (xs: readonly string[]) => `ARRAY[${xs.map((x) => `'${x.replace(/'/g, "''")}'`).join(",")}]::text[]`;
 
-function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
+function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE, src: Src = "imported_stores", markets: readonly string[] = VISIBLE_MARKETS) {
   const sql = db();
+  const slim = src === "store_browse";
   const launchExpr = sql.unsafe(
     `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END))`,
   );
   const conds = [
     sql`published`,
-    sql`country = ANY(${[...VISIBLE_MARKETS]})`,
+    sql`country = ANY(${[...markets]})`,
   ];
   if (f.status === "migrated" || f.status === "dead") {
     // Terminal-state view (from the Overview "Migrations" / "Went dark" chips) — show exactly those.
@@ -274,17 +297,21 @@ function buildWhere(f: BrowseFilters, side: SideTables = NO_SIDE) {
   // DNS + not-trading filters are EXISTS against the side table's primary key (plus the GIN index on
   // store_dns.tools / the btree on email_provider), so the planner can drive either way, by index.
   // A filter on a table that doesn't exist yet matches nothing rather than everything.
-  if (f.emailProvider?.length) conds.push(side.dns
-    ? sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.email_provider = ANY(${f.emailProvider}))`
-    : sql`false`);
-  if (f.dnsTool?.length) conds.push(side.dns
-    ? sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.tools && ${f.dnsTool}::text[])`
-    : sql`false`);
-  if (f.notTrading?.length) conds.push(side.nt
-    ? sql`EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${f.notTrading}))`
-    : sql`false`);
+  // On store_browse the side-table fields are columns (both side tables are keyed on domain, one row
+  // per store, so a column test is the same set as the EXISTS).
+  if (f.emailProvider?.length) conds.push(!side.dns ? sql`false` : slim
+    ? sql`dns_email = ANY(${f.emailProvider})`
+    : sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.email_provider = ANY(${f.emailProvider}))`);
+  if (f.dnsTool?.length) conds.push(!side.dns ? sql`false` : slim
+    ? sql`dns_tools && ${f.dnsTool}::text[]`
+    : sql`EXISTS (SELECT 1 FROM store_dns sd WHERE sd.domain = imported_stores.domain AND sd.tools && ${f.dnsTool}::text[])`);
+  if (f.notTrading?.length) conds.push(!side.nt ? sql`false` : slim
+    ? sql`nt_reason = ANY(${f.notTrading})`
+    : sql`EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${f.notTrading}))`);
   if (f.hideNotTrading && side.nt) {
-    conds.push(sql`NOT EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${HARD_NOT_TRADING}))`);
+    conds.push(slim
+      ? sql`(nt_reason IS NULL OR NOT nt_reason = ANY(${HARD_NOT_TRADING}))`
+      : sql`NOT EXISTS (SELECT 1 FROM store_not_trading nt WHERE nt.domain = imported_stores.domain AND nt.reason = ANY(${HARD_NOT_TRADING}))`);
   }
   if (f.plus) conds.push(sql`plus`);
   if (f.hasEmail) conds.push(sql`${sql.unsafe(bestEmailSql)} IS NOT NULL AND ${sql.unsafe(bestEmailSql)} <> ''`);
@@ -346,7 +373,8 @@ async function universeCount(): Promise<number> {
   const fromRollup = await rollupAgg({}, false);
   if (fromRollup) { _universe = { at: Date.now(), n: fromRollup.total }; return fromRollup.total; }
   const sql = db();
-  const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int n FROM imported_stores WHERE ${buildWhere({})}`;
+  const src: Src = (await slimReady()) ? "store_browse" : "imported_stores";
+  const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int n FROM ${sql(src)} WHERE ${buildWhere({}, NO_SIDE, src)}`;
   _universe = { at: Date.now(), n };
   return n;
 }
@@ -462,11 +490,11 @@ async function rollupPartition(build: number, country: string, bucket: number, b
   // Buckets hash the OPERATOR, not the domain, so an operator's sites stay in one bucket and its
   // distinct count is exact within a partition.
   const bucketCond = buckets > 1 ? sql`AND mod(abs(hashtext(COALESCE(g_id, domain))), ${buckets}) = ${bucket}` : sql``;
+  const src: Src = (await slimReady()) ? "store_browse" : "imported_stores";
   const cte = sql`
     WITH f AS MATERIALIZED (
-      SELECT COALESCE(platform, '') AS pkey, ${aggColumns(side)}
-      FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
-        ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
+      SELECT COALESCE(platform, '') AS pkey, ${aggColumns(side, src)}
+      FROM ${sql(src)} ${sql.unsafe(groupJoin(src))} ${sql.unsafe(sideJoins(side, src))}
       WHERE published AND country = ${country}
         AND (live_status IS NULL OR live_status NOT IN ('dead','migrated'))
         AND activity_tier IS DISTINCT FROM 'not_a_store'
@@ -515,9 +543,14 @@ export async function buildBrowseRollup(opts: { countries?: string[]; bucketRows
     throw e;
   }
   await sql`UPDATE browse_rollup_build SET status = 'done', finished_at = now(), rows = ${rows}, partitions = ${partitions} WHERE build_id = ${build}`;
-  // Keep the two newest finished builds (a reader mid-request may still be on the previous one).
+  // Keep the two newest finished builds (a reader mid-request may still be on the previous one), AND
+  // the two newest that cover every visible market — otherwise two narrower builds in a row would
+  // delete the build the dashboard is serving from.
   await sql`DELETE FROM browse_rollup WHERE build_id NOT IN (
-    SELECT build_id FROM browse_rollup_build WHERE status = 'done' ORDER BY build_id DESC LIMIT 2)
+      SELECT build_id FROM browse_rollup_build WHERE status = 'done' ORDER BY build_id DESC LIMIT 2)
+    AND build_id NOT IN (
+      SELECT build_id FROM browse_rollup_build WHERE status = 'done' AND scope @> ${[...VISIBLE_MARKETS]}::text[]
+      ORDER BY build_id DESC LIMIT 2)
     AND build_id NOT IN (SELECT build_id FROM browse_rollup_build WHERE status = 'building')`;
   await sql`DELETE FROM browse_rollup_build WHERE build_id < ${build} - 7 * 864e5`;
   return { build, rows, partitions, seconds: Math.round((Date.now() - t0) / 1000) };
@@ -570,17 +603,21 @@ function rollupScope(f: BrowseFilters): { countries: string[]; platforms: string
   return { countries, platforms };
 }
 
-let _rollupBuild: { at: number; id: number | null; scope: string[] } | null = null;
-async function currentRollup(): Promise<{ id: number; scope: string[] } | null> {
-  if (_rollupBuild && Date.now() - _rollupBuild.at < 60_000) return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
-  try {
-    const [b] = await db()<{ build_id: string; scope: string[] }[]>`
-      SELECT build_id, scope FROM browse_rollup_build
-      WHERE status = 'done' AND finished_at > now() - ${ROLLUP_MAX_AGE}::interval
-      ORDER BY build_id DESC LIMIT 1`;
-    _rollupBuild = { at: Date.now(), id: b ? Number(b.build_id) : null, scope: b?.scope ?? [] };
-  } catch { _rollupBuild = { at: Date.now(), id: null, scope: [] }; }   // table missing / DB busy → fall back
-  return _rollupBuild.id ? { id: _rollupBuild.id, scope: _rollupBuild.scope } : null;
+// The newest fresh build whose scope COVERS the countries asked for. Picking simply the newest build
+// let a one-off build for other countries (a `--countries US` sizing run) hide every visible market
+// until the next hourly build, sending all of Africa's views to the live scan.
+let _rollupBuilds: { at: number; list: { id: number; scope: string[] }[] } | null = null;
+async function currentRollup(countries: string[]): Promise<{ id: number; scope: string[] } | null> {
+  if (!_rollupBuilds || Date.now() - _rollupBuilds.at >= 60_000) {
+    try {
+      const rows = await db()<{ build_id: string; scope: string[] }[]>`
+        SELECT build_id, scope FROM browse_rollup_build
+        WHERE status = 'done' AND finished_at > now() - ${ROLLUP_MAX_AGE}::interval
+        ORDER BY build_id DESC LIMIT 20`;
+      _rollupBuilds = { at: Date.now(), list: rows.map((b) => ({ id: Number(b.build_id), scope: b.scope })) };
+    } catch { _rollupBuilds = { at: Date.now(), list: [] }; }   // table missing / DB busy → fall back
+  }
+  return _rollupBuilds.list.find((b) => countries.every((c) => b.scope.includes(c))) ?? null;
 }
 
 /** Answer an aggregate from the summary table, or null when it can't (other filters, stale/missing
@@ -588,8 +625,8 @@ async function currentRollup(): Promise<{ id: number; scope: string[] } | null> 
 async function rollupAgg(f: BrowseFilters, wantApps: boolean): Promise<AggParsed | null> {
   const scope = rollupScope(f);
   if (!scope) return null;
-  const cur = await currentRollup();
-  if (!cur || !scope.countries.every((c) => cur.scope.includes(c))) return null;
+  const cur = await currentRollup(scope.countries);
+  if (!cur) return null;
   try {
     const sql = db();
     const rows = await sql<{ facet: string; value: string; n: string }[]>`
@@ -618,7 +655,12 @@ async function rollupAgg(f: BrowseFilters, wantApps: boolean): Promise<AggParsed
 
 /** The per-store columns every browse aggregate reads. Shared by the live scan (browseQuery) and the
  *  summary-table build (buildBrowseRollup) so the two can never count differently. */
-function aggColumns(side: SideTables) {
+/** The side-table joins the imported_stores scan needs; store_browse carries those fields itself. */
+function sideJoins(side: SideTables, src: Src): string {
+  return src === "store_browse" ? "" : `${side.dns ? DNS_LATERAL : ""} ${side.nt ? NT_LATERAL : ""}`;
+}
+function aggColumns(side: SideTables, src: Src = "imported_stores") {
+  const slim = src === "store_browse";
   const sql = db();
   const band = sql.unsafe(bandSqlExpr());
   return sql`country, platform, city, category, btrim(theme) AS theme,
@@ -631,8 +673,8 @@ function aggColumns(side: SideTables) {
              COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on,
              discovered_at,
              COALESCE(g_id, domain) AS operator,
-             ${sql.unsafe(side.dns ? "dns.dns_email, dns.dns_tools" : "NULL::text AS dns_email, NULL::text[] AS dns_tools")},
-             ${sql.unsafe(side.nt ? "ntr.nt_reason" : "NULL::text AS nt_reason")}`;
+             ${sql.unsafe(!side.dns ? "NULL::text AS dns_email, NULL::text[] AS dns_tools" : slim ? "dns_email, dns_tools" : "dns.dns_email, dns.dns_tools")},
+             ${sql.unsafe(!side.nt ? "NULL::text AS nt_reason" : slim ? "nt_reason" : "ntr.nt_reason")}`;
 }
 
 const toFacet = (v: unknown): Facet =>
@@ -657,24 +699,12 @@ function parseAgg(agg: Record<string, unknown>): AggParsed {
   };
 }
 
-export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
-  const sql = db();
-  const side = await sideTables();
-  const where = buildWhere(f, side);
-  const usd = sql.unsafe(usdSqlExpr());
-  const band = sql.unsafe(bandSqlExpr());
-  // The Apps facet is a regex over every row's app-store URLs — the single most expensive sub-query.
-  // Apps exist only on Shopify stores and the UI only shows the Apps facet when Shopify is selected,
-  // so compute it ONLY then; otherwise return an empty facet and skip the scan.
+/** The live aggregate: every count, facet and recency figure for one filter, in ONE scan. `src`
+ *  picks the table (store_browse once it's ready); `markets` overrides the visibility gate, for
+ *  sizing runs only. Takes `sql` so a caller can run it inside its own transaction. */
+export function aggregateQuery(sql: ReturnType<typeof db>, f: BrowseFilters, side: SideTables, src: Src = "imported_stores", markets: readonly string[] = VISIBLE_MARKETS) {
+  const where = buildWhere(f, side, src, markets);
   const wantApps = f.platform?.some((p) => p.toLowerCase() === "shopify") ?? false;
-  const launchSel = sql.unsafe(
-    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
-  );
-  const limit = Math.min(f.limit ?? 50, ROW_CAP);
-  const offset = f.offset ?? 0;
-  // Unknown keys (an old saved list, a hand-edited request) fall back to the default order.
-  const order = sql.unsafe(ORDER[f.sort as SortKey] ?? ORDER.new);
-
   // ONE scan for every aggregate. The first cut ran 16 sequential queries (total,
   // universe, 6 facets, 7 recency counts) at ~1s each — 15.8s for a page view.
   // A MATERIALIZED CTE scans the filtered set once; the facet GROUP BYs and the
@@ -707,20 +737,10 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
         FROM (SELECT tok AS v, count(*)::int n FROM f, unnest(f.dns_tools) AS tok
               WHERE tok <> ALL(${textArray(EMAIL_TOOLS)}) GROUP BY 1 ORDER BY n DESC LIMIT 40) t)`;
 
-  const key = aggKey(f);
-  const memHit = f.refresh ? undefined : _aggCache.get(key);
-  let A: AggParsed | null = memHit && Date.now() - memHit.at < AGG_TTL_MS ? memHit.v : null;
-  // L1.5: the summary table answers any country/platform view exactly, at most an hour old.
-  if (!A && !f.refresh) A = await rollupAgg(f, wantApps);
-  if (!A && !f.refresh) A = await dbAggGet(sql, key);   // L2: durable cross-instance cache, read before the heavy scan
-  if (A) {
-    _aggCache.set(key, { at: Date.now(), v: A });
-  } else {
-    const [agg] = await sql<Record<string, unknown>[]>`
+  return sql<Record<string, unknown>[]>`
     WITH f AS MATERIALIZED (
-      SELECT ${aggColumns(side)}
-      FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
-        ${sql.unsafe(side.dns ? DNS_LATERAL : "")} ${sql.unsafe(side.nt ? NT_LATERAL : "")}
+      SELECT ${aggColumns(side, src)}
+      FROM ${sql(src)} ${sql.unsafe(groupJoin(src))} ${sql.unsafe(sideJoins(side, src))}
       WHERE ${where}
     )
     SELECT (SELECT count(*)::int FROM f) AS total,
@@ -760,12 +780,70 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
               '7',   count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 7),
               '30',  count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 30),
               '365', count(*) FILTER (WHERE discovered_at >= CURRENT_DATE - 365)) FROM f) AS r_discovered`;
+}
+
+/** The row page's domain pick on the slim table: the same WHERE and ORDER as the full row query. */
+export function rowPickQuery(sql: ReturnType<typeof db>, f: BrowseFilters, side: SideTables, src: Src, markets: readonly string[], order: ReturnType<typeof sql.unsafe>, limit: number, offset: number) {
+  const launchSel = sql.unsafe(
+    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
+  );
+  return sql<{ domain: string }[]>`
+    SELECT domain, ${launchSel} FROM ${sql(src)}
+    WHERE ${buildWhere(f, side, src, markets)}
+    ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`;
+}
+
+export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> {
+  const sql = db();
+  const side = await sideTables();
+  const where = buildWhere(f, side);
+  const usd = sql.unsafe(usdSqlExpr());
+  const band = sql.unsafe(bandSqlExpr());
+  // The Apps facet is a regex over every row's app-store URLs — the single most expensive sub-query.
+  // Apps exist only on Shopify stores and the UI only shows the Apps facet when Shopify is selected,
+  // so compute it ONLY then; otherwise return an empty facet and skip the scan.
+  const wantApps = f.platform?.some((p) => p.toLowerCase() === "shopify") ?? false;
+  const launchSel = sql.unsafe(
+    `COALESCE((CASE WHEN first_product_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN left(first_product_at,10)::date END), (CASE WHEN launched_source IS DISTINCT FROM 'cert' THEN launched_at END)) AS launched_on`,
+  );
+  const limit = Math.min(f.limit ?? 50, ROW_CAP);
+  const offset = f.offset ?? 0;
+  // Unknown keys (an old saved list, a hand-edited request) fall back to the default order.
+  const order = sql.unsafe(ORDER[f.sort as SortKey] ?? ORDER.new);
+
+  const key = aggKey(f);
+  const memHit = f.refresh ? undefined : _aggCache.get(key);
+  let A: AggParsed | null = memHit && Date.now() - memHit.at < AGG_TTL_MS ? memHit.v : null;
+  // L1.5: the summary table answers any country/platform view exactly, at most an hour old.
+  if (!A && !f.refresh) A = await rollupAgg(f, wantApps);
+  if (!A && !f.refresh) A = await dbAggGet(sql, key);   // L2: durable cross-instance cache, read before the heavy scan
+  if (A) {
+    _aggCache.set(key, { at: Date.now(), v: A });
+  } else {
+    // The slim table carries only the columns listed in scripts/store-browse.mjs. If a filter or facet
+    // ever reads one it lacks (42703) or the table is gone (42P01), answer from imported_stores rather
+    // than breaking the page — and say so in the logs, because it means the column list needs adding to.
+    const src: Src = (await slimReady()) ? "store_browse" : "imported_stores";
+    let agg: Record<string, unknown>;
+    try {
+      [agg] = await aggregateQuery(sql, f, side, src);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (src !== "store_browse" || (code !== "42703" && code !== "42P01")) throw e;
+      console.error(`browse: store_browse can't answer (${code}: ${(e as Error).message}) — reading imported_stores`);
+      [agg] = await aggregateQuery(sql, f, side, "imported_stores");
+    }
     A = parseAgg(agg);
     _aggCache.set(key, { at: Date.now(), v: A });
     void dbAggSet(sql, key, A);   // write-through so the next cold instance reads it back instead of re-scanning
   }
 
-  const rows = await sql<Record<string, unknown>[]>`
+  // The page of rows. Filtering and ordering a whole market on imported_stores took 33-58s for a
+  // selective filter on the US (measured 2026-11-26), so once store_browse is ready the 50 domains
+  // are picked there, by the same WHERE and ORDER, and only their display columns are read from
+  // imported_stores, by primary key. The picked order is restored in JS.
+  type Frag = ReturnType<typeof buildWhere>;
+  const display = (cond: Frag, tail: Frag) => sql<Record<string, unknown>[]>`
     SELECT domain, name, category, country, city, platform, btrim(theme) AS theme, plus,
            activity_tier, ${sql.unsafe(bestEmailSql)} AS email,
            contact_type, contact_name, contact_role, contact_email_guess, contact_guess_status, whatsapp, contact_mx_ok, contact_shared_count,
@@ -779,9 +857,22 @@ export async function browseQuery(f: BrowseFilters = {}): Promise<BrowseResult> 
            g_id AS grp_id, g_sites AS grp_sites,
            ${side.nt ? sql`(SELECT nt.reason FROM store_not_trading nt WHERE nt.domain = imported_stores.domain)` : sql`NULL::text`} AS nt_reason
     FROM imported_stores ${sql.unsafe(GROUP_JOIN)}
-    WHERE ${where}
-    ORDER BY ${order}
-    LIMIT ${limit} OFFSET ${offset}`;
+    WHERE ${cond} ${tail}`;
+  let rows: Record<string, unknown>[];
+  const legacyRows = () => display(where, sql`ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`);
+  if (await slimReady()) {
+    try {
+      const picked = (await rowPickQuery(sql, f, side, "store_browse", VISIBLE_MARKETS, order, limit, offset)).map((r) => r.domain as string);
+      const got = picked.length ? await display(sql`domain = ANY(${picked})`, sql``) : [];
+      const at = new Map(picked.map((d, i) => [d, i]));
+      rows = got.sort((a, b) => (at.get(a.domain as string) ?? 0) - (at.get(b.domain as string) ?? 0));
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code !== "42703" && code !== "42P01") throw e;
+      console.error(`browse: store_browse can't pick rows (${code}: ${(e as Error).message}) — reading imported_stores`);
+      rows = await legacyRows();
+    }
+  } else rows = await legacyRows();
 
   return {
     total: A.total,
